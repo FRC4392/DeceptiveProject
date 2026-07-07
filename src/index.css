@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Deceivers Brand System — one blue (Deceiver Blue #004392), cool neutrals,
+   two modes. shadcn role tokens mapped from the brand's Light & Dark spec. */
+@layer base {
+  :root {
+    --background: 210 33.3% 97.6%; /* Paper #F7F9FB */
+    --foreground: 216 41.7% 9.4%; /* Ink #0E1622 */
+
+    --card: 0 0% 100%; /* White */
+    --card-foreground: 216 41.7% 9.4%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 41.7% 9.4%;
+
+    --primary: 212 100% 28.6%; /* Deceiver Blue #004392 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 212 61.9% 95.9%; /* Soft blue #EEF4FB */
+    --secondary-foreground: 210 100% 18.6%; /* Deep #00305F */
+
+    --muted: 210 21.4% 94.5%; /* #EEF1F4 */
+    --muted-foreground: 210 16.1% 36.5%; /* Slate #4E5D6C */
+
+    --accent: 212 61.9% 95.9%; /* Soft blue #EEF4FB */
+    --accent-foreground: 210 100% 18.6%;
+
+    --destructive: 9 61.9% 48.4%; /* Danger #C8452F */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 207 20.8% 89.6%; /* Line #DFE5EA */
+    --input: 207 20.8% 89.6%;
+    --ring: 212 100% 28.6%; /* Deceiver Blue */
+
+    --radius: 0.625rem; /* 10px */
+  }
+
+  .dark {
+    --background: 211 100% 9.4%; /* Navy #001730 */
+    --foreground: 212 55.6% 94.7%; /* #EAF1F9 */
+
+    --card: 212 90% 15.7%; /* Surface #04264C */
+    --card-foreground: 212 55.6% 94.7%;
+
+    --popover: 212 90% 15.7%;
+    --popover-foreground: 212 55.6% 94.7%;
+
+    --primary: 214 61% 46.3%; /* #2E6DBE */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 79.8% 23.3%; /* #0C3B6B */
+    --secondary-foreground: 212 61.2% 72.7%; /* #8FB6E4 */
+
+    --muted: 211 75.8% 17.8%; /* #0B2C50 */
+    --muted-foreground: 212 33.3% 71.2%; /* #9DB4CE */
+
+    --accent: 210 79.8% 23.3%; /* #0C3B6B */
+    --accent-foreground: 212 55.6% 94.7%;
+
+    --destructive: 9 61.9% 48.4%; /* Danger #C8452F */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 211 66.4% 23.3%; /* #143A63 */
+    --input: 211 66.4% 23.3%;
+    --ring: 214 61% 46.3%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  ::selection {
+    background: #004392;
+    color: #fff;
+  }
+}
+
+@layer components {
+  /* Athletic display treatment — Saira Condensed italic caps. Headlines,
+     hero type, and page titles only; never body copy. */
+  .brand-title {
+    @apply font-display font-bold italic uppercase tracking-wide;
+  }
+}
