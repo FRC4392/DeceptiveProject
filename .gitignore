@@ -7,10 +7,30 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
+
+# Build output and generated caches
 dist
 dist-ssr
+.vite
+coverage
+*.tsbuildinfo
+
+# Local environment files
+.env
+.env.*
+!.env*.example
 *.local
+
+# Package manager output
+.npm
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
 
 # Editor directories and files
 .vscode/*
