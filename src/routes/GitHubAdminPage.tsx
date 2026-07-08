@@ -31,7 +31,9 @@ export function GitHubAdminPage() {
   const config = useQuery(api.github.config);
   const projects = useQuery(api.projects.list, { includeArchived: true });
   const importIssues = useAction(api.github.importIssues);
-  const siteUrl = import.meta.env.VITE_CONVEX_SITE_URL as string | undefined;
+  const siteUrl = (import.meta.env.VITE_CONVEX_SITE_URL as string | undefined)
+    ?.trim()
+    .replace(/\/$/, "");
 
   const [repo, setRepo] = useState("");
   const [importProject, setImportProject] = useState<string>(NO_PROJECT);
@@ -83,8 +85,8 @@ export function GitHubAdminPage() {
       <div>
         <h1 className="brand-title text-3xl">GitHub</h1>
         <p className="text-sm text-muted-foreground">
-          Sync software issues and pull requests. Each mirrors into a task on the
-          Software board.
+          Sync software issues and pull requests. Each mirrors into a task on
+          the Software board.
         </p>
       </div>
 
@@ -121,8 +123,9 @@ export function GitHubAdminPage() {
         <CardContent className="space-y-2 text-sm">
           <p className="text-muted-foreground">
             In your GitHub repo → Settings → Webhooks → Add webhook, use this
-            payload URL (content type <span className="font-mono">application/json</span>),
-            the same secret as <span className="font-mono">GITHUB_WEBHOOK_SECRET</span>,
+            payload URL (content type{" "}
+            <span className="font-mono">application/json</span>), the same
+            secret as <span className="font-mono">GITHUB_WEBHOOK_SECRET</span>,
             and subscribe to <span className="font-medium">Issues</span>,{" "}
             <span className="font-medium">Issue comments</span>, and{" "}
             <span className="font-medium">Pull requests</span>.
@@ -130,6 +133,12 @@ export function GitHubAdminPage() {
           <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
             {webhookUrl}
           </code>
+          {!siteUrl && (
+            <p className="text-xs text-warning">
+              Set VITE_CONVEX_SITE_URL in .env.local to show the exact webhook
+              URL.
+            </p>
+          )}
         </CardContent>
       </Card>
 

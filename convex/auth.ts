@@ -3,6 +3,7 @@ import { components, internal } from "./_generated/api";
 import { AuthKit, type AuthFunctions } from "@convex-dev/workos-authkit";
 import type { DataModel } from "./_generated/dataModel";
 import { v } from "convex/values";
+import type { GenericMutationCtx } from "convex/server";
 
 // Shape of the WorkOS profile returned by authKit.getAuthUser, mirroring
 // the component's own `users` table (see the workOSAuthKit component schema).
@@ -26,6 +27,7 @@ const vAuthUser = v.object({
 });
 
 const authFunctions: AuthFunctions = internal.auth;
+type MutationCtx = GenericMutationCtx<DataModel>;
 
 // AuthKit client, wired to the workOSAuthKit component installed in
 // convex/convex.config.ts. WORKOS_CLIENT_ID, WORKOS_API_KEY and
@@ -33,7 +35,33 @@ const authFunctions: AuthFunctions = internal.auth;
 // (set via `npx convex env set`, not a local .env file).
 export const authKit = new AuthKit<DataModel>(components.workOSAuthKit, {
   authFunctions,
+  // Roles live on WorkOS organization memberships, so opt into membership
+  // events for immediate role sync. user.created/updated still schedule the
+  // WorkOS API fallback below so missed/racing membership events reconcile.
+  additionalEventTypes: [
+    "organization_membership.created",
+    "organization_membership.updated",
+    "organization_membership.deleted",
+  ],
 });
+
+function roleFromSlug(
+  roleSlug: string | null | undefined,
+): "mentor" | "student" {
+  return roleSlug?.toLowerCase() === "mentor" ? "mentor" : "student";
+}
+
+async function patchRoleFromMembership(
+  ctx: MutationCtx,
+  data: { userId: string; role?: { slug?: string | null } | null },
+) {
+  const user = await ctx.db
+    .query("users")
+    .withIndex("authId", (q) => q.eq("authId", data.userId))
+    .unique();
+  if (!user) return;
+  await ctx.db.patch(user._id, { role: roleFromSlug(data.role?.slug) });
+}
 
 // Sync WorkOS user create/update/delete events (delivered via the
 // /workos/webhook route registered in convex/http.ts) into our own
@@ -79,6 +107,18 @@ export const { authKitEvent } = authKit.events({
       return;
     }
     await ctx.db.delete(user._id);
+  },
+  "organization_membership.created": async (ctx, event) => {
+    await patchRoleFromMembership(ctx, event.data);
+  },
+  "organization_membership.updated": async (ctx, event) => {
+    await patchRoleFromMembership(ctx, event.data);
+  },
+  "organization_membership.deleted": async (ctx, event) => {
+    await patchRoleFromMembership(ctx, {
+      userId: event.data.userId,
+      role: null,
+    });
   },
 });
 

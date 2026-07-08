@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireUserId, requireMentor } from "./lib/auth";
@@ -41,19 +41,24 @@ const vTask = v.object({
   projectId: v.optional(v.id("projects")),
 });
 
-// Keep only tasks in the given project; a null projectId means "all projects".
-function inProject<T extends { projectId?: Id<"projects"> }>(
-  tasks: T[],
-  projectId?: Id<"projects">,
-): T[] {
-  if (projectId === undefined) return tasks;
-  return tasks.filter((t) => t.projectId === projectId);
-}
-
 // Upper bound for the in-memory scans below (listMine / listOverdue). A
 // robotics season produces well under this many tasks; revisit with a
 // dedicated index/table if it ever grows past it.
 const SCAN_LIMIT = 2000;
+
+async function listRecentTasks(
+  ctx: QueryCtx,
+  projectId?: Id<"projects">,
+): Promise<Doc<"tasks">[]> {
+  if (projectId === undefined) {
+    return ctx.db.query("tasks").order("desc").take(SCAN_LIMIT);
+  }
+  return ctx.db
+    .query("tasks")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .order("desc")
+    .take(SCAN_LIMIT);
+}
 
 export const listByBoard = query({
   args: { boardId: v.id("boards") },
@@ -62,7 +67,7 @@ export const listByBoard = query({
     return ctx.db
       .query("tasks")
       .withIndex("by_board", (q) => q.eq("boardId", boardId))
-      .collect();
+      .take(SCAN_LIMIT);
   },
 });
 
@@ -73,11 +78,8 @@ export const listMine = query({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) return [];
     const me = identity.subject;
-    const all = await ctx.db.query("tasks").order("desc").take(SCAN_LIMIT);
-    return inProject(
-      all.filter((t) => t.assigneeIds.includes(me)),
-      projectId,
-    );
+    const tasks = await listRecentTasks(ctx, projectId);
+    return tasks.filter((t) => t.assigneeIds.includes(me));
   },
 });
 
@@ -86,12 +88,9 @@ export const listOverdue = query({
   returns: v.array(vTask),
   handler: async (ctx, { projectId }) => {
     const now = Date.now();
-    const all = await ctx.db.query("tasks").order("desc").take(SCAN_LIMIT);
-    return inProject(
-      all.filter(
-        (t) => t.dueDate !== undefined && t.dueDate < now && t.status !== "done",
-      ),
-      projectId,
+    const tasks = await listRecentTasks(ctx, projectId);
+    return tasks.filter(
+      (t) => t.dueDate !== undefined && t.dueDate < now && t.status !== "done",
     );
   },
 });
@@ -103,8 +102,7 @@ export const listAll = query({
   handler: async (ctx, { projectId }) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) return [];
-    const all = await ctx.db.query("tasks").order("desc").take(SCAN_LIMIT);
-    return inProject(all, projectId);
+    return listRecentTasks(ctx, projectId);
   },
 });
 
@@ -132,7 +130,7 @@ export const listSubtasks = query({
     return ctx.db
       .query("tasks")
       .withIndex("by_parent", (q) => q.eq("parentTaskId", parentTaskId))
-      .collect();
+      .take(SCAN_LIMIT);
   },
 });
 

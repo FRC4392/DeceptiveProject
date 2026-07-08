@@ -3,6 +3,8 @@ import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { requireMentor } from "./lib/auth";
 
+const BOARD_LIMIT = 500;
+
 const vBoard = v.object({
   _id: v.id("boards"),
   _creationTime: v.number(),
@@ -16,13 +18,16 @@ export const list = query({
   args: { projectId: v.optional(v.id("projects")) },
   returns: v.array(vBoard),
   handler: async (ctx, { projectId }) => {
-    // Boards are a small, mentor-managed set (one per subsystem-ish).
-    const boards = await ctx.db.query("boards").collect();
-    const scoped =
+    // Boards are a small, mentor-managed set (one per subsystem-ish), but keep
+    // the read bounded and push project scoping into the index when present.
+    const boards =
       projectId === undefined
-        ? boards
-        : boards.filter((b) => b.projectId === projectId);
-    return scoped.sort((a, b) => a.order - b.order);
+        ? await ctx.db.query("boards").take(BOARD_LIMIT)
+        : await ctx.db
+            .query("boards")
+            .withIndex("by_project", (q) => q.eq("projectId", projectId))
+            .take(BOARD_LIMIT);
+    return boards.sort((a, b) => a.order - b.order);
   },
 });
 
@@ -38,7 +43,7 @@ export const create = mutation({
     await requireMentor(ctx);
     let order = args.order;
     if (order === undefined) {
-      const boards = await ctx.db.query("boards").collect();
+      const boards = await ctx.db.query("boards").take(BOARD_LIMIT);
       order = boards.reduce((max, b) => Math.max(max, b.order), -1) + 1;
     }
     return ctx.db.insert("boards", {

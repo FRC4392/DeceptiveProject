@@ -71,21 +71,26 @@ export function IssueDetailPage() {
           ← Issues
         </Link>
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{issue.title}</h1>
-            <span
-              className={cn(
-                "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium",
-                stateMeta.badgeClass,
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+              {issueRef(issue)}
+            </p>
+            <div className="mt-1 flex items-center gap-3">
+              <h1 className="brand-title text-2xl">{issue.title}</h1>
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium",
+                  stateMeta.badgeClass,
+                )}
+              >
+                {stateMeta.label}
+              </span>
+              {issue.isPullRequest && (
+                <Badge variant="outline" className="text-[10px] uppercase">
+                  PR
+                </Badge>
               )}
-            >
-              {stateMeta.label}
-            </span>
-            {issue.isPullRequest && (
-              <Badge variant="outline" className="text-[10px] uppercase">
-                PR
-              </Badge>
-            )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {issue.source === "manual" && (

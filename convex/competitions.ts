@@ -2,6 +2,8 @@ import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireMentor } from "./lib/auth";
 
+const COMPETITION_LIMIT = 200;
+
 const vCompetition = v.object({
   _id: v.id("competitions"),
   _creationTime: v.number(),
@@ -13,8 +15,10 @@ export const list = query({
   args: {},
   returns: v.array(vCompetition),
   handler: async (ctx) => {
-    const competitions = await ctx.db.query("competitions").collect();
-    return competitions.sort((a, b) => a.date - b.date);
+    return ctx.db
+      .query("competitions")
+      .withIndex("by_date")
+      .take(COMPETITION_LIMIT);
   },
 });
 

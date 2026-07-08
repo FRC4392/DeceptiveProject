@@ -76,19 +76,24 @@ export function PartDetailPage() {
           ← Parts
         </Link>
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-semibold">{part.name}</h1>
-            {part.partNumber && (
-              <span className="font-mono text-sm text-muted-foreground">
-                {part.partNumber}
-              </span>
-            )}
-            <PartStatusBadge status={part.status} />
-            {part.blocked && (
-              <Badge variant="outline" className="text-danger">
-                Blocked
-              </Badge>
-            )}
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+              Part · {methodLabel(part.manufacturingMethod)}
+            </p>
+            <div className="mt-1 flex flex-wrap items-center gap-3">
+              <h1 className="brand-title text-2xl">{part.name}</h1>
+              {part.partNumber && (
+                <span className="font-mono text-sm text-muted-foreground">
+                  {part.partNumber}
+                </span>
+              )}
+              <PartStatusBadge status={part.status} />
+              {part.blocked && (
+                <Badge variant="outline" className="text-danger">
+                  Blocked
+                </Badge>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <PartFormDialog

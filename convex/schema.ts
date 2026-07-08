@@ -3,10 +3,9 @@ import { v } from "convex/values";
 
 export default defineSchema({
   // Mirrors WorkOS user data, kept in sync via the AuthKit component's
-  // user.created/updated/deleted event handlers in convex/auth.ts. `role`
-  // is populated asynchronously by the scheduled `syncRoleFromWorkOS`
-  // action (WorkOS is the source of truth for roles); treat a missing
-  // role as "student".
+  // user/membership event handlers in convex/auth.ts. WorkOS user ids are
+  // intentionally the cross-app identity key, matching DeceptiveHours and
+  // the shared WorkOS team directory.
   users: defineTable({
     authId: v.string(),
     email: v.string(),
@@ -34,7 +33,7 @@ export default defineSchema({
     subsystem: v.string(),
     order: v.number(),
     projectId: v.optional(v.id("projects")),
-  }),
+  }).index("by_project", ["projectId"]),
 
   // The single canonical to-do list for the whole suite. Parts (Phase 2/3)
   // and issues (Phase 4) mirror their lifecycle here via source/sourceId.
@@ -51,19 +50,11 @@ export default defineSchema({
       v.literal("blocked"),
       v.literal("done"),
     ),
-    priority: v.union(
-      v.literal("low"),
-      v.literal("medium"),
-      v.literal("high"),
-    ),
+    priority: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
     labels: v.array(v.string()),
     parentTaskId: v.optional(v.id("tasks")), // subtasks
     dependsOn: v.array(v.id("tasks")),
-    source: v.union(
-      v.literal("manual"),
-      v.literal("part"),
-      v.literal("issue"),
-    ),
+    source: v.union(v.literal("manual"), v.literal("part"), v.literal("issue")),
     sourceId: v.optional(v.string()), // parts._id or issues._id, for the deep link back
     // Which project this task belongs to (for project-scoped views). Part-sourced
     // tasks inherit the part's project; manual tasks inherit their board's.
@@ -72,7 +63,9 @@ export default defineSchema({
     .index("by_board", ["boardId"])
     .index("by_status", ["status"])
     .index("by_parent", ["parentTaskId"])
-    .index("by_source", ["source", "sourceId"]),
+    .index("by_source", ["source", "sourceId"])
+    .index("by_project", ["projectId"])
+    .index("by_project_and_board", ["projectId", "boardId"]),
 
   taskComments: defineTable({
     taskId: v.id("tasks"),
@@ -90,7 +83,7 @@ export default defineSchema({
   competitions: defineTable({
     name: v.string(),
     date: v.number(),
-  }),
+  }).index("by_date", ["date"]),
 
   // ---- Phase 2: Part tracker ----
   // Written with Phase-3 (Onshape) fields present so Phase 3 needs no migration.
@@ -182,7 +175,9 @@ export default defineSchema({
     onshapeDocumentId: v.string(),
     name: v.string(),
     projectId: v.optional(v.id("projects")),
-  }).index("by_onshapeDocumentId", ["onshapeDocumentId"]),
+  })
+    .index("by_onshapeDocumentId", ["onshapeDocumentId"])
+    .index("by_project", ["projectId"]),
 
   // Single-row team-level Onshape OAuth token store (one connection for the
   // whole team, refreshed as needed).
@@ -235,11 +230,7 @@ export default defineSchema({
     isPullRequest: v.boolean(),
     // The effective priority (displayed + mirrored to the task). On GitHub rows
     // it tracks the labels via derivePriority unless overridden below.
-    priority: v.union(
-      v.literal("low"),
-      v.literal("medium"),
-      v.literal("high"),
-    ),
+    priority: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
     // An in-app override that survives GitHub re-syncs. When set on a GitHub
     // row it wins over the label-derived priority; clearing it reverts to the
     // labels. (Manual rows set `priority` directly and ignore this.)

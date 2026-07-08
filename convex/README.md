@@ -1,90 +1,77 @@
-# Welcome to your Convex functions directory!
+# Convex Backend
 
-Write your Convex functions here.
-See https://docs.convex.dev/functions for more.
+This directory contains the Deceptive Project backend: schema, database
+functions, HTTP endpoints, and integration sync code.
 
-A query function that takes two arguments looks like:
+Before changing Convex code, read `convex/_generated/ai/guidelines.md`. Those
+local rules override generic Convex knowledge and include the current API,
+query, auth, and testing patterns for this repo.
 
-```ts
-// convex/myFunctions.ts
-import { query } from "./_generated/server";
-import { v } from "convex/values";
+## Shape
 
-export const myQueryFunction = query({
-  // Validators for arguments.
-  args: {
-    first: v.number(),
-    second: v.string(),
-  },
+- `schema.ts` defines the app tables: synced WorkOS `users`, projects, boards,
+  tasks/comments/attachments, competitions, parts/QC/inventory, Onshape state,
+  and GitHub issues/comments/repo mappings.
+- `auth.ts`, `authActions.ts`, and `auth.config.ts` wire WorkOS AuthKit into
+  Convex and sync local user roles.
+- `tasks.ts`, `boards.ts`, `projects.ts`, `parts.ts`, `inventory.ts`, and
+  `dashboard.ts` are the main app APIs used by the React routes.
+- `onshape.ts`, `onshapeOAuth.ts`, and `lib/onshape*` handle CAD OAuth,
+  right-panel sync, part numbering, and token encryption.
+- `github.ts` and `lib/github*` handle issue/PR import, webhook sync, and
+  write-back.
+- `http.ts` registers the public HTTP endpoints for WorkOS, Onshape, and GitHub
+  webhooks/OAuth/panel requests.
 
-  // Function implementation.
-  handler: async (ctx, args) => {
-    // Read the database as many times as you need here.
-    // See https://docs.convex.dev/database/reading-data.
-    const documents = await ctx.db.query("tablename").collect();
+## Auth Model
 
-    // Arguments passed from the client are properties of the args object.
-    console.log(args.first, args.second);
+This app intentionally stores WorkOS user ids, not Convex `tokenIdentifier`, in
+local user-facing references such as `users.authId`, task assignees, designers,
+and comment authors. Deceptive apps share one WorkOS team directory, and this
+matches the sibling DeceptiveHours implementation.
 
-    // Write arbitrary JavaScript here: filter, aggregate, build derived data,
-    // remove non-public properties, or create new objects.
-    return documents;
-  },
-});
+WorkOS Roles are the source of truth for permissions:
+
+- `mentor` maps to mentor access.
+- Any other role, missing role, or unsynced role maps to student access.
+- WorkOS membership events update local roles immediately.
+- `authActions.syncRoleFromWorkOS` remains as a scheduled reconciliation path
+  after user create/update events.
+
+Do not accept client-provided user ids for authorization. Protected functions
+must derive the caller server-side with `ctx.auth.getUserIdentity()` and the
+helpers in `lib/auth.ts`.
+
+## Environment
+
+Backend secrets live in Convex deployment env, set with `npx convex env set`.
+See the top-level `README.md` and `.env.local.example` for the complete list.
+The common groups are:
+
+- WorkOS: `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`,
+  `WORKOS_WEBHOOK_SECRET`.
+- Onshape: `ONSHAPE_OAUTH_CLIENT_ID`, `ONSHAPE_OAUTH_CLIENT_SECRET`,
+  `ONSHAPE_SYNC_SECRET`, `ONSHAPE_TOKEN_ENC_KEY`, and optional
+  `ONSHAPE_BASE_URL`.
+- GitHub: `GITHUB_WEBHOOK_SECRET`, `GITHUB_TOKEN`.
+
+Convex provides `CONVEX_SITE_URL` for the deployment HTTP endpoint; keep the
+frontend `VITE_CONVEX_SITE_URL` copy pointed at the same URL for setup links.
+
+Frontend-safe variables belong in `.env.local`, including
+`VITE_CONVEX_URL`, `VITE_CONVEX_SITE_URL`, `VITE_WORKOS_CLIENT_ID`, and
+`VITE_WORKOS_REDIRECT_URI`.
+
+## Testing
+
+Run all checks from the repo root:
+
+```sh
+npm run lint
+npm run test
+npm run test:e2e
 ```
 
-Using this query function in a React component looks like:
-
-```ts
-const data = useQuery(api.myFunctions.myQueryFunction, {
-  first: 10,
-  second: "hello",
-});
-```
-
-A mutation function looks like:
-
-```ts
-// convex/myFunctions.ts
-import { mutation } from "./_generated/server";
-import { v } from "convex/values";
-
-export const myMutationFunction = mutation({
-  // Validators for arguments.
-  args: {
-    first: v.string(),
-    second: v.string(),
-  },
-
-  // Function implementation.
-  handler: async (ctx, args) => {
-    // Insert or modify documents in the database here.
-    // Mutations can also read from the database like queries.
-    // See https://docs.convex.dev/database/writing-data.
-    const message = { body: args.first, author: args.second };
-    const id = await ctx.db.insert("messages", message);
-
-    // Optionally, return a value from your mutation.
-    return await ctx.db.get("messages", id);
-  },
-});
-```
-
-Using this mutation function in a React component looks like:
-
-```ts
-const mutation = useMutation(api.myFunctions.myMutationFunction);
-function handleButtonPress() {
-  // fire and forget, the most common way to use mutations
-  mutation({ first: "Hello!", second: "me" });
-  // OR
-  // use the result once the mutation has completed
-  mutation({ first: "Hello!", second: "me" }).then((result) =>
-    console.log(result),
-  );
-}
-```
-
-Use the Convex CLI to push your functions to a deployment. See everything
-the Convex CLI can do by running `npx convex -h` in your project root
-directory. To learn more, launch the docs with `npx convex docs`.
+Convex tests live beside the backend files and use `convex-test`. Test files
+that call `import.meta.glob` need the `/// <reference types="vite/client" />`
+directive at the top, as described in the generated AI guidelines.

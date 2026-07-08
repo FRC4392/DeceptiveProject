@@ -1,6 +1,9 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 
+const BOARD_LIMIT = 500;
+const TASK_LIMIT = 2000;
+
 // Aggregate progress used by the /dashboard view: completion by subsystem,
 // overdue count, and the next competition countdown.
 export const summary = query({
@@ -22,12 +25,13 @@ export const summary = query({
     ),
   }),
   handler: async (ctx, { projectId }) => {
-    const allBoards = await ctx.db.query("boards").collect();
-    // In a project view, only that project's boards count.
     const boards =
       projectId === undefined
-        ? allBoards
-        : allBoards.filter((b) => b.projectId === projectId);
+        ? await ctx.db.query("boards").take(BOARD_LIMIT)
+        : await ctx.db
+            .query("boards")
+            .withIndex("by_project", (q) => q.eq("projectId", projectId))
+            .take(BOARD_LIMIT);
 
     const bySubsystem = new Map<string, { total: number; done: number }>();
     let totalTasks = 0;
@@ -36,15 +40,18 @@ export const summary = query({
     let overdueCount = 0;
 
     for (const board of boards) {
-      const boardTasks = await ctx.db
-        .query("tasks")
-        .withIndex("by_board", (q) => q.eq("boardId", board._id))
-        .collect();
-      // Scope to the selected project (undefined = all projects).
       const tasks =
         projectId === undefined
-          ? boardTasks
-          : boardTasks.filter((t) => t.projectId === projectId);
+          ? await ctx.db
+              .query("tasks")
+              .withIndex("by_board", (q) => q.eq("boardId", board._id))
+              .take(TASK_LIMIT)
+          : await ctx.db
+              .query("tasks")
+              .withIndex("by_project_and_board", (q) =>
+                q.eq("projectId", projectId).eq("boardId", board._id),
+              )
+              .take(TASK_LIMIT);
       const entry = bySubsystem.get(board.subsystem) ?? { total: 0, done: 0 };
       for (const t of tasks) {
         entry.total += 1;
@@ -64,10 +71,10 @@ export const summary = query({
       .map(([subsystem, v]) => ({ subsystem, total: v.total, done: v.done }))
       .sort((a, b) => a.subsystem.localeCompare(b.subsystem));
 
-    const competitions = await ctx.db.query("competitions").collect();
-    const upcoming = competitions
-      .filter((c) => c.date >= now)
-      .sort((a, b) => a.date - b.date);
+    const upcoming = await ctx.db
+      .query("competitions")
+      .withIndex("by_date", (q) => q.gte("date", now))
+      .take(1);
     const nextCompetition = upcoming[0]
       ? { name: upcoming[0].name, date: upcoming[0].date }
       : null;

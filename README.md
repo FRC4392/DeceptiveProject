@@ -35,6 +35,8 @@ in sync automatically the first time you run `npx convex dev`:
 
 - `CONVEX_DEPLOYMENT` — which Convex deployment your CLI targets
 - `VITE_CONVEX_URL` — the Convex client URL the frontend connects to
+- `VITE_CONVEX_SITE_URL` — the Convex HTTP/site URL used for OAuth callback,
+  panel, and webhook setup links, e.g. `https://<deployment>.convex.site`
 - `VITE_WORKOS_CLIENT_ID` — your existing WorkOS Client ID
 - `VITE_WORKOS_REDIRECT_URI` — where WorkOS redirects back to after sign-in (defaults to `http://localhost:5173`)
 
@@ -45,13 +47,38 @@ the Convex deployment's environment:
 npx convex env set WORKOS_CLIENT_ID <your existing client id>
 npx convex env set WORKOS_API_KEY <your existing api key>
 npx convex env set WORKOS_WEBHOOK_SECRET <secret from the webhook you create below>
+npx convex env set ONSHAPE_OAUTH_CLIENT_ID <your Onshape OAuth app client id>
+npx convex env set ONSHAPE_OAUTH_CLIENT_SECRET <your Onshape OAuth app client secret>
+npx convex env set ONSHAPE_SYNC_SECRET <random string>
+npx convex env set ONSHAPE_TOKEN_ENC_KEY <output of `openssl rand -base64 32`>
+npx convex env set ONSHAPE_BASE_URL <optional alternate Onshape base URL>
+npx convex env set GITHUB_WEBHOOK_SECRET <random string>
+npx convex env set GITHUB_TOKEN <github-PAT>
 ```
+
+`CONVEX_SITE_URL` is read by backend OAuth helpers and is normally provided by
+Convex for the deployment's HTTP endpoint. `VITE_CONVEX_SITE_URL` is the
+frontend-safe copy used only to render setup links in the admin UI.
 
 Reuse the `WORKOS_CLIENT_ID` / `WORKOS_API_KEY` from your **existing**
 WorkOS team/dashboard (the one shared with your other apps). Nothing in
 this project provisions a new WorkOS team — the AuthKit component is
 wired up using the "existing app" flow, not the managed/auto-provisioned
 onboarding flow.
+
+This app intentionally stores WorkOS user IDs (`ctx.auth.getUserIdentity()`
+`subject`) in local records such as `users.authId`, task assignees, designers,
+and comment authors. Generic Convex guidance recommends `tokenIdentifier` as
+the canonical identity key, but Deceptive apps share one WorkOS directory and
+need the WorkOS user ID as the stable cross-app roster key. This matches the
+DeceptiveHours implementation.
+
+If your WorkOS environment hosts more than one app, keep all Deceptive apps on
+the same WorkOS team/environment and confirm valid tokens are accepted by
+`convex/auth.config.ts`. DeceptiveHours documents an additional
+`WORKOS_ENVIRONMENT_CLIENT_ID` setting for its multi-app issuer case; add the
+same pattern here only if this deployment starts rejecting otherwise-valid
+shared-environment tokens.
 
 > **Note on `WORKOS_COOKIE_PASSWORD`:** that variable is used by
 > server-rendered AuthKit integrations (e.g. `@workos-inc/authkit-nextjs`)
@@ -91,6 +118,11 @@ This app was added to the existing WorkOS team at
    signing secret WorkOS shows you and set it as `WORKOS_WEBHOOK_SECRET`
    (command above). This is what lets user create/update/delete events in
    WorkOS sync into this app's Convex `users` table (`convex/auth.ts`).
+   Also include `organization_membership.created`,
+   `organization_membership.updated`, and `organization_membership.deleted`
+   when available; those events sync mentor/student role changes immediately.
+   User create/update events still schedule a WorkOS API role reconciliation
+   action, so missed membership events are corrected.
 
 ### Backfilling users that already exist in the team
 
@@ -160,6 +192,7 @@ src/
 
 ```sh
 npm run test          # vitest run
+npm run test:e2e      # smoke tests for shell/navigation/setup states
 npm run test:watch    # vitest watch mode
 npm run lint           # tsc + eslint
 npm run format         # prettier --write .

@@ -3,6 +3,9 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireMentor } from "./lib/auth";
 
+const PROJECT_LIMIT = 500;
+const DOCUMENT_LIMIT = 1000;
+
 // A project's numbering mode: auto-generate 4392-<tag>-DDSSSS, or leave part
 // numbers to Onshape / manual entry.
 export const numberingModeValidator = v.union(
@@ -23,7 +26,7 @@ export const list = query({
   args: { includeArchived: v.optional(v.boolean()) },
   returns: v.array(vProject),
   handler: async (ctx, { includeArchived }) => {
-    const projects = await ctx.db.query("projects").collect();
+    const projects = await ctx.db.query("projects").take(PROJECT_LIMIT);
     const visible = includeArchived
       ? projects
       : projects.filter((p) => !p.archived);
@@ -41,7 +44,7 @@ async function tagTaken(
   const matches = await ctx.db
     .query("projects")
     .withIndex("by_tag", (q) => q.eq("tag", tag))
-    .collect();
+    .take(2);
   return matches.some((p) => p._id !== exceptId);
 }
 
@@ -88,7 +91,8 @@ export const update = mutation({
       }
       patch.tag = tag;
     }
-    if (args.numberingMode !== undefined) patch.numberingMode = args.numberingMode;
+    if (args.numberingMode !== undefined)
+      patch.numberingMode = args.numberingMode;
     if (args.archived !== undefined) patch.archived = args.archived;
     await ctx.db.patch(args.id, patch);
     return null;
@@ -106,12 +110,18 @@ export const remove = mutation({
       .withIndex("by_project", (q) => q.eq("projectId", id))
       .take(1);
     if (part.length > 0) {
-      throw new Error("Reassign or delete this project's parts before deleting it.");
+      throw new Error(
+        "Reassign or delete this project's parts before deleting it.",
+      );
     }
     // Detach any documents that pointed at it.
-    const docs = await ctx.db.query("onshapeDocuments").collect();
+    const docs = await ctx.db
+      .query("onshapeDocuments")
+      .withIndex("by_project", (q) => q.eq("projectId", id))
+      .take(DOCUMENT_LIMIT);
     for (const d of docs) {
-      if (d.projectId === id) await ctx.db.patch(d._id, { projectId: undefined });
+      if (d.projectId === id)
+        await ctx.db.patch(d._id, { projectId: undefined });
     }
     await ctx.db.delete(id);
     return null;

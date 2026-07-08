@@ -75,9 +75,14 @@ export function TaskDetailPage() {
           ← {board?.name ?? "Board"}
         </Link>
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{task.title}</h1>
-            <StatusBadge status={task.status} />
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
+              Task
+            </p>
+            <div className="mt-1 flex items-center gap-3">
+              <h1 className="brand-title text-2xl">{task.title}</h1>
+              <StatusBadge status={task.status} />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <TaskFormDialog

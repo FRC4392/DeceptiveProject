@@ -1,6 +1,8 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 
+const USER_LIMIT = 500;
+
 const vUser = v.object({
   _id: v.id("users"),
   _creationTime: v.number(),
@@ -18,7 +20,7 @@ export const list = query({
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) return [];
-    const users = await ctx.db.query("users").collect();
+    const users = await ctx.db.query("users").take(USER_LIMIT);
     return users.sort((a, b) => a.name.localeCompare(b.name));
   },
 });

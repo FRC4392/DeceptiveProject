@@ -4,10 +4,11 @@ import type { Doc } from "../_generated/dataModel";
 type Ctx = QueryCtx | MutationCtx;
 
 /**
- * The current authenticated user's WorkOS id, or null. This is the value
- * stored in `assigneeIds`, `taskComments.authorId`, etc. We use
- * `identity.subject` (the WorkOS user id) consistently across the app,
- * matching `users.authId`.
+ * The current authenticated user's WorkOS id, or null. This is the value stored
+ * in `assigneeIds`, `taskComments.authorId`, etc. This intentionally uses
+ * `identity.subject` instead of Convex `tokenIdentifier` because Deceptive apps
+ * share one WorkOS user directory and use WorkOS user ids as the cross-app
+ * roster key, matching DeceptiveHours.
  */
 export async function getUserId(ctx: Ctx): Promise<string | null> {
   const identity = await ctx.auth.getUserIdentity();
@@ -37,7 +38,8 @@ export async function getCurrentUser(ctx: Ctx): Promise<Doc<"users"> | null> {
 /**
  * Guard for mentor-only mutations (deletes, board management, integration
  * settings, doc-number assignment). Throws if the current user isn't a
- * mentor. Roles come from WorkOS via `syncRoleFromWorkOS`.
+ * mentor. Roles come from WorkOS membership events, with `syncRoleFromWorkOS`
+ * as a reconciliation fallback after user create/update events.
  */
 export async function requireMentor(ctx: Ctx): Promise<Doc<"users">> {
   const user = await getCurrentUser(ctx);

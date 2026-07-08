@@ -11,14 +11,14 @@ export const ISSUE_STATES: {
   {
     value: "open",
     label: "Open",
-    badgeClass:
-      "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
+    // Brand status tokens (swap automatically in dark mode). Open = active/good.
+    badgeClass: "bg-success/10 text-success",
   },
   {
     value: "closed",
     label: "Closed",
-    badgeClass:
-      "bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300",
+    // No second brand color: closed resolves to a disciplined neutral.
+    badgeClass: "bg-muted text-muted-foreground",
   },
 ];
 

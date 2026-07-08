@@ -17,8 +17,9 @@ export type Method =
   | "laser_cut"
   | "cots";
 
-// Pipeline order + badge colors. Fabrication stages use blue shades (on-brand);
-// QC/installed/scrapped use status colors. All have dark-mode variants.
+// Pipeline order + badge colors. On-brand: a disciplined neutral -> blue ->
+// semantic ramp built from role/status tokens (Deceiver Blue, one blue + neutrals),
+// mirroring src/lib/pm.ts. Tokens swap automatically in dark mode — no dark: variants.
 export const PART_STATUSES: {
   value: PartStatus;
   label: string;
@@ -27,55 +28,47 @@ export const PART_STATUSES: {
   {
     value: "needs_design",
     label: "Needs design",
-    badgeClass:
-      "bg-slate-100 text-slate-600 dark:bg-slate-800/60 dark:text-slate-300",
+    badgeClass: "bg-muted text-muted-foreground",
   },
   {
     value: "in_design",
     label: "In design",
-    badgeClass:
-      "bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300",
+    badgeClass: "bg-secondary text-secondary-foreground",
   },
   {
     value: "designed",
     label: "Designed",
-    badgeClass:
-      "bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300",
+    badgeClass: "bg-secondary text-secondary-foreground",
   },
   {
     value: "queued",
     label: "Queued",
-    badgeClass:
-      "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+    badgeClass: "bg-muted text-muted-foreground",
   },
   {
     value: "in_progress",
     label: "In progress",
-    badgeClass:
-      "bg-blue-600/15 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
+    badgeClass: "bg-primary/10 text-primary",
   },
   {
     value: "manufactured",
     label: "Manufactured",
-    badgeClass:
-      "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300",
+    badgeClass: "bg-info/10 text-info",
   },
   {
     value: "qc",
     label: "QC",
-    badgeClass:
-      "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
+    badgeClass: "bg-warning/10 text-warning",
   },
   {
     value: "installed",
     label: "Installed",
-    badgeClass:
-      "bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300",
+    badgeClass: "bg-success/10 text-success",
   },
   {
     value: "scrapped",
     label: "Scrapped",
-    badgeClass: "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300",
+    badgeClass: "bg-danger/10 text-danger",
   },
 ];
 

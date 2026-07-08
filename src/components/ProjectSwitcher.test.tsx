@@ -10,8 +10,20 @@ vi.mock("@/lib/project", () => ({
 }));
 
 const projects = [
-  { _id: "p1" as Id<"projects">, name: "Alpha", tag: "26" },
-  { _id: "p2" as Id<"projects">, name: "Beta", tag: "SWERVE" },
+  {
+    _id: "p1" as Id<"projects">,
+    _creationTime: 1,
+    name: "Alpha",
+    tag: "26",
+    numberingMode: "auto" as const,
+  },
+  {
+    _id: "p2" as Id<"projects">,
+    _creationTime: 2,
+    name: "Beta",
+    tag: "SWERVE",
+    numberingMode: "auto" as const,
+  },
 ];
 
 beforeAll(() => {

@@ -34,7 +34,9 @@ export function OnshapeAdminPage() {
   const assign = useMutation(api.onshape.assignDocumentNumber);
   const removeDoc = useMutation(api.onshape.removeDocument);
   const connection = useQuery(api.onshapeOAuth.connectionStatus);
-  const siteUrl = import.meta.env.VITE_CONVEX_SITE_URL as string;
+  const siteUrl = (import.meta.env.VITE_CONVEX_SITE_URL as string | undefined)
+    ?.trim()
+    .replace(/\/$/, "");
 
   const projectName = (id?: Id<"projects">) =>
     id ? (projects?.find((p) => p._id === id)?.name ?? "—") : "—";
@@ -90,8 +92,8 @@ export function OnshapeAdminPage() {
       <div>
         <h1 className="brand-title text-3xl">Onshape</h1>
         <p className="text-sm text-muted-foreground">
-          Map Onshape documents to 2-digit numbers. Part numbers are generated as{" "}
-          <span className="font-mono">4392-YY-DDSSSS</span> (DD = document,
+          Map Onshape documents to 2-digit numbers. Part numbers are generated
+          as <span className="font-mono">4392-YY-DDSSSS</span> (DD = document,
           SSSS = sequence).
         </p>
       </div>
@@ -110,42 +112,65 @@ export function OnshapeAdminPage() {
               </span>
             ) : (
               <span className="text-muted-foreground">
-                Not connected. Authorize once so the “Sync to tracker” button can
-                pull parts on demand.
+                Not connected. Authorize once so the “Sync to tracker” button
+                can pull parts on demand.
               </span>
             )}
           </div>
-          <Button asChild variant={connection?.connected ? "outline" : "default"}>
-            <a href={`${siteUrl}/onshape/oauth/start`}>
-              {connection?.connected ? "Reconnect" : "Connect Onshape"}
-            </a>
-          </Button>
+          {siteUrl ? (
+            <Button
+              asChild
+              variant={connection?.connected ? "outline" : "default"}
+            >
+              <a href={`${siteUrl}/onshape/oauth/start`}>
+                {connection?.connected ? "Reconnect" : "Connect Onshape"}
+              </a>
+            </Button>
+          ) : (
+            <Button disabled>Connect Onshape</Button>
+          )}
+          {!siteUrl && (
+            <p className="basis-full text-xs text-warning">
+              Set VITE_CONVEX_SITE_URL in .env.local to enable OAuth and panel
+              setup links.
+            </p>
+          )}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Right panel (selective sync)</CardTitle>
+          <CardTitle className="text-base">
+            Right panel (selective sync)
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <p className="text-muted-foreground">
             Register an <span className="font-medium">element right panel</span>{" "}
-            extension on your Onshape OAuth app pointing at the URL below. The same
-            panel works in <span className="font-medium">Part Studios</span> and{" "}
-            <span className="font-medium">Assemblies</span> — open it in an assembly
-            to sync its parts with the correct{" "}
-            <span className="font-medium">quantities</span> (instance counts). Pick
-            the parts you want, review a preview (rendered image + the part number
-            each will get), then sync — it adopts existing Onshape part numbers and
-            writes generated ones back (needs the app’s{" "}
+            extension on your Onshape OAuth app pointing at the URL below. The
+            same panel works in{" "}
+            <span className="font-medium">Part Studios</span> and{" "}
+            <span className="font-medium">Assemblies</span> — open it in an
+            assembly to sync its parts with the correct{" "}
+            <span className="font-medium">quantities</span> (instance counts).
+            Pick the parts you want, review a preview (rendered image + the part
+            number each will get), then sync — it adopts existing Onshape part
+            numbers and writes generated ones back (needs the app’s{" "}
             <span className="font-mono">OAuth2Write</span> scope).
           </p>
           <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
-            {siteUrl}/onshape/panel?secret=&lt;ONSHAPE_SYNC_SECRET&gt;&amp;documentId=&#123;$documentId&#125;&amp;wv=&#123;$workspaceOrVersion&#125;&amp;wvid=&#123;$workspaceOrVersionId&#125;&amp;elementId=&#123;$elementId&#125;
+            {siteUrl ?? "https://<your-convex-deployment>.convex.site"}
+            /onshape/panel?secret=&lt;ONSHAPE_SYNC_SECRET&gt;&amp;documentId=&#123;$documentId&#125;&amp;wv=&#123;$workspaceOrVersion&#125;&amp;wvid=&#123;$workspaceOrVersionId&#125;&amp;elementId=&#123;$elementId&#125;
           </code>
+          {!siteUrl && (
+            <p className="text-xs text-warning">
+              This URL is a template until VITE_CONVEX_SITE_URL is configured.
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
-            Replace <span className="font-mono">&lt;ONSHAPE_SYNC_SECRET&gt;</span>{" "}
-            with the value set via{" "}
+            Replace{" "}
+            <span className="font-mono">&lt;ONSHAPE_SYNC_SECRET&gt;</span> with
+            the value set via{" "}
             <span className="font-mono">
               npx convex env set ONSHAPE_SYNC_SECRET
             </span>
@@ -223,9 +248,7 @@ export function OnshapeAdminPage() {
               Assign
             </Button>
           </form>
-          {note && (
-            <p className="mt-3 text-sm text-muted-foreground">{note}</p>
-          )}
+          {note && <p className="mt-3 text-sm text-muted-foreground">{note}</p>}
         </CardContent>
       </Card>
 
@@ -254,7 +277,9 @@ export function OnshapeAdminPage() {
               <TableBody>
                 {documents.map((d) => (
                   <TableRow key={d._id}>
-                    <TableCell className="font-mono">{d.documentNumber}</TableCell>
+                    <TableCell className="font-mono">
+                      {d.documentNumber}
+                    </TableCell>
                     <TableCell>{d.name}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {projectName(d.projectId)}
