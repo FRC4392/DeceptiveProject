@@ -1,7 +1,7 @@
 import { query, mutation, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireUserId, requireMentor } from "./lib/auth";
+import { getUserId, requireUserId, requireMentor } from "./lib/auth";
 
 export const statusValidator = v.union(
   v.literal("todo"),
@@ -75,9 +75,8 @@ export const listMine = query({
   args: { projectId: v.optional(v.id("projects")) },
   returns: v.array(vTask),
   handler: async (ctx, { projectId }) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const me = identity.subject;
+    const me = await getUserId(ctx);
+    if (!me) return [];
     const tasks = await listRecentTasks(ctx, projectId);
     return tasks.filter((t) => t.assigneeIds.includes(me));
   },

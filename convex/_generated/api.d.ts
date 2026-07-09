@@ -9,7 +9,6 @@
  */
 
 import type * as auth from "../auth.js";
-import type * as authActions from "../authActions.js";
 import type * as boards from "../boards.js";
 import type * as competitions from "../competitions.js";
 import type * as dashboard from "../dashboard.js";
@@ -42,7 +41,6 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
-  authActions: typeof authActions;
   boards: typeof boards;
   competitions: typeof competitions;
   dashboard: typeof dashboard;
@@ -94,6 +92,4 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {
-  workOSAuthKit: import("@convex-dev/workos-authkit/_generated/component.js").ComponentApi<"workOSAuthKit">;
-};
+export declare const components: {};

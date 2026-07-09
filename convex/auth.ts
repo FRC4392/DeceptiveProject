@@ -1,165 +1,264 @@
-import { query, internalMutation } from "./_generated/server";
-import { components, internal } from "./_generated/api";
-import { AuthKit, type AuthFunctions } from "@convex-dev/workos-authkit";
-import type { DataModel } from "./_generated/dataModel";
+import {
+  action,
+  httpAction,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import type { GenericMutationCtx } from "convex/server";
+import type { GenericMutationCtx, UserIdentity } from "convex/server";
+import type { DataModel } from "./_generated/dataModel";
+import { createClerkClient, type User } from "@clerk/backend";
+import type { UserJSON, WebhookEvent } from "@clerk/backend";
+import { Webhook } from "svix";
 
-// Shape of the WorkOS profile returned by authKit.getAuthUser, mirroring
-// the component's own `users` table (see the workOSAuthKit component schema).
-const vAuthUser = v.object({
-  id: v.string(),
-  email: v.string(),
-  name: v.optional(v.union(v.null(), v.string())),
-  firstName: v.optional(v.union(v.null(), v.string())),
-  lastName: v.optional(v.union(v.null(), v.string())),
-  emailVerified: v.boolean(),
-  profilePictureUrl: v.optional(v.union(v.null(), v.string())),
-  lastSignInAt: v.optional(v.union(v.null(), v.string())),
-  externalId: v.optional(v.union(v.null(), v.string())),
-  metadata: v.record(v.string(), v.any()),
-  locale: v.optional(v.union(v.null(), v.string())),
-  createdAt: v.string(),
-  updatedAt: v.string(),
-  // Merged in from our local `users` row (WorkOS is the source of truth,
-  // synced via syncRoleFromWorkOS). Defaults to "student" when unknown.
-  role: v.union(v.literal("mentor"), v.literal("student")),
-});
-
-const authFunctions: AuthFunctions = internal.auth;
+type Role = "mentor" | "student";
 type MutationCtx = GenericMutationCtx<DataModel>;
 
-// AuthKit client, wired to the workOSAuthKit component installed in
-// convex/convex.config.ts. WORKOS_CLIENT_ID, WORKOS_API_KEY and
-// WORKOS_WEBHOOK_SECRET are read from the Convex deployment environment
-// (set via `npx convex env set`, not a local .env file).
-export const authKit = new AuthKit<DataModel>(components.workOSAuthKit, {
-  authFunctions,
-  // Roles live on WorkOS organization memberships, so opt into membership
-  // events for immediate role sync. user.created/updated still schedule the
-  // WorkOS API fallback below so missed/racing membership events reconcile.
-  additionalEventTypes: [
-    "organization_membership.created",
-    "organization_membership.updated",
-    "organization_membership.deleted",
-  ],
+const USER_SYNC_PAGE_SIZE = 100;
+
+const roleValidator = v.union(v.literal("mentor"), v.literal("student"));
+
+const vCurrentUser = v.object({
+  id: v.string(),
+  email: v.string(),
+  name: v.string(),
+  role: roleValidator,
 });
 
-function roleFromSlug(
-  roleSlug: string | null | undefined,
-): "mentor" | "student" {
-  return roleSlug?.toLowerCase() === "mentor" ? "mentor" : "student";
+function roleFromValue(value: unknown): Role {
+  return value === "mentor" ? "mentor" : "student";
 }
 
-async function patchRoleFromMembership(
+function roleFromIdentity(identity: UserIdentity): Role {
+  return roleFromValue(identity.role);
+}
+
+function nameFromIdentity(identity: UserIdentity): string {
+  const fullName = identity.name?.trim();
+  if (fullName) return fullName;
+  const parts = [identity.givenName, identity.familyName]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part));
+  if (parts.length > 0) return parts.join(" ");
+  return identity.email ?? identity.subject;
+}
+
+async function upsertUser(
   ctx: MutationCtx,
-  data: { userId: string; role?: { slug?: string | null } | null },
+  user: { authId: string; email: string; name: string; role: Role },
 ) {
-  const user = await ctx.db
+  const existing = await ctx.db
     .query("users")
-    .withIndex("authId", (q) => q.eq("authId", data.userId))
+    .withIndex("authId", (q) => q.eq("authId", user.authId))
     .unique();
-  if (!user) return;
-  await ctx.db.patch(user._id, { role: roleFromSlug(data.role?.slug) });
+  if (existing) {
+    await ctx.db.patch(existing._id, {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    });
+  } else {
+    await ctx.db.insert("users", user);
+  }
 }
 
-// Sync WorkOS user create/update/delete events (delivered via the
-// /workos/webhook route registered in convex/http.ts) into our own
-// `users` table, so app code can query users without depending on the
-// component's internal storage.
-export const { authKitEvent } = authKit.events({
-  "user.created": async (ctx, event) => {
-    await ctx.db.insert("users", {
-      authId: event.data.id,
-      email: event.data.email,
-      name: `${event.data.firstName ?? ""} ${event.data.lastName ?? ""}`.trim(),
-    });
-    // Roles live in WorkOS. The webhook handler runs as a mutation and
-    // can't call external APIs, so fetch the role in a scheduled action.
-    await ctx.scheduler.runAfter(0, internal.authActions.syncRoleFromWorkOS, {
-      authId: event.data.id,
-    });
-  },
-  "user.updated": async (ctx, event) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("authId", (q) => q.eq("authId", event.data.id))
-      .unique();
-    if (!user) {
-      console.warn(`User not found: ${event.data.id}`);
-      return;
-    }
-    await ctx.db.patch(user._id, {
-      email: event.data.email,
-      name: `${event.data.firstName ?? ""} ${event.data.lastName ?? ""}`.trim(),
-    });
-    await ctx.scheduler.runAfter(0, internal.authActions.syncRoleFromWorkOS, {
-      authId: event.data.id,
-    });
-  },
-  "user.deleted": async (ctx, event) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("authId", (q) => q.eq("authId", event.data.id))
-      .unique();
-    if (!user) {
-      console.warn(`User not found: ${event.data.id}`);
-      return;
-    }
-    await ctx.db.delete(user._id);
-  },
-  "organization_membership.created": async (ctx, event) => {
-    await patchRoleFromMembership(ctx, event.data);
-  },
-  "organization_membership.updated": async (ctx, event) => {
-    await patchRoleFromMembership(ctx, event.data);
-  },
-  "organization_membership.deleted": async (ctx, event) => {
-    await patchRoleFromMembership(ctx, {
-      userId: event.data.userId,
-      role: null,
-    });
-  },
-});
+function primaryEmailFromUserJSON(user: UserJSON): string {
+  const primary = user.email_addresses.find(
+    (email) => email.id === user.primary_email_address_id,
+  );
+  return primary?.email_address ?? user.email_addresses[0]?.email_address ?? "";
+}
 
-// Backfill users who already exist in the WorkOS team (e.g. created by
-// another app on the same team) into the component's user table, firing
-// the user.created handler above so our own `users` table gets populated
-// too. Run once via `npx convex run auth:backfillUsers`.
-export const { backfillUsers } = authKit.utils();
+function nameFromUserJSON(user: UserJSON): string {
+  const parts = [user.first_name, user.last_name]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part));
+  return (
+    parts.join(" ") ||
+    user.username ||
+    primaryEmailFromUserJSON(user) ||
+    user.id
+  );
+}
 
-// Exposes the current authenticated user, including WorkOS profile data,
-// to the frontend.
+function clerkUserArgs(user: UserJSON) {
+  return {
+    authId: user.id,
+    email: primaryEmailFromUserJSON(user),
+    name: nameFromUserJSON(user),
+    role: roleFromValue(user.public_metadata?.role),
+  };
+}
+
+function clerkBackendUserArgs(user: User) {
+  const email = user.primaryEmailAddress?.emailAddress ?? "";
+  return {
+    authId: user.id,
+    email,
+    name: user.fullName ?? user.username ?? email ?? user.id,
+    role: roleFromValue(user.publicMetadata.role),
+  };
+}
+
 export const currentUser = query({
   args: {},
-  returns: v.union(vAuthUser, v.null()),
+  returns: v.union(vCurrentUser, v.null()),
   handler: async (ctx) => {
-    const profile = await authKit.getAuthUser(ctx);
-    if (!profile) return null;
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+
     const user = await ctx.db
       .query("users")
-      .withIndex("authId", (q) => q.eq("authId", profile.id))
+      .withIndex("authId", (q) => q.eq("authId", identity.subject))
       .unique();
-    return { ...profile, role: user?.role ?? ("student" as const) };
+
+    return {
+      id: identity.subject,
+      email: user?.email ?? identity.email ?? "",
+      name: user?.name ?? nameFromIdentity(identity),
+      role: user?.role ?? roleFromIdentity(identity),
+    };
   },
 });
 
-// Patches the WorkOS-derived role onto the local `users` row. Called only
-// by the syncRoleFromWorkOS action.
-export const setRole = internalMutation({
+export const storeCurrentUser = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    await upsertUser(ctx, {
+      authId: identity.subject,
+      email: identity.email ?? "",
+      name: nameFromIdentity(identity),
+      role: roleFromIdentity(identity),
+    });
+    return null;
+  },
+});
+
+export const callerRole = internalQuery({
+  args: {},
+  returns: v.union(roleValidator, v.null()),
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("authId", (q) => q.eq("authId", identity.subject))
+      .unique();
+    return user?.role ?? roleFromIdentity(identity);
+  },
+});
+
+export const upsertUserFromClerk = internalMutation({
   args: {
     authId: v.string(),
-    role: v.union(v.literal("mentor"), v.literal("student")),
+    email: v.string(),
+    name: v.string(),
+    role: roleValidator,
   },
   returns: v.null(),
-  handler: async (ctx, { authId, role }) => {
+  handler: async (ctx, user) => {
+    await upsertUser(ctx, user);
+    return null;
+  },
+});
+
+export const deleteUserFromClerk = internalMutation({
+  args: { authId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { authId }) => {
     const user = await ctx.db
       .query("users")
       .withIndex("authId", (q) => q.eq("authId", authId))
       .unique();
-    if (user) {
-      await ctx.db.patch(user._id, { role });
-    }
+    if (user) await ctx.db.delete(user._id);
     return null;
   },
+});
+
+export const syncUsersFromClerk = action({
+  args: {},
+  returns: v.object({ synced: v.number() }),
+  handler: async (ctx) => {
+    const role: Role | null = await ctx.runQuery(internal.auth.callerRole, {});
+    if (role !== "mentor")
+      throw new Error("This action requires the mentor role.");
+
+    const secretKey = process.env.CLERK_SECRET_KEY;
+    if (!secretKey) throw new Error("Set CLERK_SECRET_KEY in Convex env.");
+
+    const clerk = createClerkClient({ secretKey });
+    let offset = 0;
+    let synced = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const page = await clerk.users.getUserList({
+        limit: USER_SYNC_PAGE_SIZE,
+        offset,
+      });
+      for (const user of page.data) {
+        await ctx.runMutation(internal.auth.upsertUserFromClerk, {
+          ...clerkBackendUserArgs(user),
+        });
+        synced += 1;
+      }
+      offset += page.data.length;
+      if (page.data.length < USER_SYNC_PAGE_SIZE || offset >= page.totalCount) {
+        hasMore = false;
+      }
+    }
+
+    return { synced };
+  },
+});
+
+export const clerkWebhook = httpAction(async (ctx, request) => {
+  const secret = process.env.CLERK_WEBHOOK_SECRET;
+  if (!secret) {
+    return new Response("CLERK_WEBHOOK_SECRET is not configured", {
+      status: 500,
+    });
+  }
+
+  const payload = await request.text();
+  const headers = {
+    "svix-id": request.headers.get("svix-id") ?? "",
+    "svix-timestamp": request.headers.get("svix-timestamp") ?? "",
+    "svix-signature": request.headers.get("svix-signature") ?? "",
+  };
+
+  let event: WebhookEvent;
+  try {
+    event = new Webhook(secret).verify(payload, headers) as WebhookEvent;
+  } catch (err) {
+    console.error("Clerk webhook verification failed:", err);
+    return new Response("Invalid webhook signature", { status: 400 });
+  }
+
+  switch (event.type) {
+    case "user.created":
+    case "user.updated":
+      await ctx.runMutation(internal.auth.upsertUserFromClerk, {
+        ...clerkUserArgs(event.data),
+      });
+      break;
+    case "user.deleted":
+      if (event.data.id) {
+        await ctx.runMutation(internal.auth.deleteUserFromClerk, {
+          authId: event.data.id,
+        });
+      }
+      break;
+    default:
+      break;
+  }
+
+  return new Response("ok", { status: 200 });
 });

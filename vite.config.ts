@@ -8,10 +8,8 @@ export default defineConfig(({ mode }) => ({
   // stack. Let Vitest use esbuild's TSX transform to avoid plugin deprecation
   // noise while keeping the React plugin for dev/build.
   plugins: mode === "test" ? [] : [react()],
-  // WorkOS redirects back to VITE_WORKOS_REDIRECT_URI (http://localhost:5173).
-  // Pin the port so Vite never silently drifts to 5174 when 5173 is busy —
-  // otherwise the OAuth code lands on a port the app isn't served from and
-  // login appears to "do nothing" (you stay on the sign-in screen).
+  // Clerk local development is configured against http://localhost:5173.
+  // Pin the port so Vite never silently drifts to 5174 when 5173 is busy.
   server: {
     port: 5173,
     strictPort: true,

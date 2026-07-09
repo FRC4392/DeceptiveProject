@@ -3,26 +3,30 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
 import { ConvexReactClient } from "convex/react";
-import { AuthKitProvider, useAuth } from "@workos-inc/authkit-react";
-import { ConvexProviderWithAuthKit } from "@convex-dev/workos";
+import { ClerkProvider, useAuth } from "@clerk/react";
+import { ConvexProviderWithClerk } from "convex/react-clerk";
 import App from "./App.tsx";
 import "./index.css";
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL as string);
+const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as
+  | string
+  | undefined;
+
+if (!clerkPublishableKey) {
+  throw new Error("Missing VITE_CLERK_PUBLISHABLE_KEY");
+}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <ThemeProvider attribute="class">
-        <AuthKitProvider
-          clientId={import.meta.env.VITE_WORKOS_CLIENT_ID as string}
-          redirectUri={import.meta.env.VITE_WORKOS_REDIRECT_URI as string}
-        >
-          <ConvexProviderWithAuthKit client={convex} useAuth={useAuth}>
+    <ClerkProvider publishableKey={clerkPublishableKey}>
+      <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+        <BrowserRouter>
+          <ThemeProvider attribute="class">
             <App />
-          </ConvexProviderWithAuthKit>
-        </AuthKitProvider>
-      </ThemeProvider>
-    </BrowserRouter>
+          </ThemeProvider>
+        </BrowserRouter>
+      </ConvexProviderWithClerk>
+    </ClerkProvider>
   </React.StrictMode>,
 );

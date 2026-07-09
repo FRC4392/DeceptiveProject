@@ -1,5 +1,5 @@
 import { httpRouter } from "convex/server";
-import { authKit } from "./auth";
+import { clerkWebhook } from "./auth";
 import {
   oauthStart,
   oauthCallback,
@@ -12,10 +12,14 @@ import { githubWebhook } from "./github";
 
 const http = httpRouter();
 
-authKit.registerRoutes(http);
+http.route({ path: "/clerk/webhook", method: "POST", handler: clerkWebhook });
 
 // Onshape OAuth (one-time team authorization) + the on-demand sync button.
-http.route({ path: "/onshape/oauth/start", method: "GET", handler: oauthStart });
+http.route({
+  path: "/onshape/oauth/start",
+  method: "GET",
+  handler: oauthStart,
+});
 http.route({
   path: "/onshape/oauth/callback",
   method: "GET",
@@ -37,7 +41,7 @@ http.route({
 });
 
 // GitHub issue/PR sync webhook — verified via the HMAC signature GitHub sends
-// in `x-hub-signature-256` (secret = GITHUB_WEBHOOK_SECRET), not WorkOS auth.
+// in `x-hub-signature-256` (secret = GITHUB_WEBHOOK_SECRET), not app auth.
 http.route({ path: "/github/webhook", method: "POST", handler: githubWebhook });
 
 export default http;

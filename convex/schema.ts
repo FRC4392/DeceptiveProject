@@ -2,10 +2,9 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
-  // Mirrors WorkOS user data, kept in sync via the AuthKit component's
-  // user/membership event handlers in convex/auth.ts. WorkOS user ids are
-  // intentionally the cross-app identity key, matching DeceptiveHours and
-  // the shared WorkOS team directory.
+  // Mirrors Clerk user data, kept in sync from sign-in storage, Clerk webhooks,
+  // and the mentor-triggered Clerk backfill action in convex/auth.ts.
+  // Clerk user ids are the app-facing identity key.
   users: defineTable({
     authId: v.string(),
     email: v.string(),
@@ -41,7 +40,7 @@ export default defineSchema({
     title: v.string(),
     description: v.optional(v.string()),
     boardId: v.id("boards"),
-    assigneeIds: v.array(v.string()), // WorkOS user IDs
+    assigneeIds: v.array(v.string()), // Clerk user IDs
     dueDate: v.optional(v.number()),
     completedAt: v.optional(v.number()), // set when status -> done
     status: v.union(
@@ -225,7 +224,7 @@ export default defineSchema({
     state: v.union(v.literal("open"), v.literal("closed")),
     htmlUrl: v.optional(v.string()),
     labels: v.array(v.string()),
-    assigneeLogins: v.array(v.string()), // GitHub logins (not WorkOS ids)
+    assigneeLogins: v.array(v.string()), // GitHub logins (not Clerk ids)
     authorLogin: v.optional(v.string()),
     isPullRequest: v.boolean(),
     // The effective priority (displayed + mirrored to the task). On GitHub rows
@@ -246,7 +245,7 @@ export default defineSchema({
     .index("by_project", ["projectId"]),
 
   // Comments on an issue. GitHub-mirrored comments carry `githubCommentId` +
-  // `authorLogin`; locally-authored team notes carry `authorId` (WorkOS id) and
+  // `authorLogin`; locally-authored team notes carry `authorId` (Clerk id) and
   // stay in the tracker only.
   issueComments: defineTable({
     issueId: v.id("issues"),

@@ -1,9 +1,15 @@
+import { useEffect } from "react";
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
-import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
-import { useAuth } from "@workos-inc/authkit-react";
+import {
+  Authenticated,
+  AuthLoading,
+  Unauthenticated,
+  useConvexAuth,
+  useMutation,
+} from "convex/react";
+import { SignIn } from "@clerk/react";
+import { api } from "../convex/_generated/api";
 import { AppShell } from "@/Layout";
-import { Button } from "@/components/ui/button";
-import { LoginRoute } from "@/routes/LoginRoute";
 import { DashboardPage } from "@/routes/DashboardPage";
 import { BoardsPage } from "@/routes/BoardsPage";
 import { BoardPage } from "@/routes/BoardPage";
@@ -22,28 +28,77 @@ import { IssuesPage } from "@/routes/IssuesPage";
 import { IssueDetailPage } from "@/routes/IssueDetailPage";
 
 function SignInScreen() {
-  const { signIn } = useAuth();
   return (
-    <div className="flex h-screen flex-col items-center justify-center gap-6 px-6 text-center">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[#001730] px-4 py-8 text-center text-white sm:px-6">
       <img
-        src="/brand/logo-mark.png"
-        alt="Deceivers Robotics"
-        className="h-20 w-20 object-contain"
+        src="/brand/logo-banner.png"
+        alt="Deceivers Robotics Team 4392"
+        className="mb-8 h-auto w-72 max-w-[82vw] object-contain sm:w-80"
       />
-      <div className="space-y-2">
-        <p className="font-mono text-xs tracking-[0.25em] text-muted-foreground">
-          FRC · TEAM 4392
-        </p>
-        <h1 className="brand-title text-4xl">Deceivers Robotics</h1>
-        <p className="text-muted-foreground">
-          Project management, parts, and issue tracking — built by students.
-        </p>
-      </div>
-      <Button size="lg" onClick={() => void signIn()}>
-        Sign in
-      </Button>
+      <SignIn
+        routing="hash"
+        forceRedirectUrl="/dashboard"
+        appearance={{
+          variables: {
+            colorPrimary: "#3F7FD2",
+            colorPrimaryForeground: "#FFFFFF",
+            colorBackground: "#04264C",
+            colorForeground: "#F8FBFF",
+            colorMutedForeground: "#AFC1D6",
+            colorInput: "#2A292E",
+            colorInputForeground: "#F8FBFF",
+            colorBorder: "#3D4D66",
+            colorRing: "#5B94E5",
+            colorDanger: "#C8452F",
+            colorNeutral: "#EAF1F9",
+            colorShadow: "#000B17",
+            borderRadius: "1.5rem",
+            fontFamily: "'Hanken Grotesk', sans-serif",
+            fontFamilyButtons: "'Hanken Grotesk', sans-serif",
+          },
+          elements: {
+            rootBox: "w-full max-w-[31rem]",
+            cardBox: "w-full shadow-none",
+            card: "w-full overflow-hidden border border-[#143A63] bg-[#04264C] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.28)]",
+            logoBox: "mx-auto mb-4",
+            logoImage: "h-14 w-14",
+            header: "pb-6",
+            headerTitle:
+              "brand-title text-2xl text-white sm:text-3xl [letter-spacing:0]",
+            headerSubtitle: "text-base font-semibold text-[#AFC1D6] sm:text-lg",
+            main: "px-5 pb-8 sm:px-12",
+            formField: "text-left",
+            formFieldLabel: "mb-2 text-base font-bold text-white",
+            formFieldInput:
+              "h-12 rounded-[0.875rem] border-[#3D4D66] bg-[#2A292E] px-4 text-base font-semibold text-white placeholder:text-[#B8B8BE] focus:border-[#5B94E5] focus:ring-[#5B94E5]",
+            formButtonPrimary:
+              "h-12 rounded-[0.875rem] bg-[#3F7FD2] text-base font-bold !text-white shadow-[inset_0_0.125rem_0_rgba(255,255,255,0.16)] hover:bg-[#4D8ADD] focus-visible:ring-2 focus-visible:ring-[#8FB6E4]",
+            buttonArrowIcon: "text-[#C5D8F2]",
+            footer: "border-t border-[#143A63] bg-[#0B2C50]",
+            footerActionText: "text-[#AFC1D6]",
+            footerActionLink: "font-bold text-[#8FB6E4] hover:text-white",
+            footerPagesLink: "text-[#AFC1D6] hover:text-white",
+          },
+          options: {
+            logoImageUrl: "/brand/logo-mark.png",
+            logoPlacement: "inside",
+          },
+        }}
+      />
     </div>
   );
+}
+
+function StoreCurrentUser() {
+  const { isAuthenticated } = useConvexAuth();
+  const storeCurrentUser = useMutation(api.auth.storeCurrentUser);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void storeCurrentUser();
+  }, [isAuthenticated, storeCurrentUser]);
+
+  return null;
 }
 
 function RequireAuth() {
@@ -58,6 +113,7 @@ function RequireAuth() {
         <SignInScreen />
       </Unauthenticated>
       <Authenticated>
+        <StoreCurrentUser />
         <Outlet />
       </Authenticated>
     </>
@@ -67,7 +123,6 @@ function RequireAuth() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginRoute />} />
       <Route element={<RequireAuth />}>
         <Route element={<AppShell />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

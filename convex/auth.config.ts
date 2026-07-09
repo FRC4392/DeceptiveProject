@@ -1,5 +1,10 @@
-import { authKit } from "./auth";
+import type { AuthConfig } from "convex/server";
 
 export default {
-  providers: authKit.getAuthConfigProviders(),
-};
+  providers: [
+    {
+      domain: process.env.CLERK_JWT_ISSUER_DOMAIN!,
+      applicationID: "convex",
+    },
+  ],
+} satisfies AuthConfig;

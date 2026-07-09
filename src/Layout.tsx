@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { useAuth } from "@workos-inc/authkit-react";
+import { UserButton } from "@clerk/react";
 import { HamburgerMenuIcon } from "@radix-ui/react-icons";
 import { Sidebar, type NavItem } from "@/components/Sidebar";
-import { UserMenu } from "@/components/UserMenu";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { ProjectSwitcher } from "@/components/ProjectSwitcher";
 import { Button } from "@/components/ui/button";
 import { ProjectProvider } from "@/lib/project";
@@ -24,7 +24,6 @@ const NAV_ITEMS: MentorNavItem[] = [
 
 /** Top-level authenticated app shell: sidebar nav + routed content. */
 export function AppShell() {
-  const { user, signOut } = useAuth();
   const isMentor = useIsMentor();
   const items = NAV_ITEMS.filter((i) => !i.mentorOnly || isMentor);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -59,7 +58,8 @@ export function AppShell() {
             </div>
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">
               <ProjectSwitcher />
-              <UserMenu email={user?.email} onSignOut={() => signOut()} />
+              <ThemeToggle />
+              <UserButton />
             </div>
           </div>
         </header>

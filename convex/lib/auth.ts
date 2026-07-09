@@ -4,11 +4,8 @@ import type { Doc } from "../_generated/dataModel";
 type Ctx = QueryCtx | MutationCtx;
 
 /**
- * The current authenticated user's WorkOS id, or null. This is the value stored
- * in `assigneeIds`, `taskComments.authorId`, etc. This intentionally uses
- * `identity.subject` instead of Convex `tokenIdentifier` because Deceptive apps
- * share one WorkOS user directory and use WorkOS user ids as the cross-app
- * roster key, matching DeceptiveHours.
+ * The current authenticated user's Clerk id, or null. This is the value stored
+ * in `users.authId`, `assigneeIds`, `taskComments.authorId`, etc.
  */
 export async function getUserId(ctx: Ctx): Promise<string | null> {
   const identity = await ctx.auth.getUserIdentity();
@@ -23,8 +20,7 @@ export async function requireUserId(ctx: Ctx): Promise<string> {
 
 /**
  * The synced local `users` row for the current user, including `role`.
- * Returns null if unauthenticated or if the WorkOS webhook hasn't synced
- * the user yet.
+ * Returns null if unauthenticated or if the Clerk user has not been stored yet.
  */
 export async function getCurrentUser(ctx: Ctx): Promise<Doc<"users"> | null> {
   const id = await getUserId(ctx);
@@ -38,8 +34,8 @@ export async function getCurrentUser(ctx: Ctx): Promise<Doc<"users"> | null> {
 /**
  * Guard for mentor-only mutations (deletes, board management, integration
  * settings, doc-number assignment). Throws if the current user isn't a
- * mentor. Roles come from WorkOS membership events, with `syncRoleFromWorkOS`
- * as a reconciliation fallback after user create/update events.
+ * mentor. Roles come from Clerk public metadata, cached on the local `users`
+ * row by sign-in storage, Clerk webhooks, and Clerk backfill sync.
  */
 export async function requireMentor(ctx: Ctx): Promise<Doc<"users">> {
   const user = await getCurrentUser(ctx);
