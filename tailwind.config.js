@@ -58,6 +58,7 @@ export default {
           light: "#6E9DD8",
           bright: "#1256A8",
           DEFAULT: "#004392",
+          core: "#004392",
           deep: "#00305F",
           navy: "#001730",
         },
@@ -70,6 +71,7 @@ export default {
         sans: ['"Hanken Grotesk"', "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ['"Space Mono"', "ui-monospace", "monospace"],
         display: ['"Saira Condensed"', "ui-sans-serif", "sans-serif"],
+        heading: ['"Saira Condensed"', "ui-sans-serif", "sans-serif"],
       },
       borderRadius: {
         lg: "var(--radius)",

@@ -25,7 +25,7 @@ describe("Sidebar", () => {
     renderSidebar("/boards");
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
     const boardsLink = screen.getByRole("link", { name: "Boards" });
-    expect(boardsLink).toHaveClass("bg-secondary");
+    expect(boardsLink).toHaveClass("bg-brand-core");
   });
 
   it("calls onClose when a nav item is clicked", async () => {

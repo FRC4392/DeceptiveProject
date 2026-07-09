@@ -5,6 +5,12 @@ import { MemoryRouter } from "react-router-dom";
 import type React from "react";
 import App from "@/App";
 
+const clerkMock = vi.hoisted(() => ({
+  isLoaded: true,
+  isSignedIn: true,
+  signInProps: [] as Array<Record<string, unknown>>,
+}));
+
 vi.mock("../../convex/_generated/api", () => ({
   api: {
     auth: {
@@ -50,11 +56,18 @@ vi.mock("../../convex/_generated/api", () => ({
 }));
 
 vi.mock("@clerk/react", () => ({
-  SignIn: () => <div data-testid="clerk-sign-in" />,
+  SignIn: (props: Record<string, unknown>) => {
+    clerkMock.signInProps.push(props);
+    return <div data-testid="clerk-sign-in" />;
+  },
   SignInButton: ({ children }: { children: React.ReactNode }) => (
     <>{children}</>
   ),
   UserButton: () => <button aria-label="Open user button">Account</button>,
+  useUser: () => ({
+    isLoaded: clerkMock.isLoaded,
+    isSignedIn: clerkMock.isSignedIn,
+  }),
   useAuth: () => ({
     isLoaded: true,
     isSignedIn: true,
@@ -125,6 +138,9 @@ function renderAt(path: string) {
 describe("app smoke routes", () => {
   beforeEach(() => {
     vi.stubEnv("VITE_CONVEX_SITE_URL", "");
+    clerkMock.isLoaded = true;
+    clerkMock.isSignedIn = true;
+    clerkMock.signInProps = [];
   });
 
   afterEach(() => {
@@ -139,7 +155,43 @@ describe("app smoke routes", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("2 of 4 tasks done")).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: /Deceivers Robotics/ }),
+      screen.getAllByRole("link", { name: /Deceivers Robotics/ }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("renders the DeceptiveHours-style login screen when signed out", () => {
+    clerkMock.isSignedIn = false;
+    renderAt("/login");
+
+    expect(
+      screen.getByAltText("Deceivers Robotics Team 4392"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("clerk-sign-in")).toBeInTheDocument();
+
+    expect(clerkMock.signInProps[0]).toMatchObject({
+      routing: "hash",
+      forceRedirectUrl: "/",
+    });
+
+    const appearance = clerkMock.signInProps[0].appearance as {
+      variables: { colorPrimary: string; colorBackground: string };
+      elements: { headerTitle: string; formButtonPrimary: string };
+    };
+    expect(appearance.variables).toMatchObject({
+      colorPrimary: "#004392",
+      colorBackground: "#FFFFFF",
+    });
+    expect(appearance.elements.headerTitle).toContain("font-heading");
+    expect(appearance.elements.formButtonPrimary).toContain(
+      "!text-primary-foreground",
+    );
+  });
+
+  it("redirects signed-in users away from the login screen", () => {
+    renderAt("/login");
+
+    expect(
+      screen.getByRole("heading", { name: "Dashboard" }),
     ).toBeInTheDocument();
   });
 

@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import { Cross1Icon } from "@radix-ui/react-icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import logo from "@/assets/logo.png";
 
 export type NavItem = { to: string; label: string };
 
@@ -27,23 +28,31 @@ export function Sidebar({
       />
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r bg-background transition-transform duration-200 ease-in-out",
-          "md:static md:z-auto md:translate-x-0 md:transition-none",
+          "fixed inset-y-0 left-0 z-40 flex w-60 shrink-0 flex-col border-r border-brand-navy bg-gradient-to-b from-brand-deep to-brand-navy text-white transition-transform duration-200 ease-in-out",
+          "md:sticky md:inset-auto md:top-0 md:z-auto md:h-svh md:translate-x-0 md:transition-none",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex h-16 shrink-0 items-center justify-between border-b px-4 md:hidden">
-          <img
-            src="/brand/logo-banner.png"
-            alt="Deceivers Robotics · Team 4392"
-            className="h-8 w-auto object-contain"
-          />
-          <Button variant="ghost" size="icon" onClick={onClose}>
+        <div className="flex h-16 shrink-0 items-center justify-between px-4">
+          <NavLink to="/dashboard" className="flex items-center">
+            <img
+              src={logo}
+              alt="Deceivers Robotics Team 4392"
+              className="h-10 w-auto object-contain"
+            />
+          </NavLink>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-white/70 hover:bg-white/10 hover:text-white md:hidden"
+            onClick={onClose}
+          >
             <Cross1Icon className="h-4 w-4" />
             <span className="sr-only">Close menu</span>
           </Button>
         </div>
-        <nav className="flex flex-col gap-1 overflow-y-auto p-3">
+        <div className="h-px w-full shrink-0 bg-white/10" />
+        <nav className="flex flex-col gap-1 overflow-y-auto px-3 py-4">
           {items.map((item) => (
             <NavLink
               key={item.to}
@@ -53,8 +62,8 @@ export function Sidebar({
                 cn(
                   "rounded-md px-3 py-2 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-secondary text-secondary-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                    ? "bg-brand-core text-white"
+                    : "text-white/70 hover:bg-white/10 hover:text-white",
                 )
               }
             >
