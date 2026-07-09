@@ -39,7 +39,7 @@ export function PriorityBadge({ priority }: { priority: TaskPriority }) {
   );
 }
 
-/** Overlapping avatar stack for a set of WorkOS user ids. */
+/** Overlapping avatar stack for a set of Clerk user ids. */
 export function AssigneeAvatars({
   assigneeIds,
   max = 4,

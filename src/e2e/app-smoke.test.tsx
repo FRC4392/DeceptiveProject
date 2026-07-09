@@ -7,7 +7,11 @@ import App from "@/App";
 
 vi.mock("../../convex/_generated/api", () => ({
   api: {
-    auth: { currentUser: "auth.currentUser" },
+    auth: {
+      currentUser: "auth.currentUser",
+      storeCurrentUser: "auth.storeCurrentUser",
+      syncUsersFromClerk: "auth.syncUsersFromClerk",
+    },
     boards: {
       create: "boards.create",
       list: "boards.list",
@@ -45,11 +49,19 @@ vi.mock("../../convex/_generated/api", () => ({
   },
 }));
 
-vi.mock("@workos-inc/authkit-react", () => ({
+vi.mock("@clerk/react", () => ({
+  SignIn: () => <div data-testid="clerk-sign-in" />,
+  SignInButton: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+  UserButton: () => <button aria-label="Open user button">Account</button>,
   useAuth: () => ({
-    user: { email: "mentor@example.com" },
-    signIn: vi.fn(),
-    signOut: vi.fn(),
+    isLoaded: true,
+    isSignedIn: true,
+    getToken: vi.fn(async () => "token"),
+    orgId: null,
+    orgRole: null,
+    sessionClaims: { aud: "convex" },
   }),
 }));
 
@@ -59,6 +71,7 @@ vi.mock("convex/react", () => ({
   ),
   AuthLoading: () => null,
   Unauthenticated: () => null,
+  useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useAction: () => vi.fn(async () => ({ imported: 0 })),
   useMutation: () => vi.fn(async () => null),
   useQuery: (ref: string) => {

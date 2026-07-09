@@ -125,7 +125,7 @@ const ISSUE_STATE_TO_TASK: Record<IssueState, TaskStatus> = {
  * of `syncTaskForPart`. A task exists for every issue (source: "issue",
  * sourceId: issue._id) on the shared "Software" board. Called from every issue
  * mutation and the GitHub webhook. Assignees are intentionally left untouched
- * (GitHub logins don't map to WorkOS ids), so a mirror task keeps any manual
+ * (GitHub logins don't map to Clerk ids), so a mirror task keeps any manual
  * PM assignment across re-syncs.
  */
 export async function syncTaskForIssue(

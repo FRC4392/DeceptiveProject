@@ -3,7 +3,7 @@ import { api } from "../../convex/_generated/api";
 
 export type Role = "mentor" | "student";
 
-/** The current authenticated user's WorkOS profile + synced role. */
+/** The current authenticated user's Clerk profile + synced role. */
 export function useCurrentUser() {
   return useQuery(api.auth.currentUser);
 }

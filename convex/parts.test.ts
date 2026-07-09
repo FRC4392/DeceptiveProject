@@ -7,7 +7,10 @@ import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
 
-const IDENTITY = { subject: "user_test", issuer: "https://example.workos.com" };
+const IDENTITY = {
+  subject: "user_test",
+  issuer: "https://example.clerk.accounts.dev",
+};
 
 describe("part → task sync", () => {
   test("creating a part creates a linked Manufacturing task", async () => {

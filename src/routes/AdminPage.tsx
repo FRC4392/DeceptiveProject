@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,7 @@ export function AdminPage() {
       <div>
         <h1 className="brand-title text-3xl">Admin</h1>
         <p className="text-sm text-muted-foreground">
-          Mentor-only settings. Roles and roster are managed in WorkOS.
+          Mentor-only settings. Roles and roster are synced from Clerk.
         </p>
       </div>
 
@@ -139,10 +139,31 @@ function CompetitionsCard() {
 
 function RosterCard() {
   const roster = useRoster();
+  const syncUsers = useAction(api.auth.syncUsersFromClerk);
+  const [syncing, setSyncing] = useState(false);
+
+  async function syncRoster() {
+    setSyncing(true);
+    try {
+      await syncUsers();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
         <CardTitle className="text-base">Roster</CardTitle>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void syncRoster()}
+          disabled={syncing}
+        >
+          {syncing ? "Syncing..." : "Sync Clerk"}
+        </Button>
       </CardHeader>
       <CardContent>
         {roster === undefined ? (

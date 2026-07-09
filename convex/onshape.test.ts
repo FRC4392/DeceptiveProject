@@ -45,7 +45,7 @@ async function asMentor(t: TestConvex<typeof schema>) {
   });
   return t.withIdentity({
     subject: "mentor1",
-    issuer: "https://example.workos.com",
+    issuer: "https://example.clerk.accounts.dev",
   });
 }
 
@@ -239,7 +239,7 @@ describe("setThumbnailInternal", () => {
   test("replaces the existing thumbnail and deletes the old blob", async () => {
     const asUser = t.withIdentity({
       subject: "u1",
-      issuer: "https://example.workos.com",
+      issuer: "https://example.clerk.accounts.dev",
     });
     const partId = await asUser.mutation(api.parts.create, {
       name: "Plate",

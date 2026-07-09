@@ -20,7 +20,7 @@ export function useRoster(): RosterEntry[] | undefined {
   }));
 }
 
-/** Map of WorkOS user id -> roster entry, for resolving assignees/authors. */
+/** Map of Clerk user id -> roster entry, for resolving assignees/authors. */
 export function useRosterMap(): Record<string, RosterEntry> {
   const roster = useRoster();
   return useMemo(() => {

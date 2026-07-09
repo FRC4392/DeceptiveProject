@@ -9,36 +9,35 @@ query, auth, and testing patterns for this repo.
 
 ## Shape
 
-- `schema.ts` defines the app tables: synced WorkOS `users`, projects, boards,
+- `schema.ts` defines the app tables: synced Clerk `users`, projects, boards,
   tasks/comments/attachments, competitions, parts/QC/inventory, Onshape state,
   and GitHub issues/comments/repo mappings.
-- `auth.ts`, `authActions.ts`, and `auth.config.ts` wire WorkOS AuthKit into
-  Convex and sync local user roles.
+- `auth.ts` and `auth.config.ts` wire Clerk into Convex, store the current
+  Clerk user, verify Clerk webhooks, and sync the Clerk roster into `users`.
 - `tasks.ts`, `boards.ts`, `projects.ts`, `parts.ts`, `inventory.ts`, and
   `dashboard.ts` are the main app APIs used by the React routes.
 - `onshape.ts`, `onshapeOAuth.ts`, and `lib/onshape*` handle CAD OAuth,
   right-panel sync, part numbering, and token encryption.
 - `github.ts` and `lib/github*` handle issue/PR import, webhook sync, and
   write-back.
-- `http.ts` registers the public HTTP endpoints for WorkOS, Onshape, and GitHub
+- `http.ts` registers the public HTTP endpoints for Clerk, Onshape, and GitHub
   webhooks/OAuth/panel requests.
 
 ## Auth Model
 
-This app intentionally stores WorkOS user ids, not Convex `tokenIdentifier`, in
-local user-facing references such as `users.authId`, task assignees, designers,
-and comment authors. Deceptive apps share one WorkOS team directory, and this
-matches the sibling DeceptiveHours implementation.
+This app stores Clerk user IDs in local user-facing references such as
+`users.authId`, task assignees, designers, and comment authors.
 
-WorkOS Roles are the source of truth for permissions:
+Roles are sourced from Clerk public metadata:
 
-- `mentor` maps to mentor access.
-- Any other role, missing role, or unsynced role maps to student access.
-- WorkOS membership events update local roles immediately.
-- `authActions.syncRoleFromWorkOS` remains as a scheduled reconciliation path
-  after user create/update events.
+- `user.public_metadata.role === "mentor"` maps to mentor access.
+- Any other value, missing role, or unsynced user maps to student access.
+- The Clerk session token used for Convex should expose a top-level `role`
+  claim sourced from `user.public_metadata.role`.
+- `auth.storeCurrentUser`, `/clerk/webhook`, and `auth.syncUsersFromClerk`
+  keep the local `users` table in sync.
 
-Do not accept client-provided user ids for authorization. Protected functions
+Do not accept client-provided user IDs for authorization. Protected functions
 must derive the caller server-side with `ctx.auth.getUserIdentity()` and the
 helpers in `lib/auth.ts`.
 
@@ -48,8 +47,8 @@ Backend secrets live in Convex deployment env, set with `npx convex env set`.
 See the top-level `README.md` and `.env.local.example` for the complete list.
 The common groups are:
 
-- WorkOS: `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`,
-  `WORKOS_WEBHOOK_SECRET`.
+- Clerk: `CLERK_JWT_ISSUER_DOMAIN`, `CLERK_SECRET_KEY`,
+  `CLERK_WEBHOOK_SECRET`.
 - Onshape: `ONSHAPE_OAUTH_CLIENT_ID`, `ONSHAPE_OAUTH_CLIENT_SECRET`,
   `ONSHAPE_SYNC_SECRET`, `ONSHAPE_TOKEN_ENC_KEY`, and optional
   `ONSHAPE_BASE_URL`.
@@ -58,9 +57,8 @@ The common groups are:
 Convex provides `CONVEX_SITE_URL` for the deployment HTTP endpoint; keep the
 frontend `VITE_CONVEX_SITE_URL` copy pointed at the same URL for setup links.
 
-Frontend-safe variables belong in `.env.local`, including
-`VITE_CONVEX_URL`, `VITE_CONVEX_SITE_URL`, `VITE_WORKOS_CLIENT_ID`, and
-`VITE_WORKOS_REDIRECT_URI`.
+Frontend-safe variables belong in `.env.local`, including `VITE_CONVEX_URL`,
+`VITE_CONVEX_SITE_URL`, and `VITE_CLERK_PUBLISHABLE_KEY`.
 
 ## Testing
 

@@ -25,7 +25,7 @@ async function asUser(t: TestConvex<typeof schema>, subject = "u1") {
   });
   return t.withIdentity({
     subject,
-    issuer: "https://example.workos.com",
+    issuer: "https://example.clerk.accounts.dev",
   });
 }
 
@@ -40,7 +40,7 @@ async function asMentor(t: TestConvex<typeof schema>) {
   });
   return t.withIdentity({
     subject: "mentor1",
-    issuer: "https://example.workos.com",
+    issuer: "https://example.clerk.accounts.dev",
   });
 }
 
@@ -161,7 +161,7 @@ describe("comment mirroring", () => {
       body: "Looking into it.",
     });
     let comments = await t.query(api.github.listComments, {
-      issueId: (await firstIssueId(t)),
+      issueId: await firstIssueId(t),
     });
     expect(comments).toHaveLength(1);
     expect(comments[0].authorLogin).toBe("carol");

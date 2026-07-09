@@ -12,8 +12,8 @@ const vUser = v.object({
   role: v.optional(v.union(v.literal("mentor"), v.literal("student"))),
 });
 
-// The team roster, used to render assignee pickers and resolve WorkOS
-// user ids to names in comments / assignee chips. Small, bounded set.
+// The team roster, used to render assignee pickers and resolve Clerk user ids
+// to names in comments / assignee chips. Small, bounded set.
 export const list = query({
   args: {},
   returns: v.array(vUser),
