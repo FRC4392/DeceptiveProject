@@ -19,10 +19,18 @@ if (!clerkPublishableKey) {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ClerkProvider publishableKey={clerkPublishableKey}>
+    <ClerkProvider
+      publishableKey={clerkPublishableKey}
+      afterSignOutUrl="/login"
+    >
       <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
         <BrowserRouter>
-          <ThemeProvider attribute="class">
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="system"
+            enableSystem
+            disableTransitionOnChange
+          >
             <App />
           </ThemeProvider>
         </BrowserRouter>

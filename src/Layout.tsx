@@ -8,6 +8,7 @@ import { ProjectSwitcher } from "@/components/ProjectSwitcher";
 import { Button } from "@/components/ui/button";
 import { ProjectProvider } from "@/lib/project";
 import { useIsMentor } from "@/lib/roles";
+import logo from "@/assets/logo.png";
 
 type MentorNavItem = NavItem & { mentorOnly?: boolean };
 
@@ -30,45 +31,47 @@ export function AppShell() {
 
   return (
     <ProjectProvider>
-      <div className="flex h-screen w-full flex-col">
-        <header className="sticky top-0 z-20 border-b border-primary-foreground/15 bg-primary text-primary-foreground shadow-sm">
-          <div className="flex min-h-16 items-center justify-between gap-3 px-4 py-2 md:px-6">
-            <div className="flex items-center gap-2">
+      <div className="flex min-h-svh w-full">
+        <Sidebar
+          items={items}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+        />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-20 border-b bg-background">
+            <div className="flex min-h-14 items-center gap-3 px-4 py-2 md:hidden">
               <Button
                 variant="ghost"
                 size="icon"
-                className="text-primary-foreground hover:bg-primary-foreground/10 hover:text-primary-foreground md:hidden"
                 onClick={() => setSidebarOpen(true)}
               >
                 <HamburgerMenuIcon className="h-5 w-5" />
                 <span className="sr-only">Open menu</span>
               </Button>
-              <NavLink to="/dashboard" className="flex shrink-0 items-center">
+              <NavLink
+                to="/dashboard"
+                className="flex min-w-0 shrink items-center"
+              >
                 <img
-                  src="/brand/logo-mark.png"
-                  alt="Deceivers Robotics · Team 4392"
-                  className="h-8 w-8 object-contain md:hidden"
-                />
-                <img
-                  src="/brand/logo-banner.png"
-                  alt="Deceivers Robotics · Team 4392"
-                  className="hidden h-9 w-auto object-contain md:block"
+                  src={logo}
+                  alt="Deceivers Robotics Team 4392"
+                  className="h-8 w-auto max-w-44 object-contain"
                 />
               </NavLink>
+              <div className="ml-auto flex shrink-0 items-center">
+                <UserButton />
+              </div>
             </div>
-            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-              <ProjectSwitcher />
+            <div className="flex items-center gap-3 border-t px-4 py-2 md:hidden">
+              <ProjectSwitcher className="min-w-0 flex-1" />
+              <ThemeToggle />
+            </div>
+            <div className="hidden min-h-14 items-center justify-end gap-3 px-6 py-2 md:flex">
+              <ProjectSwitcher className="w-44" />
               <ThemeToggle />
               <UserButton />
             </div>
-          </div>
-        </header>
-        <div className="flex min-h-0 grow">
-          <Sidebar
-            items={items}
-            open={sidebarOpen}
-            onClose={() => setSidebarOpen(false)}
-          />
+          </header>
           <main className="flex min-w-0 grow flex-col overflow-y-auto">
             <div className="container w-full py-6">
               <Outlet />
