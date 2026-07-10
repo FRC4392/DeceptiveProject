@@ -1,0 +1,4 @@
+{
+  "buildCommand": "npx convex deploy --cmd 'npm run build' --cmd-url-env-var-name VITE_CONVEX_URL",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
