@@ -1,3 +1,0 @@
-[mcp_servers.safari-mcp-stp]
-command = "/Applications/Safari Technology Preview.app/Contents/MacOS/safaridriver"
-args = ["--mcp"]
