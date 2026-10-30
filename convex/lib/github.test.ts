@@ -71,6 +71,8 @@ describe("normalizeIssueNode", () => {
   });
 
   it("returns null when the node has no number", () => {
-    expect(normalizeIssueNode("deceivers/robot", { title: "x" }, false)).toBeNull();
+    expect(
+      normalizeIssueNode("deceivers/robot", { title: "x" }, false),
+    ).toBeNull();
   });
 });

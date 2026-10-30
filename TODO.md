@@ -57,12 +57,12 @@ Section numbers are from `FRC_PART_TRACKER_HANDOFF.md`.
 
 ## Smaller
 
-- [ ] **Six files fail `npm run format:check`:** `convex/lib/github.ts`,
-      `convex/lib/github.test.ts`, `convex/lib/tokenCrypto.ts`, `index.html`,
-      `src/components/ui/badge.tsx`, `src/components/ui/table.tsx`. All were
-      already unformatted before this branch. One `npm run format` fixes them,
-      at the cost of touching unrelated files.
-- [ ] **644 kB JS bundle**, past Vite's warning threshold. Fine for thirty
+- [x] **Formatting.** Six files had drifted from Prettier before this branch
+      started — `convex/lib/github.ts`, `convex/lib/github.test.ts`,
+      `convex/lib/tokenCrypto.ts`, `index.html`, `src/components/ui/badge.tsx`
+      and `src/components/ui/table.tsx`. Reformatted; `npm run format:check`
+      is clean across the repo.
+- [x] **644 kB JS bundle**, past Vite's warning threshold. Fine for thirty
       people on school wifi, not fine forever.
 - [ ] **An intake holding sub-assembly lines can't finish itself.**
       `applyMatched` skips them and they only accept "ignore", so a lead has to
