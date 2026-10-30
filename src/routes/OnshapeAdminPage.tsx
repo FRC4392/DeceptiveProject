@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -138,6 +138,8 @@ export function OnshapeAdminPage() {
           </p>
         )}
       </Panel>
+
+      <ReleaseWebhookPanel siteUrl={siteUrl} />
 
       <Panel title="Right panel (selective sync)" bodyClass="space-y-2 text-sm">
         <p className="text-muted-foreground">
@@ -280,6 +282,136 @@ export function OnshapeAdminPage() {
         )}
       </Panel>
     </div>
+  );
+}
+
+/**
+ * The release webhook: Onshape calls the tracker the moment a release package
+ * is approved, instead of waiting for someone to remember to open the panel.
+ */
+function ReleaseWebhookPanel({ siteUrl }: { siteUrl?: string }) {
+  const status = useQuery(api.onshapeWebhook.status);
+  const register = useAction(api.onshapeWebhook.register);
+  const unregister = useAction(api.onshapeWebhook.unregister);
+  const [companyId, setCompanyId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That didn't work.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const when = (at: number | null) =>
+    at === null ? "never" : new Date(at).toLocaleString();
+
+  return (
+    <Panel title="Release webhook" bodyClass="space-y-3 text-sm">
+      <p className="text-muted-foreground">
+        With this on, Onshape tells the tracker the moment a release package is
+        approved and the release lands under{" "}
+        <span className="font-medium">New from Onshape</span> on its own. The
+        notification itself is free — Onshape doesn't count it — and reading the
+        release costs a single call, which is far less than syncing the same
+        assembly by hand part-by-part. A lead still decides what happens to each
+        line; nothing moves on the board by itself.
+      </p>
+
+      {status === undefined ? (
+        <p className="text-muted-foreground">Loading…</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              {status.registered ? (
+                <span className="font-medium text-success">
+                  ✓ Registered with Onshape
+                </span>
+              ) : (
+                <span className="text-muted-foreground">
+                  Not registered. Releases are only noticed when someone syncs.
+                </span>
+              )}
+              {status.registered && (
+                <p className="text-xs text-muted-foreground">
+                  Last ping {when(status.lastPingAt)} · last release{" "}
+                  {when(status.lastEventAt)}
+                </p>
+              )}
+            </div>
+            {status.registered ? (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => void run(() => unregister({}))}
+              >
+                Turn it off
+              </Button>
+            ) : (
+              <Button
+                disabled={busy || !status.secretConfigured}
+                onClick={() =>
+                  void run(() =>
+                    register(
+                      companyId.trim() ? { companyId: companyId.trim() } : {},
+                    ),
+                  )
+                }
+              >
+                Register webhook
+              </Button>
+            )}
+          </div>
+
+          {!status.registered && (
+            <div className="w-full space-y-1.5 sm:w-72">
+              <Label htmlFor="company-id">Onshape company ID (optional)</Label>
+              <Input
+                id="company-id"
+                value={companyId}
+                onChange={(e) => setCompanyId(e.target.value)}
+                placeholder="for an enterprise or classroom"
+              />
+            </div>
+          )}
+
+          {!status.secretConfigured && (
+            <p className="text-xs text-warning">
+              Set the shared secret first:{" "}
+              <span className="font-mono">
+                npx convex env set ONSHAPE_WEBHOOK_SECRET &lt;a long random
+                string&gt;
+              </span>
+            </p>
+          )}
+
+          {status.registered && status.webhookId && (
+            <p className="text-xs text-muted-foreground">
+              Webhook <span className="font-mono">{status.webhookId}</span> on{" "}
+              {status.events.join(", ")}.
+            </p>
+          )}
+
+          <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
+            {siteUrl ?? "https://<your-convex-deployment>.convex.site"}
+            /onshape/webhook?secret=&lt;ONSHAPE_WEBHOOK_SECRET&gt;
+          </code>
+          <p className="text-xs text-muted-foreground">
+            Registering needs a company admin account, and the deployment needs
+            to be reachable from the internet — Onshape calls the URL above.
+          </p>
+
+          {error && <p className="text-sm text-danger">{error}</p>}
+        </>
+      )}
+    </Panel>
   );
 }
 

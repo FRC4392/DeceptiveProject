@@ -177,10 +177,14 @@ function IntakeCard({
   const [error, setError] = useState<string | null>(null);
 
   const undecided = lines.filter((l) => !l.decision);
-  const matched = undecided.filter((l) => l.kind === "matched");
-  const changed = undecided.filter((l) => l.kind === "changed");
-  const unknown = undecided.filter((l) => l.kind === "unknown");
-  const removed = undecided.filter((l) => l.kind === "removed");
+  // Assemblies come out first: the four buckets below are all about parts,
+  // and none of their actions would mean anything applied to an assembly.
+  const assemblies = undecided.filter((l) => l.target === "subAssembly");
+  const parts = undecided.filter((l) => l.target !== "subAssembly");
+  const matched = parts.filter((l) => l.kind === "matched");
+  const changed = parts.filter((l) => l.kind === "changed");
+  const unknown = parts.filter((l) => l.kind === "unknown");
+  const removed = parts.filter((l) => l.kind === "removed");
 
   return (
     <section className="space-y-4 rounded-lg border bg-card p-4 shadow-sm">
@@ -283,7 +287,53 @@ function IntakeCard({
           </div>
         </div>
       )}
+
+      {assemblies.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold">
+            Assemblies · {assemblies.length}
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            What the CAD says about the assembly itself. Sub-assemblies are
+            built on the subsystem page, not here.
+          </p>
+          <div className="mt-2 space-y-2">
+            {assemblies.map((line) => (
+              <AssemblyLine key={line._id} line={line} />
+            ))}
+          </div>
+        </div>
+      )}
     </section>
+  );
+}
+
+function AssemblyLine({ line }: { line: Line }) {
+  const applyLine = useMutation(api.intake.applyLine);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm">
+      <span>
+        {line.partNumber && (
+          <span className="mr-1.5 font-mono text-xs">{line.partNumber}</span>
+        )}
+        <span className="font-medium">{line.name}</span>
+        {line.revision && (
+          <span className="ml-1.5 font-mono text-xs text-muted-foreground">
+            · {line.revision}
+          </span>
+        )}
+        <span className="block text-xs text-muted-foreground">{line.note}</span>
+      </span>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() =>
+          void applyLine({ lineId: line._id, decision: "ignored" })
+        }
+      >
+        Got it
+      </Button>
+    </div>
   );
 }
 

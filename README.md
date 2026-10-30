@@ -45,6 +45,7 @@ npx convex env set CLERK_WEBHOOK_SECRET <secret from the Clerk webhook>
 npx convex env set ONSHAPE_OAUTH_CLIENT_ID <your Onshape OAuth app client id>
 npx convex env set ONSHAPE_OAUTH_CLIENT_SECRET <your Onshape OAuth app client secret>
 npx convex env set ONSHAPE_SYNC_SECRET <random string>
+npx convex env set ONSHAPE_WEBHOOK_SECRET <random string, for the release webhook>
 npx convex env set ONSHAPE_TOKEN_ENC_KEY <output of `openssl rand -base64 32`>
 npx convex env set ONSHAPE_BASE_URL <optional alternate Onshape base URL>
 npx convex env set GITHUB_WEBHOOK_SECRET <random string>
@@ -201,6 +202,10 @@ for everyone**, so the tracker is built to need almost none of them:
   free deep links and students export from Onshape themselves.
 - A sync reads an element's parts and parks them under **New from Onshape**
   for a design lead to review. Nothing lands on the board unasked.
+- The release webhook is the cheap way in: the notification is free (Onshape
+  excludes them from the allowance) and the release itself is **one** call that
+  returns every item with its number and revision. Syncing the same assembly
+  from the panel costs one call per part instead.
 - Every call goes through one wrapper (`convex/lib/onshapeAuth.ts`) that logs
   it to `apiCalls`, and only 2xx/3xx responses count — which is what the budget
   meter shows.
@@ -236,11 +241,12 @@ convex/
   settings.ts        app settings and the API budget meter
   onshape.ts         document to subsystem mapping, sync intake, call logging
   onshapeOAuth.ts    Onshape OAuth flow + right-panel httpActions
+  onshapeWebhook.ts  release webhook: registration, receiver, release intake
   auth.ts            Clerk current-user query, local user sync, webhook,
                      and mentor-only Clerk roster backfill
   auth.config.ts     Convex auth provider config for Clerk JWT validation
-  http.ts            registers Clerk webhook, Onshape OAuth + panel,
-                     and GitHub webhook routes
+  http.ts            registers Clerk webhook, Onshape OAuth + panel +
+                     release webhook, and the GitHub webhook route
   users.ts           user roster queries
   todos.ts           the season to-do list and its tags
   dashboard.ts       aggregate dashboard/countdown stats
@@ -340,14 +346,46 @@ Nothing lands on the board unasked — an assembly the tracker doesn't know
 becomes an _unknown_ line in **New from Onshape** for a lead to confirm, and a
 sync never rearranges a tree someone built by hand.
 
-Two things genuinely aren't reachable yet:
+One thing genuinely isn't reachable on this path:
 
-- **Reacting to a release as it happens.** The sync runs when someone presses
-  the button in the Onshape panel. Noticing a release by itself needs the
-  `onshape.workflow.transition` webhook from §8 of the handoff, which is Phase 2.
-- **Revisions.** Nothing on this path reads a release package, and a workspace
+- **Revisions.** The panel sync doesn't read a release package, and a workspace
   sync carries no version at all, so a sub-assembly's revision only fills in
-  when the panel was opened on a version.
+  when the panel was opened on a version — or when the release webhook below
+  brings the release in.
+
+### The release webhook
+
+Turn it on in **Settings → Onshape → Release webhook** (mentors only, and
+registering needs a company admin Onshape account). From then on Onshape calls
+`/onshape/webhook` the moment a release package transitions, and an approved
+release appears under **New from Onshape** on its own.
+
+What actually crosses the wire is worth knowing, because it shapes the design:
+
+1. Onshape POSTs a notification carrying an event name, `objectType: "RELEASE"`
+   and the release package's `objectId`. **That's all it carries** — no part
+   numbers, no revisions, not even which state the package moved to.
+2. The receiver checks the secret in the callback URL (Onshape doesn't sign
+   notifications the way GitHub does), answers 200 immediately, and schedules
+   the read — Onshape retries anything it doesn't see acknowledged quickly.
+3. `ingestRelease` reads `GET /api/releasepackages/{id}?detailed=true`: one
+   call, every item with its part number, revision and source document.
+4. Anything that isn't `RELEASED` is logged and dropped. A submitted or
+   rejected package isn't a fact about the robot yet.
+5. The rest is the existing path — the same `releaseIntakeLines`, the same
+   screen, the same lead deciding. A release changes nothing on its own.
+
+Because the notification is only an id, a forged call costs at most one wasted
+read: everything the board acts on is read back from Onshape over the
+authenticated connection. Arriving twice is normal — a retry, or a package that
+transitions more than once — and a package already taken in is dropped before
+any call is spent.
+
+**Unverified:** Onshape's published webhook docs don't describe
+`onshape.workflow.transition` at all, and don't say what `detailed=true` adds.
+The field names come from Onshape's own sample client. Every field is read
+defensively and the raw package is kept on the intake (`releaseIntakes.payload`)
+so the first real release can be checked against what this code assumes.
 
 ## The to-do list
 

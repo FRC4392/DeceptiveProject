@@ -44,6 +44,11 @@ vi.mock("../../convex/_generated/api", () => ({
       removeDocument: "onshape.removeDocument",
     },
     onshapeOAuth: { connectionStatus: "onshapeOAuth.connectionStatus" },
+    onshapeWebhook: {
+      status: "onshapeWebhook.status",
+      register: "onshapeWebhook.register",
+      unregister: "onshapeWebhook.unregister",
+    },
     intake: { pendingCount: "intake.pendingCount", list: "intake.list" },
     parts: {
       list: "parts.list",
@@ -162,6 +167,17 @@ vi.mock("convex/react", () => ({
         return { open: 0, closed: 0, prs: 0, total: 0 };
       case "onshapeOAuth.connectionStatus":
         return { connected: false };
+      case "onshapeWebhook.status":
+        return {
+          registered: false,
+          webhookId: null,
+          companyId: null,
+          events: [],
+          registeredAt: null,
+          lastPingAt: null,
+          lastEventAt: null,
+          secretConfigured: false,
+        };
       case "settings.budget":
         return {
           used: 0,

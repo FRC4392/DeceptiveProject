@@ -372,6 +372,21 @@ export default defineSchema({
     state: v.string(),
   }).index("by_state", ["state"]),
 
+  // The release webhook Onshape calls when a release package transitions.
+  // One registration for the whole team; this row is also what the admin page
+  // shows as its status, which is why the lifecycle timestamps live on it.
+  onshapeWebhooks: defineTable({
+    webhookId: v.string(),
+    companyId: v.optional(v.string()),
+    events: v.array(v.string()),
+    registeredAt: v.number(),
+    registeredBy: v.optional(v.string()),
+    /** Onshape's own register/ping traffic — proof the callback is reachable. */
+    lastPingAt: v.optional(v.number()),
+    /** The last real transition we were told about. */
+    lastEventAt: v.optional(v.number()),
+  }).index("by_webhookId", ["webhookId"]),
+
   // Short-lived, single-use tokens for the Onshape right-panel app.
   onshapePanelTokens: defineTable({
     token: v.string(),

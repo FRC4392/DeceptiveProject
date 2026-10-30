@@ -8,6 +8,7 @@ import {
   type AssemblyChild,
 } from "./onshapeAssembly";
 import { onshapeFetch } from "./onshapeAuth";
+import type { ReleasePackage } from "./onshapeRelease";
 
 const API_BASE = process.env.ONSHAPE_BASE_URL ?? "https://cad.onshape.com";
 
@@ -275,4 +276,33 @@ export async function fetchElementPartNumberProperty(
   return typeof prop?.value === "string" && prop.value.length > 0
     ? prop.value
     : null;
+}
+
+/**
+ * The whole release package in one call: every released item with its part
+ * number, revision and the document/element/version it came from.
+ *
+ * This is the one read a release webhook needs, and it replaces the per-part
+ * metadata walk the panel sync does — one call instead of one per part.
+ */
+export async function fetchReleasePackage(
+  ctx: ActionCtx,
+  releasePackageId: string,
+  detailed = true,
+): Promise<ReleasePackage> {
+  const res = await onshapeFetch(
+    ctx,
+    `${API_BASE}/api/releasepackages/${encodeURIComponent(releasePackageId)}?detailed=${detailed}`,
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    const hint =
+      res.status === 401 || res.status === 403
+        ? " — reconnect Onshape (Admin → Onshape)."
+        : "";
+    throw new Error(
+      `Onshape release package fetch failed: ${res.status}${body ? ` ${body.slice(0, 200)}` : ""}${hint}`,
+    );
+  }
+  return (await res.json()) as ReleasePackage;
 }

@@ -64,6 +64,10 @@ const vLine = v.object({
   kind: kindValidator,
   decision: v.optional(decisionValidator),
   partId: v.optional(v.id("parts")),
+  // Absent means the line is about a part, which is the common case. A sync
+  // or a release can also tell us about the assembly itself.
+  target: v.optional(v.union(v.literal("part"), v.literal("subAssembly"))),
+  subAssemblyId: v.optional(v.id("subAssemblies")),
   subsystemId: v.optional(v.id("subsystems")),
   note: v.optional(v.string()),
 });
@@ -275,6 +279,15 @@ export const applyLine = mutation({
     const lead = await requireLead(ctx);
     const line = await ctx.db.get(args.lineId);
     if (!line) throw new Error("That line is gone.");
+    // Every decision below is a decision about a part — a stage to move, a
+    // quantity already made, a process that decides where it starts. None of
+    // those mean anything for an assembly, so rather than do something
+    // plausible to the wrong record, say so.
+    if (line.target === "subAssembly" && args.decision !== "ignored") {
+      throw new Error(
+        "That line is a sub-assembly, not a part. Set it up on the subsystem page and ignore it here.",
+      );
+    }
     const season = await requireActiveSeason(ctx);
     const now = Date.now();
 
