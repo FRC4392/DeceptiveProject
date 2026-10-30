@@ -54,12 +54,7 @@ export function AppShell() {
     },
     {
       label: "Settings",
-      items: isMentor
-        ? [
-            { to: "/admin", label: "Admin" },
-            { to: "/admin/tracker", label: "Tracker Settings" },
-          ]
-        : [],
+      items: isMentor ? [{ to: "/admin", label: "Settings" }] : [],
     },
     // A heading with nothing under it is just clutter.
   ].filter((section) => section.items.length > 0);

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { Link } from "react-router-dom";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -18,16 +19,17 @@ import { useIsMentor } from "@/lib/roles";
 import { useMachines, useProcessTypes, useSubsystems } from "@/lib/tracker";
 import { useRoster } from "@/lib/users";
 import type { Role } from "@/lib/roles";
+import { formatDate, fromDateInputValue } from "@/lib/dates";
 
-/** Everything a mentor sets up once: the season, the shop, and who's who. */
-export function TrackerSettingsPage() {
+/** Everything a mentor sets up: the season, the shop, the people, the links. */
+export function SettingsPage() {
   const isMentor = useIsMentor();
   const season = useQuery(api.seasons.active, {});
 
   if (!isMentor) {
     return (
       <p className="text-sm text-muted-foreground">
-        Tracker settings are mentors only.
+        Settings are mentors only.
       </p>
     );
   }
@@ -35,10 +37,10 @@ export function TrackerSettingsPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="brand-title text-3xl">Tracker settings</h1>
+        <h1 className="brand-title text-3xl">Settings</h1>
         <p className="text-sm text-muted-foreground">
-          The season, the subsystems that make up part numbers, the shop's
-          machines, and who's who.
+          The season, the subsystems that make up part numbers, the shop, the
+          people, and what the app is connected to.
         </p>
       </header>
 
@@ -50,29 +52,34 @@ export function TrackerSettingsPage() {
         <Tabs defaultValue="subsystems">
           <TabsList className="flex-wrap">
             <TabsTrigger value="subsystems">Subsystems</TabsTrigger>
-            <TabsTrigger value="processes">Processes</TabsTrigger>
-            <TabsTrigger value="machines">Machines</TabsTrigger>
-            <TabsTrigger value="tags">To-do tags</TabsTrigger>
+            <TabsTrigger value="shop">Shop</TabsTrigger>
+            <TabsTrigger value="todos">To-dos</TabsTrigger>
             <TabsTrigger value="people">People</TabsTrigger>
             <TabsTrigger value="season">Season</TabsTrigger>
+            <TabsTrigger value="events">Events</TabsTrigger>
+            <TabsTrigger value="connections">Connections</TabsTrigger>
           </TabsList>
-          <TabsContent value="subsystems" className="pt-4">
+          <TabsContent value="subsystems" className="space-y-4 pt-4">
             <SubsystemSettings />
           </TabsContent>
-          <TabsContent value="processes" className="pt-4">
+          <TabsContent value="shop" className="space-y-4 pt-4">
             <ProcessSettings />
-          </TabsContent>
-          <TabsContent value="machines" className="pt-4">
             <MachineSettings />
           </TabsContent>
-          <TabsContent value="tags" className="pt-4">
+          <TabsContent value="todos" className="space-y-4 pt-4">
             <TagSettings />
           </TabsContent>
-          <TabsContent value="people" className="pt-4">
+          <TabsContent value="people" className="space-y-4 pt-4">
             <PeopleSettings />
           </TabsContent>
-          <TabsContent value="season" className="pt-4">
+          <TabsContent value="season" className="space-y-4 pt-4">
             <SeasonSettings season={season} />
+          </TabsContent>
+          <TabsContent value="events" className="space-y-4 pt-4">
+            <CompetitionSettings />
+          </TabsContent>
+          <TabsContent value="connections" className="space-y-4 pt-4">
+            <ConnectionSettings />
           </TabsContent>
         </Tabs>
       )}
@@ -80,21 +87,33 @@ export function TrackerSettingsPage() {
   );
 }
 
+/**
+ * One settings block. Same bordered card the parts and to-do screens use for
+ * their sections, so settings doesn't look like a different app.
+ */
 function Panel({
   title,
   description,
+  action,
   children,
 }: {
   title: string;
   description?: string;
+  /** A control that belongs with the heading rather than the body. */
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="rounded-lg border bg-card p-4 shadow-sm">
-      <h2 className="font-semibold">{title}</h2>
-      {description && (
-        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
-      )}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="font-semibold">{title}</h2>
+          {description && (
+            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+          )}
+        </div>
+        {action}
+      </div>
       <div className="mt-4">{children}</div>
     </section>
   );
@@ -593,18 +612,56 @@ const ROLES: { value: Role; label: string }[] = [
 function PeopleSettings() {
   const roster = useRoster();
   const setRole = useMutation(api.shop.setUserRole);
+  const syncUsers = useAction(api.auth.syncUsersFromClerk);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function sync() {
+    setSyncing(true);
+    setError(null);
+    try {
+      await syncUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That didn't work.");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   return (
     <Panel
       title="People"
-      description="Roles decide who can check a drawing, move a part back, or mark a sub-assembly installed."
+      description="Everyone who has signed in. Roles decide who can check a drawing, move a part back, or mark a sub-assembly installed."
+      action={
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={syncing}
+          onClick={() => void sync()}
+        >
+          {syncing ? "Syncing…" : "Sync from Clerk"}
+        </Button>
+      }
     >
-      <div className="space-y-4">
-        {(roster ?? []).map((person) => (
-          <div key={person.authId} className="rounded-lg border p-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="grow font-medium">{person.name}</span>
+      <div className="space-y-3">
+        {roster === undefined ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : roster.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Nobody has signed in yet. Sync from Clerk to pull the roster in.
+          </p>
+        ) : (
+          roster.map((person) => (
+            <div
+              key={person.authId}
+              className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+            >
+              <span className="min-w-0 grow">
+                <span className="block font-medium">{person.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {person.email || "no email yet"}
+                </span>
+              </span>
               <Select
                 value={person.role}
                 onValueChange={(value) => {
@@ -630,10 +687,133 @@ function PeopleSettings() {
                 </SelectContent>
               </Select>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
       {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+    </Panel>
+  );
+}
+
+function CompetitionSettings() {
+  const competitions = useQuery(api.competitions.list);
+  const create = useMutation(api.competitions.create);
+  const remove = useMutation(api.competitions.remove);
+  const [name, setName] = useState("");
+  const [date, setDate] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    const ts = fromDateInputValue(date);
+    if (!name.trim() || ts === undefined) return;
+    setSaving(true);
+    try {
+      await create({ name: name.trim(), date: ts });
+      setName("");
+      setDate("");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Panel
+      title="Events"
+      description="The next one ahead shows in the sidebar and on the dashboard, counting down."
+    >
+      <div className="space-y-3">
+        {competitions === undefined ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : competitions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Nothing on the calendar yet.
+          </p>
+        ) : (
+          competitions.map((competition) => (
+            <div
+              key={competition._id}
+              className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+            >
+              <span className="grow font-medium">{competition.name}</span>
+              <span className="text-sm text-muted-foreground">
+                {formatDate(competition.date)}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void remove({ id: competition._id })}
+              >
+                Remove
+              </Button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <form
+        onSubmit={(e) => void add(e)}
+        className="mt-4 flex flex-wrap items-end gap-3 border-t pt-4"
+      >
+        <div className="grid grow gap-2">
+          <Label htmlFor="comp-name">Name</Label>
+          <Input
+            id="comp-name"
+            value={name}
+            placeholder="District Championship"
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="comp-date">Date</Label>
+          <Input
+            id="comp-date"
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </div>
+        <Button type="submit" disabled={saving}>
+          Add event
+        </Button>
+      </form>
+    </Panel>
+  );
+}
+
+function ConnectionSettings() {
+  return (
+    <Panel
+      title="Connections"
+      description="The two outside services the app talks to. Everything else here is the app's own."
+    >
+      <div className="space-y-2">
+        <Link
+          to="/admin/onshape"
+          className="flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/50 hover:bg-accent/40"
+        >
+          <span>
+            <span className="block font-medium">Onshape</span>
+            <span className="block text-sm text-muted-foreground">
+              The CAD connection, which documents hold which subsystem, and the
+              API budget.
+            </span>
+          </span>
+          <span className="shrink-0 text-sm text-primary">Set up →</span>
+        </Link>
+        <Link
+          to="/admin/github"
+          className="flex items-center justify-between rounded-lg border p-3 transition-colors hover:border-primary/50 hover:bg-accent/40"
+        >
+          <span>
+            <span className="block font-medium">GitHub</span>
+            <span className="block text-sm text-muted-foreground">
+              Issue and pull request sync, and importing a repository.
+            </span>
+          </span>
+          <span className="shrink-0 text-sm text-primary">Set up →</span>
+        </Link>
+      </div>
     </Panel>
   );
 }

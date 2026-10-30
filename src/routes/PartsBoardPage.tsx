@@ -248,7 +248,7 @@ export function SetupPrompt() {
         processes before parts can get numbers.
       </p>
       <Button asChild>
-        <Link to="/admin/tracker">Open tracker settings</Link>
+        <Link to="/admin">Open settings</Link>
       </Button>
     </div>
   );

@@ -13,10 +13,9 @@ import { DashboardPage } from "@/routes/DashboardPage";
 import { TodoBoardPage } from "@/routes/TodoBoardPage";
 import { TodoPage } from "@/routes/TodoPage";
 import { MyTodosPage } from "@/routes/MyTodosPage";
-import { AdminPage } from "@/routes/AdminPage";
+import { SettingsPage } from "@/routes/SettingsPage";
 import { OnshapeAdminPage } from "@/routes/OnshapeAdminPage";
 import { GitHubAdminPage } from "@/routes/GitHubAdminPage";
-import { TrackerSettingsPage } from "@/routes/TrackerSettingsPage";
 import { PartsBoardPage } from "@/routes/PartsBoardPage";
 import { PartPage } from "@/routes/PartPage";
 import { ShopPage } from "@/routes/ShopPage";
@@ -81,10 +80,14 @@ export default function App() {
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/issues/:issueId" element={<IssueDetailPage />} />
-          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/admin" element={<SettingsPage />} />
           <Route path="/admin/onshape" element={<OnshapeAdminPage />} />
           <Route path="/admin/github" element={<GitHubAdminPage />} />
-          <Route path="/admin/tracker" element={<TrackerSettingsPage />} />
+          {/* The settings split used to live here; keep old links working. */}
+          <Route
+            path="/admin/tracker"
+            element={<Navigate to="/admin" replace />}
+          />
           <Route path="*" element={<Navigate to="/parts" replace />} />
         </Route>
       </Route>

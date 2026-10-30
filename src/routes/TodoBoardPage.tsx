@@ -136,8 +136,8 @@ export function TodoBoardPage() {
       {tags !== undefined && tags.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No tags set up yet — a mentor adds them in{" "}
-          <Link to="/admin/tracker" className="text-primary underline">
-            tracker settings
+          <Link to="/admin" className="text-primary underline">
+            settings
           </Link>
           .
         </p>

@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useAction, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useIsMentor } from "@/lib/roles";
+import { cn } from "@/lib/utils";
 import { CheckCircledIcon, CrossCircledIcon } from "@radix-ui/react-icons";
 
 export function GitHubAdminPage() {
@@ -55,6 +56,14 @@ export function GitHubAdminPage() {
 
   return (
     <div className="space-y-6">
+      <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+        <Link to="/admin" className="hover:text-foreground hover:underline">
+          Settings
+        </Link>
+        <span>/</span>
+        <span className="text-foreground">GitHub</span>
+      </nav>
+
       <div>
         <h1 className="brand-title text-3xl">GitHub</h1>
         <p className="text-sm text-muted-foreground">
@@ -63,98 +72,83 @@ export function GitHubAdminPage() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Configuration</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <ConfigRow
-            ok={config?.webhookConfigured}
-            label="Webhook secret"
-            hint="GITHUB_WEBHOOK_SECRET"
-          />
-          <ConfigRow
-            ok={config?.tokenConfigured}
-            label="API token"
-            hint="GITHUB_TOKEN (import + write-back)"
-          />
-          <p className="text-xs text-muted-foreground">
-            Set both once, on the Convex deployment:
-          </p>
-          <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
-            npx convex env set GITHUB_WEBHOOK_SECRET &lt;random-string&gt;
-            <br />
-            npx convex env set GITHUB_TOKEN &lt;github-PAT&gt;
-          </code>
-        </CardContent>
-      </Card>
+      <Panel title="Configuration" bodyClass="space-y-3 text-sm">
+        <ConfigRow
+          ok={config?.webhookConfigured}
+          label="Webhook secret"
+          hint="GITHUB_WEBHOOK_SECRET"
+        />
+        <ConfigRow
+          ok={config?.tokenConfigured}
+          label="API token"
+          hint="GITHUB_TOKEN (import + write-back)"
+        />
+        <p className="text-xs text-muted-foreground">
+          Set both once, on the Convex deployment:
+        </p>
+        <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
+          npx convex env set GITHUB_WEBHOOK_SECRET &lt;random-string&gt;
+          <br />
+          npx convex env set GITHUB_TOKEN &lt;github-PAT&gt;
+        </code>
+      </Panel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Webhook</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          <p className="text-muted-foreground">
-            In your GitHub repo → Settings → Webhooks → Add webhook, use this
-            payload URL (content type{" "}
-            <span className="font-mono">application/json</span>), the same
-            secret as <span className="font-mono">GITHUB_WEBHOOK_SECRET</span>,
-            and subscribe to <span className="font-medium">Issues</span>,{" "}
-            <span className="font-medium">Issue comments</span>, and{" "}
-            <span className="font-medium">Pull requests</span>.
+      <Panel title="Webhook" bodyClass="space-y-2 text-sm">
+        <p className="text-muted-foreground">
+          In your GitHub repo → Settings → Webhooks → Add webhook, use this
+          payload URL (content type{" "}
+          <span className="font-mono">application/json</span>), the same secret
+          as <span className="font-mono">GITHUB_WEBHOOK_SECRET</span>, and
+          subscribe to <span className="font-medium">Issues</span>,{" "}
+          <span className="font-medium">Issue comments</span>, and{" "}
+          <span className="font-medium">Pull requests</span>.
+        </p>
+        <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
+          {webhookUrl}
+        </code>
+        {!siteUrl && (
+          <p className="text-xs text-warning">
+            Set VITE_CONVEX_SITE_URL in .env.local to show the exact webhook
+            URL.
           </p>
-          <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
-            {webhookUrl}
-          </code>
-          {!siteUrl && (
-            <p className="text-xs text-warning">
-              Set VITE_CONVEX_SITE_URL in .env.local to show the exact webhook
-              URL.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+        )}
+      </Panel>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Import a repository</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Pull a repo's existing issues and PRs in now (needs{" "}
-            <span className="font-mono">GITHUB_TOKEN</span>). Assign them to a
-            project as they come in — that also sets the repo→project mapping so
-            future synced issues inherit it. New activity flows in automatically
-            once the webhook is set.
-          </p>
-          <form
-            onSubmit={(e) => void runImport(e)}
-            className="flex flex-wrap items-end gap-3"
+      <Panel title="Import a repository" bodyClass="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Pull a repo's existing issues and PRs in now (needs{" "}
+          <span className="font-mono">GITHUB_TOKEN</span>). Assign them to a
+          project as they come in — that also sets the repo→project mapping so
+          future synced issues inherit it. New activity flows in automatically
+          once the webhook is set.
+        </p>
+        <form
+          onSubmit={(e) => void runImport(e)}
+          className="flex flex-wrap items-end gap-3"
+        >
+          <div className="grow space-y-1.5">
+            <Label htmlFor="repo">Repository</Label>
+            <Input
+              id="repo"
+              value={repo}
+              onChange={(e) => setRepo(e.target.value)}
+              placeholder="owner/name (e.g. deceivers/robot-2026)"
+            />
+          </div>
+          <Button
+            type="submit"
+            disabled={importing || !config?.tokenConfigured}
           >
-            <div className="grow space-y-1.5">
-              <Label htmlFor="repo">Repository</Label>
-              <Input
-                id="repo"
-                value={repo}
-                onChange={(e) => setRepo(e.target.value)}
-                placeholder="owner/name (e.g. deceivers/robot-2026)"
-              />
-            </div>
-            <Button
-              type="submit"
-              disabled={importing || !config?.tokenConfigured}
-            >
-              {importing ? "Importing…" : "Import"}
-            </Button>
-          </form>
-          {!config?.tokenConfigured && (
-            <p className="text-xs text-warning">
-              Set GITHUB_TOKEN first to enable import.
-            </p>
-          )}
-          {note && <p className="text-sm text-muted-foreground">{note}</p>}
-        </CardContent>
-      </Card>
+            {importing ? "Importing…" : "Import"}
+          </Button>
+        </form>
+        {!config?.tokenConfigured && (
+          <p className="text-xs text-warning">
+            Set GITHUB_TOKEN first to enable import.
+          </p>
+        )}
+        {note && <p className="text-sm text-muted-foreground">{note}</p>}
+      </Panel>
     </div>
   );
 }
@@ -188,5 +182,29 @@ function ConfigRow({
         </span>
       )}
     </div>
+  );
+}
+
+/** Same bordered block the settings page uses, so these read as part of it. */
+function Panel({
+  title,
+  description,
+  bodyClass,
+  children,
+}: {
+  title: string;
+  description?: string;
+  /** Layout for the body, the way the old card content carried its own. */
+  bodyClass?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border bg-card p-4 shadow-sm">
+      <h2 className="font-semibold">{title}</h2>
+      {description && (
+        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+      )}
+      <div className={cn("mt-4", bodyClass)}>{children}</div>
+    </section>
   );
 }

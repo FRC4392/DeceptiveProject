@@ -65,7 +65,7 @@ Use the same Clerk instance that should own this app's users.
 3. Copy the Clerk publishable key into `.env.local` as
    `VITE_CLERK_PUBLISHABLE_KEY`.
 4. Set `CLERK_SECRET_KEY` in Convex env so mentor users can sync the current
-   Clerk roster from the Admin page.
+   Clerk roster from Settings → People.
 5. Configure the Clerk session token used by the Convex integration. In the
    Clerk dashboard, open **Configure → Sessions → Customize session token**
    (or the `convex` JWT template, depending on your Clerk version) and add:
@@ -109,11 +109,11 @@ on top:
 
 - `user.public_metadata.role === "mentor"` grants mentor access.
 - Any missing or non-mentor value maps to student access.
-- Sign-in storage, Clerk webhooks, and the Admin page's "Sync Clerk" action
+- Sign-in storage, Clerk webhooks, and Settings → People's "Sync from Clerk"
   keep Convex's local `users` table current, overwriting `users.role` each
   time.
 - A mentor can set someone's tracker role (`student` / `lead` / `mentor` /
-  `admin`) in Tracker settings → People. That's stored as `users.appRole` and
+  `admin`) in Settings → People. That's stored as `users.appRole` and
   wins over the Clerk value, so promoting a design lead doesn't mean editing
   Clerk metadata — and a Clerk re-sync won't undo it.
 
@@ -264,7 +264,7 @@ src/
 
 ## First run
 
-A mentor opens **Tracker settings** and presses _Set it up_. That lays down the
+A mentor opens **Settings** and presses _Set it up_. That lays down the
 season, the usual five subsystems (DRV, INT, ELV, SHT, CLB), the machines most
 teams have, and the processes that decide which stages a part skips —
 all editable afterwards. Then, on the **People** tab, give the design leads the
@@ -355,13 +355,24 @@ sub-lists — built to read like the parts board:
 - **Anyone can pick one up**, and the person who did (or a lead) can put it
   back — the same claiming the parts side uses.
 - **Tags** sort the list. The set of tags is team-wide and mentor-managed in
-  Tracker settings → To-do tags; removing one takes it off every to-do that
+  Settings → To-dos; removing one takes it off every to-do that
   had it.
 - **Priority** is low, medium or high; high shows as a chip on the card.
 - **Notes** work like a part's notes — a thread anyone can add to.
 
 Only a lead or mentor can delete a to-do; anyone can add, edit, claim and
 finish one.
+
+## Settings
+
+One page, mentors only, at **Settings** in the sidebar. Tabs for the things
+the app owns — Subsystems, Shop (processes and machines), To-dos (the tag
+list), People, Season and Events — plus **Connections**, which is only the two
+outside services: Onshape and GitHub. Those two keep their own pages, reached
+from there.
+
+People is the roster: everyone who has signed in, their email, and the role
+picker. "Sync from Clerk" pulls the roster across.
 
 ## Sample data
 

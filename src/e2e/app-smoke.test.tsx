@@ -274,8 +274,7 @@ describe("app smoke routes", () => {
       "To-do List",
       "My To-dos",
       "Issues",
-      "Admin",
-      "Tracker Settings",
+      "Settings",
     ]);
   });
 
