@@ -136,9 +136,24 @@ vi.mock("convex/react", () => ({
         return 0;
       case "dashboard.summary":
         return {
-          doneTodos: 2,
-          totalTodos: 4,
-          claimedByMe: 1,
+          outstanding: {
+            parts: 6,
+            subAssemblies: 2,
+            todos: 2,
+            issues: 1,
+            total: 11,
+          },
+          mine: {
+            parts: 1,
+            subAssemblies: 0,
+            todos: 1,
+            issues: 0,
+            total: 2,
+          },
+          parts: { ready: 4, total: 10 },
+          subAssemblies: { built: 1, total: 3, readyToBuild: 1 },
+          todos: { done: 2, total: 4, unclaimed: 1 },
+          issues: { open: 1, closed: 3, prs: 2, total: 4 },
           nextCompetition: null,
         };
       case "github.config":
@@ -188,7 +203,17 @@ describe("app smoke routes", () => {
     expect(
       screen.getByRole("heading", { name: "Dashboard" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("2 / 4")).toBeInTheDocument();
+    // The three headline numbers: what's left, what's on you, the countdown.
+    expect(screen.getByText("11")).toBeInTheDocument();
+    expect(screen.getByText("Still to do")).toBeInTheDocument();
+    expect(screen.getByText("On you")).toBeInTheDocument();
+    expect(screen.getByText("Next event")).toBeInTheDocument();
+    // …then a card each for the four things it tracks.
+    for (const card of ["Sub-assemblies", "Parts", "To-dos", "Issues"]) {
+      expect(
+        screen.getAllByRole("heading", { name: card }).length,
+      ).toBeGreaterThan(0);
+    }
     expect(
       screen.getAllByRole("link", { name: /Deceivers Robotics/ }).length,
     ).toBeGreaterThan(0);
