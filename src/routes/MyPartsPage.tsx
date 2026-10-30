@@ -5,11 +5,13 @@ import { Button } from "@/components/ui/button";
 import { PartCard } from "@/components/tracker/PartCard";
 import { STAGE_LIST, asStage, stageLabel } from "@/lib/stages";
 import { useProcessMap } from "@/lib/tracker";
+import { useRosterMap } from "@/lib/users";
 
 /** Everything this person has claimed, in the order they'd work through it. */
 export function MyPartsPage() {
   const mine = useQuery(api.parts.listMine, {});
   const processes = useProcessMap();
+  const roster = useRosterMap();
 
   return (
     <div className="space-y-6">
@@ -52,6 +54,11 @@ export function MyPartsPage() {
                     key={part._id}
                     part={part}
                     processName={processes.get(part.processTypeId)?.name}
+                    claimantName={
+                      part.claimedByUserId
+                        ? roster[part.claimedByUserId]?.name
+                        : undefined
+                    }
                   />
                 ))}
               </div>
