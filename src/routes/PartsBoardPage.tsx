@@ -6,7 +6,13 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { PartCard } from "@/components/tracker/PartCard";
 import { GetNumberDialog } from "@/components/tracker/GetNumberDialog";
-import { STAGE_LIST, asStage, stageLabel, type Stage } from "@/lib/stages";
+import {
+  STAGE_LIST,
+  asStage,
+  isClaimableStage,
+  stageLabel,
+  type Stage,
+} from "@/lib/stages";
 import { useProcessMap, useSubsystems } from "@/lib/tracker";
 import { useIsLead } from "@/lib/roles";
 import { useRosterMap } from "@/lib/users";
@@ -36,7 +42,7 @@ export function PartsBoardPage() {
       if (subsystemId !== "all" && part.subsystemId !== subsystemId)
         return false;
       if (filter === "grabs") {
-        return !part.claimedByUserId && (part.stage === 3 || part.stage === 4);
+        return !part.claimedByUserId && isClaimableStage(asStage(part.stage));
       }
       if (filter === "mine") return part.claimedByUserId === me?.id;
       if (filter === "flagged") return part.flags.length > 0;

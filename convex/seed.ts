@@ -12,7 +12,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireActiveSeason } from "./lib/season";
 import { ensureDefaultSubAssembly } from "./subAssemblies";
 import { takePartNumber } from "./lib/numbering";
-import { normalizePartNumber } from "./lib/stages";
+import { asStage, isClaimableStage, normalizePartNumber } from "./lib/stages";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -359,8 +359,9 @@ export const sampleParts = internalMutation({
           qtySpares: sample.qtySpares ?? 0,
           qtyMade,
           stage: sample.stage,
-          claimedByUserId:
-            sample.stage === 3 || sample.stage === 4 ? claimant : undefined,
+          claimedByUserId: isClaimableStage(asStage(sample.stage))
+            ? claimant
+            : undefined,
           designerUserId: users[0]?.authId,
           makerUserId: sample.stage > 3 ? claimant : undefined,
           stageSince,

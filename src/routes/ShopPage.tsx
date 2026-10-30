@@ -14,6 +14,7 @@ import {
   asStage,
   canAdvance,
   canClaim,
+  isClaimableStage,
   stageLabel,
   stageTask,
   toProcessShape,
@@ -172,7 +173,7 @@ export function ShopPage() {
                     <Button variant="outline" className="h-12" asChild>
                       <Link to={`/parts/${part._id}`}>Full part page</Link>
                     </Button>
-                    {!part.claimedByUserId && (stage === 3 || stage === 4) ? (
+                    {!part.claimedByUserId && isClaimableStage(stage) ? (
                       <Button
                         variant="outline"
                         className="h-12"

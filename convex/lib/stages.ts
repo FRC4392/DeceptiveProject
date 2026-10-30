@@ -228,10 +228,21 @@ export function canMoveTo(
     : deny("Only a lead or mentor can move a part back or skip ahead.");
 }
 
-/** Claiming: a part up for grabs, which means stage 3 or 4. */
+/**
+ * The stages where a part is somebody's job to pick up: designing it, drawing
+ * it, making it, finishing it. Past that it's in the bin and goes on the robot
+ * with its sub-assembly rather than being claimed on its own.
+ *
+ * One predicate, used by the rule below and by every screen that offers the
+ * button or says "Up for grabs", so the two can't drift apart.
+ */
+export function isClaimableStage(stage: Stage): boolean {
+  return stage >= 1 && stage <= 4;
+}
+
 export function canClaim(stage: Stage): Permission {
-  if (stage !== 3 && stage !== 4) {
-    return deny("Parts are claimed when they're ready to make or finish.");
+  if (!isClaimableStage(stage)) {
+    return deny("This one's in the bin — it goes on with its assembly.");
   }
   return OK;
 }

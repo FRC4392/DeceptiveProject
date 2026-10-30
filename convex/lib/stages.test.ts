@@ -3,6 +3,7 @@ import {
   advanceLabel,
   canAdvance,
   canClaim,
+  isClaimableStage,
   canMoveTo,
   formatPartNumber,
   isStageSkipped,
@@ -95,14 +96,20 @@ describe("who may move a part on", () => {
 });
 
 describe("claiming", () => {
-  test("only when there's something to do", () => {
-    expect(canClaim(1).allowed).toBe(false);
-    expect(canClaim(6).allowed).toBe(false);
+  test("anywhere there's work to pick up, from design to finishing", () => {
+    for (const stage of [1, 2, 3, 4] as const) {
+      expect(canClaim(stage).allowed).toBe(true);
+      expect(isClaimableStage(stage)).toBe(true);
+    }
   });
 
-  test("a part up for grabs can be taken by anyone", () => {
-    expect(canClaim(3).allowed).toBe(true);
-    expect(canClaim(4).allowed).toBe(true);
+  test("not once it's in the bin — it goes on with its assembly", () => {
+    for (const stage of [5, 6] as const) {
+      expect(canClaim(stage).allowed).toBe(false);
+      expect(isClaimableStage(stage)).toBe(false);
+    }
+    const refused = canClaim(5);
+    expect(refused.allowed === false && refused.reason).toMatch(/in the bin/i);
   });
 });
 

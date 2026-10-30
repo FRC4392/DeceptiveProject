@@ -10,7 +10,13 @@ import { Button } from "@/components/ui/button";
 import { useIsLead } from "@/lib/roles";
 import { useActor } from "@/lib/tracker";
 import { isMentorOrAbove } from "@/lib/stages";
-import { STAGE_UI, asStage, madeLabel, stageLabel } from "@/lib/stages";
+import {
+  STAGE_UI,
+  asStage,
+  isClaimableStage,
+  madeLabel,
+  stageLabel,
+} from "@/lib/stages";
 import {
   READY_STAGE,
   computeAssemblyStatuses,
@@ -321,7 +327,7 @@ export function SubsystemsPage() {
                       <td className="px-4 py-2.5 text-muted-foreground">
                         {part.claimedByUserId
                           ? (roster[part.claimedByUserId]?.name ?? "—")
-                          : stage === 3 || stage === 4
+                          : isClaimableStage(stage)
                             ? "Up for grabs"
                             : "—"}
                       </td>

@@ -162,6 +162,13 @@ the same one, and a number is never reused. `{YY}-{SUB}-000` is reserved for a
 subsystem's top-level assembly. Searching for a part forgives how it's typed:
 `27-INT-104`, `int-104`, `INT104` and `104` all find it.
 
+A part can be claimed from **In design through Ready to finish** — designing
+it, drawing it, making it and finishing it are all somebody's job to pick up.
+An unclaimed one in those stages reads "Up for grabs". Past that it's in the
+bin and goes on the robot with its sub-assembly rather than being claimed on
+its own. Moving a part to the next stage releases the claim, since the next
+stage is different work.
+
 Students find parts by **typing the number** — there is no QR code or scanner
 anywhere in the app.
 

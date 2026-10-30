@@ -36,17 +36,17 @@ const ROSTER = [
 ];
 
 beforeEach(() => {
-  vi.mocked(useQuery).mockImplementation((ref) => {
+  vi.mocked(useQuery).mockImplementation(((
+    ref: Parameters<typeof useQuery>[0],
+  ) => {
     const name = getFunctionName(ref);
-    if (name === getFunctionName(api.parts.listMine)) return MINE as never;
-    if (name === getFunctionName(api.users.list)) return ROSTER as never;
+    if (name === getFunctionName(api.parts.listMine)) return MINE;
+    if (name === getFunctionName(api.users.list)) return ROSTER;
     if (name === getFunctionName(api.shop.listProcessTypes)) {
-      return [
-        { _id: "p_router", name: "CNC router", order: 0 },
-      ] as unknown as never;
+      return [{ _id: "p_router", name: "CNC router", order: 0 }];
     }
-    return [] as never;
-  });
+    return [];
+  }) as unknown as typeof useQuery);
 });
 
 describe("My parts", () => {

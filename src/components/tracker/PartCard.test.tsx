@@ -45,7 +45,15 @@ describe("a part card", () => {
     expect(screen.getByText("Dana Lopez")).toBeInTheDocument();
   });
 
-  it("says nothing about grabs once it's past the shop", () => {
+  it("offers an unclaimed part from design onward", () => {
+    for (const stage of [1, 2, 3, 4]) {
+      const { unmount } = renderCard({ part: part({ stage }) });
+      expect(screen.getByText("Up for grabs")).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("says nothing about grabs once it's in the bin", () => {
     renderCard({ part: part({ stage: 5 }) });
     expect(screen.queryByText("Up for grabs")).not.toBeInTheDocument();
   });

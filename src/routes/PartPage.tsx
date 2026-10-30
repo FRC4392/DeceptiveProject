@@ -23,6 +23,7 @@ import {
   asStage,
   canAdvance,
   canClaim,
+  isClaimableStage,
   initials,
   madeLabel,
   problemLabel,
@@ -219,7 +220,7 @@ export function PartPage() {
                   {claimant.name} claimed this
                 </p>
               ) : (
-                (stage === 3 || stage === 4) && (
+                isClaimableStage(stage) && (
                   <Button
                     variant="outline"
                     size="sm"

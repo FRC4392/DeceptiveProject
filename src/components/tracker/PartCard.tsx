@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { Chip, FlagChips, PersonChip } from "@/components/tracker/PartChips";
-import { madeLabel, qtyLabel } from "@/lib/stages";
+import { asStage, isClaimableStage, madeLabel, qtyLabel } from "@/lib/stages";
 
 /**
  * One part on the board. Reads top-down the way someone scanning for work
@@ -48,7 +48,7 @@ export function PartCard({
           name={claimantName}
           role={claimantRole}
           emptyLabel={
-            part.stage === 3 || part.stage === 4 ? "Up for grabs" : null
+            isClaimableStage(asStage(part.stage)) ? "Up for grabs" : null
           }
         />
       </div>
