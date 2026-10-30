@@ -55,7 +55,6 @@ export function useMachineMap(): Map<Id<"machines">, Doc<"machines">> {
  */
 export function useActor(): Actor & { userId: string | null; name: string } {
   const user = useCurrentUser();
-  const training = useQuery(api.shop.myTraining, {});
   const subsystems = useSubsystems();
 
   return useMemo(() => {
@@ -64,10 +63,9 @@ export function useActor(): Actor & { userId: string | null; name: string } {
       userId,
       name: user?.name ?? "",
       role: (user?.role ?? "student") as Role,
-      trainedMachineIds: (training ?? []).map((id) => id as string),
       ledSubsystemIds: (subsystems ?? [])
         .filter((s) => userId !== null && s.leadUserId === userId)
         .map((s) => s._id as string),
     };
-  }, [user, training, subsystems]);
+  }, [user, subsystems]);
 }

@@ -4,7 +4,6 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
-import type { Id } from "./_generated/dataModel";
 
 const modules = import.meta.glob("./**/*.ts");
 const ISSUER = "https://example.clerk.accounts.dev";
@@ -153,7 +152,7 @@ describe("moving a part along", () => {
     expect(part?.stage).toBe(3);
   });
 
-  test("a student needs the machine sign-off to claim and to finish making", async () => {
+  test("a student claims it, makes them all, and moves it on", async () => {
     const t = convexTest(schema, modules);
     const { mentor, intake, router } = await setup(t);
     const student = t.withIdentity(identity("student_1"));
@@ -168,14 +167,6 @@ describe("moving a part along", () => {
     await mentor.mutation(api.parts.advance, { partId }); // -> 2
     await mentor.mutation(api.parts.advance, { partId }); // -> 3
 
-    await expect(student.mutation(api.parts.claim, { partId })).rejects.toThrow(
-      /signed off/i,
-    );
-
-    await mentor.mutation(api.shop.signOffTraining, {
-      userId: "student_1",
-      machineId: router.machineId as Id<"machines">,
-    });
     await student.mutation(api.parts.claim, { partId });
 
     // Still can't call it done before both are actually made.

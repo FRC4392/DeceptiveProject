@@ -31,8 +31,7 @@ export function MyPartsPage() {
         <div className="rounded-lg border bg-card p-8 text-center">
           <p className="font-medium">Nothing claimed yet.</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            The board shows what's up for grabs on machines you're signed off
-            on.
+            The board shows what's up for grabs.
           </p>
           <Button className="mt-4" asChild>
             <Link to="/parts">Open the board</Link>

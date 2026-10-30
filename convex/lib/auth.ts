@@ -53,8 +53,8 @@ export async function currentRole(ctx: Ctx): Promise<Role> {
 }
 
 /**
- * Everything the stage rules need to decide what this person may do: their
- * role, the machines they're signed off on, and the subsystems they lead.
+ * What the stage rules need to decide what this person may do: their role and
+ * the subsystems they lead.
  */
 export async function getActor(ctx: Ctx): Promise<Actor & { userId: string }> {
   const userId = await requireUserId(ctx);
@@ -63,11 +63,6 @@ export async function getActor(ctx: Ctx): Promise<Actor & { userId: string }> {
     .withIndex("authId", (q) => q.eq("authId", userId))
     .unique();
 
-  const training = await ctx.db
-    .query("training")
-    .withIndex("by_user", (q) => q.eq("userId", userId))
-    .collect();
-
   // Subsystems are a small, mentor-managed set, so a scan is cheaper than an
   // index that exists only for this lookup.
   const subsystems = await ctx.db.query("subsystems").collect();
@@ -75,7 +70,6 @@ export async function getActor(ctx: Ctx): Promise<Actor & { userId: string }> {
   return {
     userId,
     role: effectiveRole(user),
-    trainedMachineIds: training.map((t) => t.machineId as string),
     ledSubsystemIds: subsystems
       .filter((s) => s.leadUserId === userId)
       .map((s) => s._id as string),
@@ -83,7 +77,7 @@ export async function getActor(ctx: Ctx): Promise<Actor & { userId: string }> {
 }
 
 /**
- * Guard for mentor-only mutations (deletes, settings, training sign-offs).
+ * Guard for mentor-only mutations (deletes, settings, role changes).
  * Admins count as mentors.
  */
 export async function requireMentor(ctx: Ctx): Promise<Doc<"users">> {

@@ -1,10 +1,8 @@
-// The shop's own setup: machines, the processes that run on them, and who a
-// mentor has signed off to use what. Training is what gates claiming a part in
-// "Ready to make", so it is mentor-only to grant.
+// The shop's own setup: the machines, and the processes that run on them.
 import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { requireMentor, requireUserId } from "./lib/auth";
+import { requireMentor } from "./lib/auth";
 
 const vMachine = v.object({
   _id: v.id("machines"),
@@ -23,15 +21,6 @@ const vProcessType = v.object({
   needsFinishing: v.boolean(),
   isBought: v.optional(v.boolean()),
   order: v.number(),
-});
-
-const vTraining = v.object({
-  _id: v.id("training"),
-  _creationTime: v.number(),
-  userId: v.string(),
-  machineId: v.id("machines"),
-  signedOffByUserId: v.string(),
-  date: v.number(),
 });
 
 // ---- Machines ----
@@ -87,11 +76,6 @@ export const removeMachine = mutation({
     if (processes.some((p) => p.machineId === id)) {
       throw new Error("A process still runs on this machine — move it first.");
     }
-    const training = await ctx.db
-      .query("training")
-      .withIndex("by_machine", (q) => q.eq("machineId", id))
-      .collect();
-    for (const t of training) await ctx.db.delete(t._id);
     await ctx.db.delete(id);
     return null;
   },
@@ -164,73 +148,6 @@ export const removeProcessType = mutation({
       throw new Error("Parts still use this process — change them first.");
     }
     await ctx.db.delete(id);
-    return null;
-  },
-});
-
-// ---- Training sign-offs ----
-
-export const listTraining = query({
-  args: { userId: v.optional(v.string()) },
-  returns: v.array(vTraining),
-  handler: async (ctx, { userId }) => {
-    if (userId !== undefined) {
-      return ctx.db
-        .query("training")
-        .withIndex("by_user", (q) => q.eq("userId", userId))
-        .collect();
-    }
-    return ctx.db.query("training").take(5000);
-  },
-});
-
-/** The machines the signed-in person may run, for the shop screen's header. */
-export const myTraining = query({
-  args: {},
-  returns: v.array(v.id("machines")),
-  handler: async (ctx) => {
-    const userId = await requireUserId(ctx);
-    const rows = await ctx.db
-      .query("training")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .collect();
-    return rows.map((r) => r.machineId);
-  },
-});
-
-export const signOffTraining = mutation({
-  args: { userId: v.string(), machineId: v.id("machines") },
-  returns: v.id("training"),
-  handler: async (ctx, { userId, machineId }) => {
-    const mentor = await requireMentor(ctx);
-    const existing = await ctx.db
-      .query("training")
-      .withIndex("by_user_and_machine", (q) =>
-        q.eq("userId", userId).eq("machineId", machineId),
-      )
-      .unique();
-    if (existing) return existing._id;
-    return ctx.db.insert("training", {
-      userId,
-      machineId,
-      signedOffByUserId: mentor.authId,
-      date: Date.now(),
-    });
-  },
-});
-
-export const revokeTraining = mutation({
-  args: { userId: v.string(), machineId: v.id("machines") },
-  returns: v.null(),
-  handler: async (ctx, { userId, machineId }) => {
-    await requireMentor(ctx);
-    const existing = await ctx.db
-      .query("training")
-      .withIndex("by_user_and_machine", (q) =>
-        q.eq("userId", userId).eq("machineId", machineId),
-      )
-      .unique();
-    if (existing) await ctx.db.delete(existing._id);
     return null;
   },
 });

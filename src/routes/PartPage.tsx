@@ -105,7 +105,7 @@ export function PartPage() {
     },
     actor,
   );
-  const claimPermission = canClaim(stage, shape, actor);
+  const claimPermission = canClaim(stage);
   const nextLabel = advanceLabel(stage, shape);
   const openProblems = (problems ?? []).filter(
     (p) => p.resolvedAt === undefined,

@@ -519,8 +519,7 @@ export const claim = mutation({
     if (part.claimedByUserId && part.claimedByUserId !== actor.userId) {
       throw new Error("Someone else already claimed this one.");
     }
-    const process = await processShape(ctx, part.processTypeId);
-    const permission = canClaim(asStage(part.stage), process, actor);
+    const permission = canClaim(asStage(part.stage));
     if (!permission.allowed) throw new Error(permission.reason);
     await ctx.db.patch(partId, { claimedByUserId: actor.userId });
     return null;

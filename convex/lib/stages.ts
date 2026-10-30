@@ -41,7 +41,7 @@ export const STAGES: {
     stage: 3,
     label: "Ready to make",
     blurb: "Up for grabs on a machine.",
-    movesOn: "Anyone trained on the machine can claim it.",
+    movesOn: "Up for grabs — anyone can claim it.",
   },
   {
     stage: 4,
@@ -154,8 +154,6 @@ export function stageTask(stage: Stage, machineName?: string | null): string {
 
 export type Actor = {
   role: Role;
-  /** Machine ids this person has a mentor sign-off on. */
-  trainedMachineIds: string[];
   /** Subsystem ids this person is the lead for. */
   ledSubsystemIds: string[];
 };
@@ -197,12 +195,6 @@ export function canAdvance(
         : deny("A design lead or mentor checks the drawing.");
     case 3: {
       if (isLeadOrAbove(actor.role)) return OK;
-      if (
-        process.machineId &&
-        !actor.trainedMachineIds.includes(process.machineId)
-      ) {
-        return deny("You aren't signed off on this machine yet. Ask a mentor.");
-      }
       if (part.qtyMade < part.qtyNeeded) {
         return deny(`Record all ${part.qtyNeeded} made first.`);
       }
@@ -236,22 +228,10 @@ export function canMoveTo(
     : deny("Only a lead or mentor can move a part back or skip ahead.");
 }
 
-/** Claiming: stage 3 and 4 only, and stage 3 needs the machine sign-off. */
-export function canClaim(
-  stage: Stage,
-  process: ProcessShape,
-  actor: Actor,
-): Permission {
+/** Claiming: a part up for grabs, which means stage 3 or 4. */
+export function canClaim(stage: Stage): Permission {
   if (stage !== 3 && stage !== 4) {
     return deny("Parts are claimed when they're ready to make or finish.");
-  }
-  if (
-    stage === 3 &&
-    !isLeadOrAbove(actor.role) &&
-    process.machineId &&
-    !actor.trainedMachineIds.includes(process.machineId)
-  ) {
-    return deny("You aren't signed off on this machine yet. Ask a mentor.");
   }
   return OK;
 }

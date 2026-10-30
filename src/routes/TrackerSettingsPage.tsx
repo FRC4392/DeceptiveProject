@@ -38,7 +38,7 @@ export function TrackerSettingsPage() {
         <h1 className="brand-title text-3xl">Tracker settings</h1>
         <p className="text-sm text-muted-foreground">
           The season, the subsystems that make up part numbers, the shop's
-          machines, and who's signed off on what.
+          machines, and who's who.
         </p>
       </header>
 
@@ -592,23 +592,13 @@ const ROLES: { value: Role; label: string }[] = [
 
 function PeopleSettings() {
   const roster = useRoster();
-  const machines = useMachines();
-  const training = useQuery(api.shop.listTraining, {});
   const setRole = useMutation(api.shop.setUserRole);
-  const signOff = useMutation(api.shop.signOffTraining);
-  const revoke = useMutation(api.shop.revokeTraining);
   const [error, setError] = useState<string | null>(null);
-
-  function isTrained(userId: string, machineId: Id<"machines">): boolean {
-    return (training ?? []).some(
-      (t) => t.userId === userId && t.machineId === machineId,
-    );
-  }
 
   return (
     <Panel
       title="People"
-      description="Roles decide who can check a drawing or move a part back. Sign-offs decide who can claim work on each machine."
+      description="Roles decide who can check a drawing, move a part back, or mark a sub-assembly installed."
     >
       <div className="space-y-4">
         {(roster ?? []).map((person) => (
@@ -639,42 +629,6 @@ function PeopleSettings() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {(machines ?? []).map((machine) => {
-                const trained = isTrained(person.authId, machine._id);
-                return (
-                  <button
-                    key={machine._id}
-                    type="button"
-                    onClick={() => {
-                      setError(null);
-                      const call = trained
-                        ? revoke({
-                            userId: person.authId,
-                            machineId: machine._id,
-                          })
-                        : signOff({
-                            userId: person.authId,
-                            machineId: machine._id,
-                          });
-                      call.catch((err: unknown) =>
-                        setError(
-                          err instanceof Error ? err.message : "No luck.",
-                        ),
-                      );
-                    }}
-                    className={
-                      trained
-                        ? "rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success"
-                        : "rounded-full border px-3 py-1 text-xs text-muted-foreground hover:bg-accent"
-                    }
-                  >
-                    {machine.name}
-                    {trained ? " ✓" : ""}
-                  </button>
-                );
-              })}
             </div>
           </div>
         ))}

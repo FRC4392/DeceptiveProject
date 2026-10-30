@@ -140,14 +140,14 @@ so it holds regardless of what Clerk's token says.
 The main thing this app does is follow every robot part from Onshape CAD to
 the robot. Six stages, left to right:
 
-| #   | Stage             | Moves on when                              | Who can move it                              |
-| --- | ----------------- | ------------------------------------------ | -------------------------------------------- |
-| 1   | In design         | It's released in Onshape                   | Lead, mentor                                 |
-| 2   | Needs drawing     | A lead checks the drawing / DXF / toolpath | Lead, mentor                                 |
-| 3   | Ready to make     | The maker has recorded them all made       | Anyone trained on that machine, lead, mentor |
-| 4   | Ready to finish   | Deburr, tap, countersink, coat is done     | Anyone                                       |
-| 5   | Ready to assemble | It goes on the robot                       | Subsystem lead, mentor                       |
-| 6   | Assembled         | —                                          | —                                            |
+| #   | Stage             | Moves on when                              | Who can move it        |
+| --- | ----------------- | ------------------------------------------ | ---------------------- |
+| 1   | In design         | It's released in Onshape                   | Lead, mentor           |
+| 2   | Needs drawing     | A lead checks the drawing / DXF / toolpath | Lead, mentor           |
+| 3   | Ready to make     | The maker has recorded them all made       | Anyone                 |
+| 4   | Ready to finish   | Deburr, tap, countersink, coat is done     | Anyone                 |
+| 5   | Ready to assemble | It goes on the robot                       | Subsystem lead, mentor |
+| 6   | Assembled         | —                                          | —                      |
 
 A part's **process** decides which stages it skips: a 3D print needs no
 drawing, and a part with no finishing goes from the machine straight to the
@@ -213,7 +213,7 @@ convex/
                      and BOM CSV parsing
   parts.ts           the tracker: numbers, stage moves, claiming, problems
   subsystems.ts      subsystems, progress tiles, assembly steps
-  shop.ts            machines, process types, training sign-offs, roles
+  shop.ts            machines, process types, roles
   seasons.ts         seasons + first-run setup
   cots.ts            bought items
   intake.ts          the "New from Onshape" queue and the manual ways in
@@ -256,7 +256,11 @@ A mentor opens **Tracker settings** and presses _Set it up_. That lays down the
 season, the usual five subsystems (DRV, INT, ELV, SHT, CLB), the machines most
 teams have, and the processes that decide which stages a part skips —
 all editable afterwards. Then, on the **People** tab, give the design leads the
-`lead` role and sign students off on the machines they may use.
+`lead` role.
+
+The app doesn't track who is approved to run which machine; a machine marked
+"a mentor has to be in the room" still shows that warning on the part, but
+tool approval itself is handled outside the tracker.
 
 ## Sub-assemblies
 

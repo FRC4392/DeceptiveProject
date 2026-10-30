@@ -14,7 +14,7 @@ export function useRole(): Role {
   return user?.role ?? "student";
 }
 
-/** Mentors and admins: settings, training sign-offs, deletes. */
+/** Mentors and admins: settings, role changes, deletes. */
 export function useIsMentor(): boolean {
   const role = useRole();
   return role === "mentor" || role === "admin";

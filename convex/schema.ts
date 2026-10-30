@@ -106,7 +106,7 @@ export default defineSchema({
     next: v.number(),
   }).index("by_season_and_subsystem", ["seasonId", "subsystemId"]),
 
-  // A machine someone can be trained on. `requiresMentorPresent` surfaces as a
+  // A machine in the shop. `requiresMentorPresent` surfaces as a
   // safety warning on the shop screen.
   machines: defineTable({
     name: v.string(),
@@ -125,18 +125,6 @@ export default defineSchema({
     isBought: v.optional(v.boolean()),
     order: v.number(),
   }),
-
-  // A mentor's sign-off that someone may run a machine. Gates claiming a
-  // stage-3 part.
-  training: defineTable({
-    userId: v.string(),
-    machineId: v.id("machines"),
-    signedOffByUserId: v.string(),
-    date: v.number(),
-  })
-    .index("by_user", ["userId"])
-    .index("by_machine", ["machineId"])
-    .index("by_user_and_machine", ["userId", "machineId"]),
 
   parts: defineTable({
     seasonId: v.id("seasons"),

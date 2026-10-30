@@ -21,7 +21,6 @@ const PART = { subsystemId: "sub_int", qtyMade: 2, qtyNeeded: 2 };
 function actor(overrides: Partial<Actor> = {}): Actor {
   return {
     role: "student",
-    trainedMachineIds: [],
     ledSubsystemIds: [],
     ...overrides,
   };
@@ -60,25 +59,12 @@ describe("who may move a part on", () => {
     );
   });
 
-  test("making needs a sign-off on that machine", () => {
-    const untrained = canAdvance(3, MILL, PART, actor());
-    expect(untrained.allowed).toBe(false);
-    expect(untrained.allowed === false && untrained.reason).toMatch(
-      /signed off/i,
-    );
-    expect(
-      canAdvance(3, MILL, PART, actor({ trainedMachineIds: ["m_mill"] }))
-        .allowed,
-    ).toBe(true);
+  test("anyone who has made them all can move it on", () => {
+    expect(canAdvance(3, MILL, PART, actor()).allowed).toBe(true);
   });
 
   test("you can't call it made before you've made them all", () => {
-    const short = canAdvance(
-      3,
-      MILL,
-      { ...PART, qtyMade: 1 },
-      actor({ trainedMachineIds: ["m_mill"] }),
-    );
+    const short = canAdvance(3, MILL, { ...PART, qtyMade: 1 }, actor());
     expect(short.allowed).toBe(false);
     expect(short.allowed === false && short.reason).toMatch(/Record all 2/);
   });
@@ -110,15 +96,13 @@ describe("who may move a part on", () => {
 
 describe("claiming", () => {
   test("only when there's something to do", () => {
-    expect(canClaim(1, MILL, actor({ role: "lead" })).allowed).toBe(false);
-    expect(canClaim(4, MILL, actor()).allowed).toBe(true);
+    expect(canClaim(1).allowed).toBe(false);
+    expect(canClaim(6).allowed).toBe(false);
   });
 
-  test("a machine you're not signed off on stays out of reach", () => {
-    expect(canClaim(3, MILL, actor()).allowed).toBe(false);
-    expect(
-      canClaim(3, MILL, actor({ trainedMachineIds: ["m_mill"] })).allowed,
-    ).toBe(true);
+  test("a part up for grabs can be taken by anyone", () => {
+    expect(canClaim(3).allowed).toBe(true);
+    expect(canClaim(4).allowed).toBe(true);
   });
 });
 

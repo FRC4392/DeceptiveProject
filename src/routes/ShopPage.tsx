@@ -48,10 +48,6 @@ export function ShopPage() {
   const [problemOpen, setProblemOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const trained = actor.trainedMachineIds
-    .map((id) => machines.get(id as Id<"machines">)?.name)
-    .filter((name): name is string => Boolean(name));
-
   return (
     <div className="mx-auto max-w-md space-y-4 pb-28">
       <header className="rounded-lg border bg-card p-4 shadow-sm">
@@ -59,9 +55,7 @@ export function ShopPage() {
           Hi {actor.name.split(" ")[0] || "there"}
         </p>
         <p className="text-sm text-muted-foreground">
-          {trained.length > 0
-            ? `Trained: ${trained.join(", ")}`
-            : "No machine sign-offs yet — ask a mentor."}
+          Type a part number to pick up where it's at.
         </p>
       </header>
 
@@ -155,7 +149,7 @@ export function ShopPage() {
               },
               actor,
             );
-            const claimPermission = canClaim(stage, shape, actor);
+            const claimPermission = canClaim(stage);
             const label = advanceLabel(stage, shape);
 
             return (
