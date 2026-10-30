@@ -299,6 +299,9 @@ src/
   components/ui/     shadcn/ui primitives
 ```
 
+Outstanding work, configuration nobody has done yet, and the Onshape
+assumptions still unverified are listed in [TODO.md](TODO.md).
+
 ## First run
 
 A mentor opens **Settings** and presses _Set it up_. That lays down the
