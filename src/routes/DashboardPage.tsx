@@ -152,7 +152,13 @@ export function DashboardPage() {
                           : `${row.ready} / ${row.total}`}
                       </span>
                     </div>
-                    <Bar done={row.ready} total={row.total} thin />
+                    {/* Installed means the whole thing is on the robot, so a
+                        part-full bar underneath would contradict the label. */}
+                    <Bar
+                      done={row.installed ? row.total : row.ready}
+                      total={row.total}
+                      thin
+                    />
                   </div>
                 ))}
               </div>
