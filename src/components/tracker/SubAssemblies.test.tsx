@@ -1,0 +1,236 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useMutation, useQuery } from "convex/react";
+import { getFunctionName } from "convex/server";
+import { SubAssemblyEditor, type AssemblyRow } from "./SubAssemblies";
+import { api } from "../../../convex/_generated/api";
+import type { Doc, Id } from "../../../convex/_generated/dataModel";
+
+vi.mock("convex/react", () => ({ useMutation: vi.fn(), useQuery: vi.fn() }));
+
+const create = vi
+  .fn()
+  .mockResolvedValue({ id: "sa_new", partNumber: "27-INT-009" });
+const rename = vi.fn().mockResolvedValue(undefined);
+const remove = vi.fn().mockResolvedValue(undefined);
+const setMembers = vi.fn().mockResolvedValue(undefined);
+const setDrawing = vi.fn().mockResolvedValue(undefined);
+
+const SUBSYSTEM = "sub_int" as Id<"subsystems">;
+
+function part(id: string, partNumber: string, name: string) {
+  return { _id: id as Id<"parts">, partNumber, name } as Doc<"parts">;
+}
+
+function assembly(
+  id: string,
+  partNumber: string,
+  name: string,
+  extra: Partial<Doc<"subAssemblies">> = {},
+) {
+  return {
+    _id: id as Id<"subAssemblies">,
+    _creationTime: 0,
+    subsystemId: SUBSYSTEM,
+    partNumber,
+    name,
+    order: 0,
+    ...extra,
+  } as Doc<"subAssemblies">;
+}
+
+const PARTS = [
+  part("pt_1", "27-INT-001", "Side Plate"),
+  part("pt_2", "27-INT-002", "Roller Shaft"),
+];
+const COTS = [
+  {
+    _id: "c_1" as Id<"cotsItems">,
+    name: "Compliant wheel",
+  } as Doc<"cotsItems">,
+];
+
+const ROOT: AssemblyRow = {
+  assembly: assembly("sa_root", "27-INT-000", "Intake", { isDefault: true }),
+  partIds: ["pt_1"] as Id<"parts">[],
+  cotsItemIds: [],
+  childIds: [],
+};
+const FRAME: AssemblyRow = {
+  assembly: assembly("sa_frame", "27-INT-004", "Frame", { order: 1 }),
+  partIds: [],
+  cotsItemIds: [],
+  childIds: [],
+};
+
+beforeEach(() => {
+  for (const fn of [create, rename, remove, setMembers, setDrawing]) {
+    fn.mockClear();
+  }
+  vi.mocked(useQuery).mockReturnValue({ partIds: [], cotsItemIds: [] });
+  vi.mocked(useMutation).mockImplementation((ref) => {
+    const name = getFunctionName(ref);
+    if (name === getFunctionName(api.subAssemblies.create))
+      return create as never;
+    if (name === getFunctionName(api.subAssemblies.rename))
+      return rename as never;
+    if (name === getFunctionName(api.subAssemblies.remove))
+      return remove as never;
+    if (name === getFunctionName(api.subAssemblies.setMembers))
+      return setMembers as never;
+    if (name === getFunctionName(api.subAssemblies.setDrawing))
+      return setDrawing as never;
+    return vi.fn() as never;
+  });
+});
+
+function renderEditor(rows: AssemblyRow[] = [ROOT, FRAME]) {
+  return render(
+    <SubAssemblyEditor
+      subsystemId={SUBSYSTEM}
+      rows={rows}
+      parts={PARTS}
+      cots={COTS}
+      onDone={vi.fn()}
+    />,
+  );
+}
+
+describe("the sub-assembly editor", () => {
+  it("edits one at a time, starting with the default", () => {
+    renderEditor();
+    expect(screen.getByLabelText("Sub-assembly name")).toHaveValue("Intake");
+    expect(screen.getByText("whole thing")).toBeInTheDocument();
+  });
+
+  it("offers the subsystem's parts and bought items", () => {
+    renderEditor();
+    expect(screen.getByText("Side Plate")).toBeInTheDocument();
+    expect(screen.getByText("Roller Shaft")).toBeInTheDocument();
+    expect(screen.getByText("Compliant wheel")).toBeInTheDocument();
+  });
+
+  it("adds a part, keeping the children it already holds", async () => {
+    const user = userEvent.setup();
+    renderEditor([
+      { ...ROOT, childIds: ["sa_frame"] as Id<"subAssemblies">[] },
+      FRAME,
+    ]);
+    // Box 0 is select-all; 1 and 2 are the parts.
+    await user.click(screen.getAllByRole("checkbox")[2]);
+
+    expect(setMembers).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      partIds: ["pt_1", "pt_2"],
+      cotsItemIds: [],
+      childIds: ["sa_frame"],
+    });
+  });
+
+  it("puts one sub-assembly inside another", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    // select-all, two parts, one bought item, then the children.
+    await user.click(screen.getAllByRole("checkbox")[4]);
+
+    expect(setMembers).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      partIds: ["pt_1"],
+      cotsItemIds: [],
+      childIds: ["sa_frame"],
+    });
+  });
+
+  it("won't offer one that already holds this one", () => {
+    // Frame holds the root, so the root can't also hold Frame.
+    renderEditor([
+      ROOT,
+      { ...FRAME, childIds: ["sa_root"] as Id<"subAssemblies">[] },
+    ]);
+    expect(screen.getByText("holds this one")).toBeInTheDocument();
+  });
+
+  it("shows a part another sub-assembly holds rather than offering it twice", async () => {
+    const user = userEvent.setup();
+    renderEditor([
+      { ...ROOT, partIds: [] },
+      { ...FRAME, partIds: ["pt_1"] as Id<"parts">[] },
+    ]);
+    // Editing the root: Frame has pt_1, so it's locked here.
+    expect(screen.getByText("in Frame")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("checkbox")[2]);
+    expect(setMembers).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      partIds: ["pt_2"],
+      cotsItemIds: [],
+      childIds: [],
+    });
+  });
+
+  it("select all takes only what nothing else holds", async () => {
+    const user = userEvent.setup();
+    renderEditor([
+      { ...ROOT, partIds: [] },
+      { ...FRAME, partIds: ["pt_1"] as Id<"parts">[] },
+    ]);
+    await user.click(screen.getByLabelText("Select every part"));
+    expect(setMembers).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      partIds: ["pt_2"],
+      cotsItemIds: ["c_1"],
+      childIds: [],
+    });
+  });
+
+  it("the default has no remove control", () => {
+    renderEditor();
+    expect(screen.queryByLabelText("Remove Intake")).not.toBeInTheDocument();
+  });
+
+  it("adds a new sub-assembly", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await user.type(screen.getByLabelText("New sub-assembly"), "Rollers");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    expect(create).toHaveBeenCalledWith({
+      subsystemId: SUBSYSTEM,
+      name: "Rollers",
+    });
+  });
+
+  it("saves a drawing link when the field loses focus", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    const field = screen.getByLabelText("Assembly drawing link");
+    await user.type(field, "https://example.com/intake.pdf");
+    await user.tab();
+    expect(setDrawing).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      url: "https://example.com/intake.pdf",
+    });
+  });
+
+  it("says when there's no CAD linked yet", () => {
+    renderEditor();
+    expect(screen.getByText(/No CAD linked yet/)).toBeInTheDocument();
+  });
+
+  it("links the CAD once a sync has filled the ids in", () => {
+    renderEditor([
+      {
+        ...ROOT,
+        assembly: assembly("sa_root", "27-INT-000", "Intake", {
+          isDefault: true,
+          onshapeDocumentId: "doc1",
+          onshapeVersionId: "v1",
+          onshapeElementId: "el1",
+        }),
+      },
+    ]);
+    expect(screen.getByRole("link", { name: /Assembly CAD/ })).toHaveAttribute(
+      "href",
+      "https://cad.onshape.com/documents/doc1/v/v1/e/el1",
+    );
+  });
+});

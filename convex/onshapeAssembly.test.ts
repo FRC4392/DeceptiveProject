@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   aggregateAssemblyParts,
+  rootSubAssemblies,
   type AssemblyDefinition,
 } from "./lib/onshapeAssembly";
 
@@ -27,11 +28,7 @@ describe("aggregateAssemblyParts", () => {
           partInstance("i2", "P1", "Bracket <2>"),
           partInstance("i3", "P2", "Standoff <1>"),
         ],
-        occurrences: [
-          { path: ["i1"] },
-          { path: ["i2"] },
-          { path: ["i3"] },
-        ],
+        occurrences: [{ path: ["i1"] }, { path: ["i2"] }, { path: ["i3"] }],
       },
     };
     const parts = aggregateAssemblyParts(def, DOC);
@@ -104,11 +101,7 @@ describe("aggregateAssemblyParts", () => {
             suppressed: true,
           },
         ],
-        occurrences: [
-          { path: ["i1"] },
-          { path: ["bolt"] },
-          { path: ["sup"] },
-        ],
+        occurrences: [{ path: ["i1"] }, { path: ["bolt"] }, { path: ["sup"] }],
       },
     };
     const parts = aggregateAssemblyParts(def, DOC);
@@ -144,8 +137,22 @@ describe("aggregateAssemblyParts", () => {
     const def: AssemblyDefinition = {
       rootAssembly: {
         instances: [
-          { id: "a", type: "Part", name: "A <1>", partId: "JHD", documentId: DOC, elementId: "ps1" },
-          { id: "b", type: "Part", name: "B <1>", partId: "JHD", documentId: DOC, elementId: "ps2" },
+          {
+            id: "a",
+            type: "Part",
+            name: "A <1>",
+            partId: "JHD",
+            documentId: DOC,
+            elementId: "ps1",
+          },
+          {
+            id: "b",
+            type: "Part",
+            name: "B <1>",
+            partId: "JHD",
+            documentId: DOC,
+            elementId: "ps2",
+          },
         ],
         occurrences: [{ path: ["a"] }, { path: ["b"] }],
       },
@@ -157,5 +164,77 @@ describe("aggregateAssemblyParts", () => {
 
   test("returns empty for a definition with no rootAssembly", () => {
     expect(aggregateAssemblyParts({}, DOC)).toEqual([]);
+  });
+});
+
+describe("the sub-assemblies placed directly inside one", () => {
+  const def = {
+    rootAssembly: {
+      instances: [
+        {
+          id: "a",
+          type: "Part",
+          partId: "p1",
+          elementId: "studio",
+          documentId: "doc",
+        },
+        {
+          id: "b",
+          type: "Assembly",
+          name: "Frame <1>",
+          elementId: "frame",
+          documentId: "doc",
+        },
+        {
+          id: "c",
+          type: "Assembly",
+          name: "Frame <2>",
+          elementId: "frame",
+          documentId: "doc",
+        },
+        {
+          id: "d",
+          type: "Assembly",
+          name: "Rollers",
+          elementId: "rollers",
+          documentId: "other",
+        },
+        {
+          id: "e",
+          type: "Assembly",
+          name: "Hidden",
+          elementId: "x",
+          documentId: "doc",
+          suppressed: true,
+        },
+      ],
+      occurrences: [],
+    },
+  };
+
+  test("one entry per child element, counting the placements", () => {
+    const children = rootSubAssemblies(def, "doc");
+    expect(children).toHaveLength(2);
+    const frame = children.find((c) => c.elementId === "frame")!;
+    expect(frame.quantity).toBe(2);
+    expect(frame.name).toBe("Frame");
+  });
+
+  test("it keeps children from another document, with that document's id", () => {
+    const rollers = rootSubAssemblies(def, "doc").find(
+      (c) => c.elementId === "rollers",
+    )!;
+    expect(rollers.documentId).toBe("other");
+  });
+
+  test("parts and suppressed instances are not children", () => {
+    const ids = rootSubAssemblies(def, "doc").map((c) => c.elementId);
+    expect(ids).not.toContain("studio");
+    expect(ids).not.toContain("x");
+  });
+
+  test("a Part Studio-shaped definition has none", () => {
+    expect(rootSubAssemblies({}, "doc")).toEqual([]);
+    expect(rootSubAssemblies({ rootAssembly: {} }, "doc")).toEqual([]);
   });
 });

@@ -2,16 +2,18 @@
 // internalAction handlers (trackedElementIds/listElementParts/buildPreview/
 // syncElement) that stay in ../onshapeOAuth.ts.
 import type { ActionCtx } from "../_generated/server";
-import { aggregateAssemblyParts } from "./onshapeAssembly";
+import {
+  aggregateAssemblyParts,
+  rootSubAssemblies,
+  type AssemblyChild,
+} from "./onshapeAssembly";
 import { onshapeFetch } from "./onshapeAuth";
 
 const API_BASE = process.env.ONSHAPE_BASE_URL ?? "https://cad.onshape.com";
 
-// Onshape's standard "Part number" metadata property (matched by name so it
-// works across enterprise/education schemas). Standard iso orientation is used
-// for the shaded-view preview.
+// Onshape's standard "Part number" metadata property, matched by name so it
+// works across enterprise and education schemas.
 const PART_NUMBER_PROPERTY = "Part number";
-const ISO_VIEW_MATRIX = "0.707,0.707,0,0,-0.408,0.408,0.816,0,0.577,-0.577,0.577,0";
 
 type OnshapePart = {
   partId: string;
@@ -46,20 +48,26 @@ export async function fetchElementParts(
 // Determine whether an element is a Part Studio or an Assembly, so the sync
 // surfaces can branch. Returns the raw Onshape elementType ("PARTSTUDIO",
 // "ASSEMBLY", …) or "" if it can't be resolved (treated as a Part Studio).
-export async function fetchElementType(
+export async function fetchElementInfo(
   ctx: ActionCtx,
   documentId: string,
   wv: string,
   wvid: string,
   elementId: string,
-): Promise<string> {
+): Promise<{ elementType: string; name: string }> {
   const res = await onshapeFetch(
     ctx,
     `${API_BASE}/api/documents/d/${documentId}/${wv}/${wvid}/elements?elementId=${elementId}`,
   );
-  if (!res.ok) return "";
-  const json = (await res.json()) as Array<{ elementType?: string }>;
-  return json[0]?.elementType ?? "";
+  if (!res.ok) return { elementType: "", name: "" };
+  const json = (await res.json()) as Array<{
+    elementType?: string;
+    name?: string;
+  }>;
+  return {
+    elementType: json[0]?.elementType ?? "",
+    name: json[0]?.name ?? "",
+  };
 }
 
 // The full assembly definition — its instances and flattened occurrences drive
@@ -119,12 +127,32 @@ export async function resolveSyncParts(
   wv: string,
   wvid: string,
   elementId: string,
-): Promise<{ elementType: string; parts: NormalizedPart[] }> {
-  const elementType = await fetchElementType(ctx, documentId, wv, wvid, elementId);
+): Promise<{
+  elementType: string;
+  elementName: string;
+  children: AssemblyChild[];
+  parts: NormalizedPart[];
+}> {
+  const { elementType, name: elementName } = await fetchElementInfo(
+    ctx,
+    documentId,
+    wv,
+    wvid,
+    elementId,
+  );
 
   if (elementType === "ASSEMBLY") {
-    const def = await fetchAssemblyDefinition(ctx, documentId, wv, wvid, elementId);
+    const def = await fetchAssemblyDefinition(
+      ctx,
+      documentId,
+      wv,
+      wvid,
+      elementId,
+    );
     const aggregated = aggregateAssemblyParts(def, documentId);
+    // The sub-assemblies placed directly in here, so the tracker can mirror
+    // the CAD's shape rather than one flat list.
+    const children = rootSubAssemblies(def, documentId);
 
     // Enrich same-document parts with name/material from their Part Studio.
     const info = new Map<string, { name: string; material: string | null }>();
@@ -133,7 +161,13 @@ export async function resolveSyncParts(
     );
     for (const eid of sameDocElements) {
       try {
-        const studioParts = await fetchElementParts(ctx, documentId, wv, wvid, eid);
+        const studioParts = await fetchElementParts(
+          ctx,
+          documentId,
+          wv,
+          wvid,
+          eid,
+        );
         for (const sp of studioParts) {
           info.set(partKey(eid, sp.partId), {
             name: sp.name ?? "Onshape part",
@@ -141,7 +175,10 @@ export async function resolveSyncParts(
           });
         }
       } catch (err) {
-        console.error(`Assembly material fetch failed for element ${eid}:`, err);
+        console.error(
+          `Assembly material fetch failed for element ${eid}:`,
+          err,
+        );
       }
     }
 
@@ -158,22 +195,30 @@ export async function resolveSyncParts(
         enrichable: p.sameDocument,
       };
     });
-    return { elementType, parts };
+    return { elementType, elementName, children, parts };
   }
 
   // Part Studio (default): each part once, sourced from the element itself.
-  const studioParts = await fetchElementParts(ctx, documentId, wv, wvid, elementId);
-  const parts = studioParts.map((p): NormalizedPart => ({
-    partId: p.partId,
-    name: p.name ?? "Onshape part",
-    material: p.material?.displayName ?? null,
-    sourceDocumentId: documentId,
-    sourceElementId: elementId,
-    sameDocument: true,
-    quantity: 1,
-    enrichable: true,
-  }));
-  return { elementType, parts };
+  const studioParts = await fetchElementParts(
+    ctx,
+    documentId,
+    wv,
+    wvid,
+    elementId,
+  );
+  const parts = studioParts.map(
+    (p): NormalizedPart => ({
+      partId: p.partId,
+      name: p.name ?? "Onshape part",
+      material: p.material?.displayName ?? null,
+      sourceDocumentId: documentId,
+      sourceElementId: elementId,
+      sameDocument: true,
+      quantity: 1,
+      enrichable: true,
+    }),
+  );
+  return { elementType, elementName, children: [], parts };
 }
 
 // Read a part's current "Part number" metadata property, returning both its id
@@ -204,77 +249,30 @@ export async function fetchPartNumberProperty(
   };
 }
 
-// Write a part number back into Onshape metadata. Workspace-only (versions are
-// immutable) and requires the OAuth app to hold write scope.
-export async function writePartNumber(
-  ctx: ActionCtx,
-  documentId: string,
-  workspaceId: string,
-  elementId: string,
-  partId: string,
-  propertyId: string,
-  value: string,
-): Promise<boolean> {
-  const res = await onshapeFetch(
-    ctx,
-    `${API_BASE}/api/metadata/d/${documentId}/w/${workspaceId}/e/${elementId}/p/${encodeURIComponent(partId)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonType: "metadata-part",
-        partId,
-        properties: [{ propertyId, value }],
-      }),
-    },
-  );
-  return res.ok;
-}
-
-// Fetch a part's shaded-view PNG as a base64 string (Onshape's native format).
-export async function fetchShadedViewBase64(
+/**
+ * The "Part number" an assembly element carries in its own metadata — the same
+ * property a part has, one level up. This is how a released assembly is matched
+ * to the sub-assembly the tracker issued the number to.
+ */
+export async function fetchElementPartNumberProperty(
   ctx: ActionCtx,
   documentId: string,
   wv: string,
   wvid: string,
   elementId: string,
-  partId: string,
 ): Promise<string | null> {
-  const params = new URLSearchParams({
-    outputWidth: "300",
-    outputHeight: "300",
-    pixelSize: "0",
-    viewMatrix: ISO_VIEW_MATRIX,
-  });
   const res = await onshapeFetch(
     ctx,
-    `${API_BASE}/api/parts/d/${documentId}/${wv}/${wvid}/e/${elementId}/partid/${encodeURIComponent(partId)}/shadedviews?${params.toString()}`,
+    `${API_BASE}/api/metadata/d/${documentId}/${wv}/${wvid}/e/${elementId}`,
   );
   if (!res.ok) return null;
-  const json = (await res.json()) as { images?: string[] };
-  return json.images?.[0] ?? null;
-}
-
-// A shaded-view PNG as a Blob, for storage as the part thumbnail.
-export async function fetchPartPreview(
-  ctx: ActionCtx,
-  documentId: string,
-  wv: string,
-  wvid: string,
-  elementId: string,
-  partId: string,
-): Promise<Blob | null> {
-  const b64 = await fetchShadedViewBase64(
-    ctx,
-    documentId,
-    wv,
-    wvid,
-    elementId,
-    partId,
+  const json = (await res.json()) as {
+    properties?: Array<{ name?: string; value?: unknown }>;
+  };
+  const prop = (json.properties ?? []).find(
+    (p) => p.name === PART_NUMBER_PROPERTY,
   );
-  if (!b64) return null;
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: "image/png" });
+  return typeof prop?.value === "string" && prop.value.length > 0
+    ? prop.value
+    : null;
 }

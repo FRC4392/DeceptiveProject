@@ -74,14 +74,28 @@ export async function forceRefreshAccessToken(ctx: ActionCtx): Promise<string> {
   return refreshOnshapeToken(ctx, auth.refreshToken);
 }
 
-// Authenticated Onshape API fetch. On a 401 (cached token rejected) it forces
-// one refresh and retries, so a stale-but-not-expired token self-heals instead
-// of failing every call until the cached expiry passes.
+/**
+ * Authenticated Onshape API fetch — and the only way anything in this app is
+ * allowed to call Onshape, because this is where calls are counted against the
+ * team's yearly allowance. On a 401 (cached token rejected) it forces one
+ * refresh and retries, so a stale-but-not-expired token self-heals instead of
+ * failing every call until the cached expiry passes.
+ */
 export async function onshapeFetch(
   ctx: ActionCtx,
   url: string,
   init?: RequestInit,
 ): Promise<Response> {
+  const method = init?.method ?? "GET";
+  const record = async (res: Response) => {
+    // Onshape doesn't charge for failures, and `recordApiCall` applies that
+    // rule — so the meter the team sees is what they actually spent.
+    await ctx.runMutation(internal.onshape.recordApiCall, {
+      method,
+      endpoint: new URL(url).pathname,
+      status: res.status,
+    });
+  };
   const send = (token: string) =>
     fetch(url, {
       ...init,
@@ -92,9 +106,11 @@ export async function onshapeFetch(
       },
     });
   let res = await send(await getValidAccessToken(ctx));
+  await record(res);
   if (res.status === 401) {
     try {
       res = await send(await forceRefreshAccessToken(ctx));
+      await record(res);
     } catch (err) {
       // Refresh itself failed (e.g. the refresh token was invalidated by the
       // scope change) — surface the original 401 to the caller.

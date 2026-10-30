@@ -18,14 +18,15 @@ vi.mock("../../convex/_generated/api", () => ({
       storeCurrentUser: "auth.storeCurrentUser",
       syncUsersFromClerk: "auth.syncUsersFromClerk",
     },
-    boards: {
-      create: "boards.create",
-      list: "boards.list",
-      remove: "boards.remove",
+    todos: {
+      list: "todos.list",
+      listMine: "todos.listMine",
+      listTags: "todos.listTags",
     },
     competitions: {
       create: "competitions.create",
       list: "competitions.list",
+      next: "competitions.next",
       remove: "competitions.remove",
     },
     dashboard: { summary: "dashboard.summary" },
@@ -38,19 +39,26 @@ vi.mock("../../convex/_generated/api", () => ({
       removeRepoMapping: "github.removeRepoMapping",
     },
     onshape: {
-      assignDocumentNumber: "onshape.assignDocumentNumber",
+      mapDocument: "onshape.mapDocument",
       listDocuments: "onshape.listDocuments",
       removeDocument: "onshape.removeDocument",
     },
     onshapeOAuth: { connectionStatus: "onshapeOAuth.connectionStatus" },
-    parts: { costRollup: "parts.costRollup" },
-    projects: {
-      create: "projects.create",
-      list: "projects.list",
-      remove: "projects.remove",
-      update: "projects.update",
+    intake: { pendingCount: "intake.pendingCount", list: "intake.list" },
+    parts: {
+      list: "parts.list",
+      listMine: "parts.listMine",
+      headsUp: "parts.headsUp",
+      search: "parts.search",
     },
-    tasks: { listOverdue: "tasks.listOverdue" },
+    seasons: { active: "seasons.active" },
+    settings: { budget: "settings.budget" },
+    shop: {
+      listMachines: "shop.listMachines",
+      listProcessTypes: "shop.listProcessTypes",
+      myTraining: "shop.myTraining",
+    },
+    subsystems: { list: "subsystems.list", progress: "subsystems.progress" },
     users: { list: "users.list" },
   },
 }));
@@ -90,22 +98,48 @@ vi.mock("convex/react", () => ({
   useQuery: (ref: string) => {
     switch (ref) {
       case "auth.currentUser":
-        return { id: "user_1", email: "mentor@example.com", role: "mentor" };
-      case "boards.list":
+        return {
+          id: "user_1",
+          email: "mentor@example.com",
+          name: "Sam Mentor",
+          role: "mentor",
+        };
+      case "todos.list":
+      case "todos.listMine":
+      case "todos.listTags":
       case "competitions.list":
       case "github.listRepoMappings":
       case "onshape.listDocuments":
-      case "projects.list":
-      case "tasks.listOverdue":
       case "users.list":
+      case "intake.list":
+      case "parts.list":
+      case "parts.listMine":
+      case "parts.headsUp":
+      case "parts.search":
+      case "shop.listMachines":
+      case "shop.listProcessTypes":
+      case "shop.myTraining":
+      case "subsystems.list":
+      case "subsystems.progress":
         return [];
+      case "seasons.active":
+        return {
+          _id: "season_1",
+          _creationTime: 0,
+          year: "27",
+          name: "2027 robot",
+          active: true,
+        };
+      case "competitions.next":
+        return null;
+      case "intake.pendingCount":
+        return 0;
       case "dashboard.summary":
         return {
-          doneTasks: 2,
-          totalTasks: 4,
-          overdueCount: 1,
+          doneTodos: 2,
+          totalTodos: 4,
+          claimedByMe: 1,
           nextCompetition: null,
-          subsystems: [],
         };
       case "github.config":
         return { webhookConfigured: false, tokenConfigured: false, repos: [] };
@@ -113,13 +147,14 @@ vi.mock("convex/react", () => ({
         return { open: 0, closed: 0, prs: 0, total: 0 };
       case "onshapeOAuth.connectionStatus":
         return { connected: false };
-      case "parts.costRollup":
+      case "settings.budget":
         return {
-          total: 0,
-          partsTotal: 0,
-          inventoryTotal: 0,
-          cotsTotal: 0,
-          partsMissingCost: 0,
+          used: 0,
+          limit: 2500,
+          remaining: 2500,
+          mode: "normal",
+          forced: false,
+          renewalDate: null,
         };
       default:
         return undefined;
@@ -153,7 +188,7 @@ describe("app smoke routes", () => {
     expect(
       screen.getByRole("heading", { name: "Dashboard" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("2 of 4 tasks done")).toBeInTheDocument();
+    expect(screen.getByText("2 / 4")).toBeInTheDocument();
     expect(
       screen.getAllByRole("link", { name: /Deceivers Robotics/ }).length,
     ).toBeGreaterThan(0);
@@ -187,23 +222,80 @@ describe("app smoke routes", () => {
     );
   });
 
-  it("redirects signed-in users away from the login screen", () => {
+  it("redirects signed-in users to the parts board", () => {
     renderAt("/login");
 
     expect(
-      screen.getByRole("heading", { name: "Dashboard" }),
+      screen.getByRole("heading", { name: "Robot parts" }),
     ).toBeInTheDocument();
   });
 
-  it("navigates through the sidebar drawer to boards", async () => {
+  it("opens the parts board with its six stage columns", () => {
+    renderAt("/parts");
+
+    expect(
+      screen.getByRole("heading", { name: "Robot parts" }),
+    ).toBeInTheDocument();
+    for (const label of [
+      "1. In design",
+      "2. Needs drawing",
+      "3. Ready to make",
+      "4. Ready to finish",
+      "5. Ready to assemble",
+      "6. Assembled",
+    ]) {
+      expect(
+        screen.getAllByRole("heading", { name: label }).length,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("lays the sidebar out in its sections, in order", () => {
+    const { container } = renderAt("/parts");
+    const nav = container.querySelector("nav")!;
+
+    const headings = Array.from(nav.querySelectorAll("p")).map(
+      (el) => el.textContent,
+    );
+    expect(headings).toEqual(["Parts", "To Do", "Software", "Settings"]);
+
+    const links = Array.from(nav.querySelectorAll("a")).map(
+      (el) =>
+        // The badge count rides inside the link, so read the label span only.
+        el.querySelector("span")?.textContent,
+    );
+    expect(links).toEqual([
+      "Dashboard",
+      "Subsystems",
+      "Parts Board",
+      "My Parts",
+      "Manufacturing",
+      "New from Onshape",
+      "To-do List",
+      "My To-dos",
+      "Issues",
+      "Admin",
+      "Tracker Settings",
+    ]);
+  });
+
+  it("gives the shop screen a part-number box instead of a scanner", () => {
+    renderAt("/manufacturing");
+
+    expect(screen.getByLabelText("Part number")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find" })).toBeInTheDocument();
+  });
+
+  it("navigates through the sidebar drawer to the to-do list", async () => {
     const user = userEvent.setup();
     renderAt("/dashboard");
 
     await user.click(screen.getByRole("button", { name: "Open menu" }));
-    await user.click(screen.getByRole("link", { name: "Boards" }));
+    await user.click(screen.getByRole("link", { name: "To-do List" }));
 
-    expect(screen.getByRole("heading", { name: "Boards" })).toBeInTheDocument();
-    expect(screen.getByText(/No boards yet/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "To-do list" }),
+    ).toBeInTheDocument();
   });
 
   it("shows mentor-only admin navigation and missing integration URL states", () => {

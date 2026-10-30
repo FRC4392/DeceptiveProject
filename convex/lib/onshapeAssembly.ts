@@ -99,3 +99,48 @@ export function aggregateAssemblyParts(
 
   return Array.from(agg.values());
 }
+
+/** A sub-assembly placed directly inside the assembly that was synced. */
+export type AssemblyChild = {
+  elementId: string;
+  documentId: string;
+  name: string;
+  /** How many times it's placed at the root. */
+  quantity: number;
+};
+
+/**
+ * The sub-assemblies placed directly in this assembly — one level, not the
+ * whole tree. `aggregateAssemblyParts` deliberately flattens sub-assemblies
+ * away to count leaf parts; this is the other half, and the two are kept
+ * separate so neither has to compromise.
+ *
+ * Direct instances are the right source here rather than occurrences: a part
+ * nested inside a child belongs to that child, and walking occurrences would
+ * list it under every ancestor.
+ */
+export function rootSubAssemblies(
+  def: AssemblyDefinition,
+  assemblyDocumentId: string,
+): AssemblyChild[] {
+  const byKey = new Map<string, AssemblyChild>();
+  for (const instance of def.rootAssembly?.instances ?? []) {
+    if ((instance.type ?? "").toLowerCase() !== "assembly") continue;
+    if (instance.suppressed) continue;
+    const { elementId, documentId } = instance;
+    if (!elementId) continue;
+    const key = `${documentId ?? assemblyDocumentId}:${elementId}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.quantity += 1;
+      continue;
+    }
+    byKey.set(key, {
+      elementId,
+      documentId: documentId ?? assemblyDocumentId,
+      name: stripInstanceSuffix(instance.name ?? "Sub-assembly"),
+      quantity: 1,
+    });
+  }
+  return Array.from(byKey.values());
+}

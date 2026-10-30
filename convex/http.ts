@@ -5,7 +5,6 @@ import {
   oauthCallback,
   ext,
   panel,
-  previewSelected,
   syncSelected,
 } from "./onshapeOAuth";
 import { githubWebhook } from "./github";
@@ -26,14 +25,9 @@ http.route({
   handler: oauthCallback,
 });
 http.route({ path: "/onshape/ext", method: "GET", handler: ext });
-// Right-panel app: GET renders the part picker, POST /preview-selected returns
-// a read-only preview, POST /sync-selected commits the selected parts.
+// Right-panel app: GET renders the part picker, POST /sync-selected sends the
+// selected parts to the tracker's "New from Onshape" queue.
 http.route({ path: "/onshape/panel", method: "GET", handler: panel });
-http.route({
-  path: "/onshape/preview-selected",
-  method: "POST",
-  handler: previewSelected,
-});
 http.route({
   path: "/onshape/sync-selected",
   method: "POST",

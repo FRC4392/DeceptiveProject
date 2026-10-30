@@ -4,16 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { useMutation } from "convex/react";
 import { getFunctionName } from "convex/server";
 import { IssueFormDialog } from "./IssueFormDialog";
-import { useActiveProject } from "@/lib/project";
 import { api } from "../../../convex/_generated/api";
 
 vi.mock("convex/react", () => ({
   useMutation: vi.fn(),
 }));
 
-vi.mock("@/lib/project", () => ({
-  useActiveProject: vi.fn(),
-}));
 
 const createIssue = vi.fn().mockResolvedValue(undefined);
 const updateIssue = vi.fn().mockResolvedValue(undefined);
@@ -35,11 +31,6 @@ beforeEach(() => {
     }
     if (name === getFunctionName(api.github.update)) return updateIssue as never;
     return vi.fn() as never;
-  });
-  vi.mocked(useActiveProject).mockReturnValue({
-    activeProjectId: null,
-    setActiveProjectId: vi.fn(),
-    projects: [],
   });
 });
 

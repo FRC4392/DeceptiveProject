@@ -10,8 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useIsMentor } from "@/lib/roles";
 import { useRoster } from "@/lib/users";
-import { formatDate, fromDateInputValue } from "@/lib/pm";
-import { ProjectsAdmin } from "@/components/pm/ProjectsAdmin";
+import { formatDate, fromDateInputValue } from "@/lib/dates";
 import { TrashIcon } from "@radix-ui/react-icons";
 
 export function AdminPage() {
@@ -37,7 +36,6 @@ export function AdminPage() {
         </p>
       </div>
 
-      <ProjectsAdmin />
       <CompetitionsCard />
       <RosterCard />
       <IntegrationsCard />
@@ -205,6 +203,13 @@ function IntegrationsCard() {
         <CardTitle className="text-base">Integrations</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2 text-sm text-muted-foreground">
+        <Link
+          to="/admin/tracker"
+          className="flex items-center justify-between transition-colors hover:text-foreground"
+        >
+          <span>Part tracker — season, subsystems, machines, people</span>
+          <Badge variant="secondary">Configure →</Badge>
+        </Link>
         <Link
           to="/admin/onshape"
           className="flex items-center justify-between transition-colors hover:text-foreground"

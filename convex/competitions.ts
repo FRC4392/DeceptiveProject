@@ -22,6 +22,19 @@ export const list = query({
   },
 });
 
+/** The next event still ahead of us — the deadline in the sidebar. */
+export const next = query({
+  args: {},
+  returns: v.union(vCompetition, v.null()),
+  handler: async (ctx) => {
+    const upcoming = await ctx.db
+      .query("competitions")
+      .withIndex("by_date", (q) => q.gte("date", Date.now()))
+      .take(1);
+    return upcoming[0] ?? null;
+  },
+});
+
 export const create = mutation({
   args: { name: v.string(), date: v.number() },
   returns: v.id("competitions"),

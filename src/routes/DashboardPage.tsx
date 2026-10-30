@@ -2,21 +2,16 @@ import { Link } from "react-router-dom";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { StatusBadge } from "@/components/pm/TaskMeta";
-import { daysUntil, formatDate } from "@/lib/pm";
-import { formatCost } from "@/lib/parts";
-import { useProjectArg } from "@/lib/project";
+import { daysUntil, formatDate } from "@/lib/dates";
 
 function pct(done: number, total: number): number {
   return total === 0 ? 0 : Math.round((done / total) * 100);
 }
 
 export function DashboardPage() {
-  const projectArg = useProjectArg();
-  const summary = useQuery(api.dashboard.summary, projectArg);
-  const overdue = useQuery(api.tasks.listOverdue, projectArg);
-  const cost = useQuery(api.parts.costRollup, projectArg);
-  const issues = useQuery(api.github.stats, projectArg);
+  const summary = useQuery(api.dashboard.summary, {});
+  const progress = useQuery(api.subsystems.progress, {});
+  const issues = useQuery(api.github.stats, {});
 
   return (
     <div className="space-y-6">
@@ -28,64 +23,76 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card accent>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Overall progress
-            </CardTitle>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">To-do list</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="brand-title text-4xl">
-              {summary ? pct(summary.doneTasks, summary.totalTasks) : "—"}%
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {summary
-                ? `${summary.doneTasks} of ${summary.totalTasks} tasks done`
-                : "Loading…"}
-            </p>
+            {summary === undefined ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (
+              <>
+                <div className="brand-title text-4xl">
+                  {summary.doneTodos} / {summary.totalTodos}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  done · {pct(summary.doneTodos, summary.totalTodos)}%
+                </p>
+                <Link
+                  to="/todos"
+                  className="mt-2 inline-block text-sm text-primary underline-offset-4 hover:underline"
+                >
+                  Open the list →
+                </Link>
+              </>
+            )}
           </CardContent>
         </Card>
 
-        <Card accent>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Overdue
-            </CardTitle>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">On you</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="brand-title text-4xl text-danger">
-
-              {summary ? summary.overdueCount : "—"}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              tasks past their due date
-            </p>
+            {summary === undefined ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (
+              <>
+                <div className="brand-title text-4xl">
+                  {summary.claimedByMe}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  to-do{summary.claimedByMe === 1 ? "" : "s"} you've picked up
+                </p>
+                <Link
+                  to="/my-todos"
+                  className="mt-2 inline-block text-sm text-primary underline-offset-4 hover:underline"
+                >
+                  See them →
+                </Link>
+              </>
+            )}
           </CardContent>
         </Card>
 
-        <Card accent>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Next competition
-            </CardTitle>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Next event</CardTitle>
           </CardHeader>
           <CardContent>
             {summary?.nextCompetition ? (
               <>
                 <div className="brand-title text-4xl">
-                  {Math.max(daysUntil(summary.nextCompetition.date), 0)}
-                  <span className="ml-1 font-sans text-base font-normal normal-case not-italic text-muted-foreground">
-                    days
-                  </span>
+                  {daysUntil(summary.nextCompetition.date)}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {summary.nextCompetition.name} ·{" "}
+                  days until {summary.nextCompetition.name} ·{" "}
                   {formatDate(summary.nextCompetition.date)}
                 </p>
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
-                No competition scheduled.
+                No events on the calendar.
               </p>
             )}
           </CardContent>
@@ -94,135 +101,71 @@ export function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Progress by subsystem</CardTitle>
+          <CardTitle className="text-base">Robot parts</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {summary === undefined ? (
+        <CardContent className="space-y-3">
+          {progress === undefined ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : summary.subsystems.length === 0 ? (
+          ) : progress.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No boards yet. Create a board to start tracking progress.
+              No subsystems set up yet.
             </p>
-          ) : (
-            summary.subsystems.map((s) => {
-              const percent = pct(s.done, s.total);
-              return (
-                <div key={s.subsystem} className="space-y-1">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium capitalize">
-                      {s.subsystem}
-                    </span>
-                    <span className="text-muted-foreground">
-                      {s.done}/{s.total} · {percent}%
-                    </span>
-                  </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all"
-                      style={{ width: `${percent}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Software issues</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {issues === undefined ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : issues.total === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No issues tracked yet.{" "}
-              <Link to="/issues" className="underline hover:text-foreground">
-                Open the issue tracker →
-              </Link>
-            </p>
-          ) : (
-            <div className="flex flex-wrap items-end gap-6">
-              <div>
-                <div className="brand-title text-4xl">{issues.open}</div>
-                <p className="text-xs text-muted-foreground">open</p>
-              </div>
-              <div>
-                <div className="brand-title text-4xl text-muted-foreground">
-                  {issues.closed}
-                </div>
-                <p className="text-xs text-muted-foreground">closed</p>
-              </div>
-              <div>
-                <div className="brand-title text-4xl">{issues.prs}</div>
-                <p className="text-xs text-muted-foreground">pull requests</p>
-              </div>
-              <Link
-                to="/issues"
-                className="ml-auto text-sm text-primary hover:underline"
-              >
-                View all →
-              </Link>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Cost estimate</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1">
-          {cost === undefined ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
           ) : (
             <>
               <div className="brand-title text-4xl">
-                {formatCost(cost.total)}
+                {progress.reduce((sum, row) => sum + row.ready, 0)} /{" "}
+                {progress.reduce((sum, row) => sum + row.total, 0)}
               </div>
               <p className="text-xs text-muted-foreground">
-                Parts {formatCost(cost.partsTotal)} · Inventory{" "}
-                {formatCost(cost.inventoryTotal)} · COTS{" "}
-                {formatCost(cost.cotsTotal)}
+                ready or on the robot
               </p>
-              <p className="text-xs text-muted-foreground">
-                Estimate only — {cost.partsMissingCost} part
-                {cost.partsMissingCost === 1 ? "" : "s"} missing a cost.
-              </p>
+              <div className="space-y-1.5">
+                {progress.map((row) => (
+                  <div key={row.subsystemId} className="text-sm">
+                    <div className="flex justify-between gap-2">
+                      <span>{row.name}</span>
+                      <span className="text-muted-foreground">
+                        {row.installed
+                          ? "On the robot"
+                          : `${row.ready} / ${row.total}`}
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 w-full rounded-full bg-muted">
+                      <div
+                        className="h-1.5 rounded-full bg-primary"
+                        style={{ width: `${pct(row.ready, row.total)}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <Link
+                to="/parts"
+                className="inline-block text-sm text-primary underline-offset-4 hover:underline"
+              >
+                Open the parts board →
+              </Link>
             </>
           )}
         </CardContent>
       </Card>
 
-      {overdue && overdue.length > 0 && (
+      {issues && issues.total > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Overdue tasks</CardTitle>
+            <CardTitle className="text-base">Software</CardTitle>
           </CardHeader>
-          <CardContent>
-            <ul className="divide-y">
-              {overdue.map((t) => (
-                <li
-                  key={t._id}
-                  className="flex items-center justify-between gap-2 py-2"
-                >
-                  <Link
-                    to={`/tasks/${t._id}`}
-                    className="text-sm font-medium hover:underline"
-                  >
-                    {t.title}
-                  </Link>
-                  <div className="flex items-center gap-3">
-                    <StatusBadge status={t.status} />
-                    <span className="text-xs font-medium text-danger">
-                      {formatDate(t.dueDate)}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
+          <CardContent className="space-y-1">
+            <div className="brand-title text-4xl">{issues.open}</div>
+            <p className="text-xs text-muted-foreground">
+              open · {issues.closed} closed · {issues.prs} pull requests
+            </p>
+            <Link
+              to="/issues"
+              className="inline-block text-sm text-primary underline-offset-4 hover:underline"
+            >
+              Open issues →
+            </Link>
           </CardContent>
         </Card>
       )}

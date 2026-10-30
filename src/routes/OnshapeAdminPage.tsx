@@ -25,26 +25,25 @@ import { Link } from "react-router-dom";
 import { TrashIcon } from "@radix-ui/react-icons";
 import type { Id } from "../../convex/_generated/dataModel";
 
-const NO_PROJECT = "__none__";
+const NO_SUBSYSTEM = "__none__";
 
 export function OnshapeAdminPage() {
   const isMentor = useIsMentor();
   const documents = useQuery(api.onshape.listDocuments);
-  const projects = useQuery(api.projects.list, { includeArchived: true });
-  const assign = useMutation(api.onshape.assignDocumentNumber);
+  const subsystems = useQuery(api.subsystems.list, {});
+  const mapDocument = useMutation(api.onshape.mapDocument);
   const removeDoc = useMutation(api.onshape.removeDocument);
   const connection = useQuery(api.onshapeOAuth.connectionStatus);
   const siteUrl = (import.meta.env.VITE_CONVEX_SITE_URL as string | undefined)
     ?.trim()
     .replace(/\/$/, "");
 
-  const projectName = (id?: Id<"projects">) =>
-    id ? (projects?.find((p) => p._id === id)?.name ?? "—") : "—";
+  const subsystemName = (id?: Id<"subsystems">) =>
+    id ? (subsystems?.find((s) => s._id === id)?.name ?? "—") : "—";
 
   const [documentId, setDocumentId] = useState("");
-  const [documentNumber, setDocumentNumber] = useState("");
   const [name, setName] = useState("");
-  const [projectSel, setProjectSel] = useState<string>(NO_PROJECT);
+  const [subsystemSel, setSubsystemSel] = useState<string>(NO_SUBSYSTEM);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -61,27 +60,23 @@ export function OnshapeAdminPage() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!documentId.trim() || !documentNumber.trim()) return;
+    if (!documentId.trim()) return;
     setSaving(true);
     try {
-      const res = await assign({
+      await mapDocument({
         onshapeDocumentId: documentId.trim(),
-        documentNumber: documentNumber.trim(),
         name: name.trim() || undefined,
-        projectId:
-          projectSel === NO_PROJECT
-            ? undefined
-            : (projectSel as Id<"projects">),
+        subsystemId:
+          subsystemSel === NO_SUBSYSTEM
+            ? null
+            : (subsystemSel as Id<"subsystems">),
       });
       setNote(
-        res.backfilled > 0
-          ? `Assigned. Numbered ${res.backfilled} existing part${res.backfilled === 1 ? "" : "s"}.`
-          : "Assigned.",
+        "Mapped. Parts synced from this document land in that subsystem.",
       );
       setDocumentId("");
-      setDocumentNumber("");
       setName("");
-      setProjectSel(NO_PROJECT);
+      setSubsystemSel(NO_SUBSYSTEM);
     } finally {
       setSaving(false);
     }
@@ -92,9 +87,9 @@ export function OnshapeAdminPage() {
       <div>
         <h1 className="brand-title text-3xl">Onshape</h1>
         <p className="text-sm text-muted-foreground">
-          Map Onshape documents to 2-digit numbers. Part numbers are generated
-          as <span className="font-mono">4392-YY-DDSSSS</span> (DD = document,
-          SSSS = sequence).
+          Say which subsystem each Onshape document holds the CAD for, so synced
+          parts land in the right place. Part numbers themselves come from the
+          tracker: <span className="font-mono">{"{YY}-{SUB}-{NNN}"}</span>.
         </p>
       </div>
 
@@ -153,10 +148,10 @@ export function OnshapeAdminPage() {
             <span className="font-medium">Assemblies</span> — open it in an
             assembly to sync its parts with the correct{" "}
             <span className="font-medium">quantities</span> (instance counts).
-            Pick the parts you want, review a preview (rendered image + the part
-            number each will get), then sync — it adopts existing Onshape part
-            numbers and writes generated ones back (needs the app’s{" "}
-            <span className="font-mono">OAuth2Write</span> scope).
+            Pick the parts you want and send them — they arrive under{" "}
+            <span className="font-medium">New from Onshape</span> for a design
+            lead to wave through. Nothing is written back into Onshape, so a
+            sync only ever costs reads.
           </p>
           <code className="block break-all rounded bg-muted px-3 py-2 font-mono text-xs">
             {siteUrl ?? "https://<your-convex-deployment>.convex.site"}
@@ -183,14 +178,17 @@ export function OnshapeAdminPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Assign a document number</CardTitle>
+          <CardTitle className="text-base">Map a document</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="mb-3 text-sm text-muted-foreground">
-            Map an Onshape document to a project. Manage the projects themselves
-            (tags, numbering) in{" "}
-            <Link to="/admin" className="underline hover:text-foreground">
-              Admin → Projects
+            Parts synced from this document land in the subsystem you pick.
+            Subsystems themselves live in{" "}
+            <Link
+              to="/admin/tracker"
+              className="underline hover:text-foreground"
+            >
+              tracker settings
             </Link>
             .
           </p>
@@ -207,15 +205,6 @@ export function OnshapeAdminPage() {
                 placeholder="from the Onshape document URL"
               />
             </div>
-            <div className="w-28 space-y-1.5">
-              <Label htmlFor="doc-num">Number</Label>
-              <Input
-                id="doc-num"
-                value={documentNumber}
-                onChange={(e) => setDocumentNumber(e.target.value)}
-                placeholder="e.g. 02"
-              />
-            </div>
             <div className="grow space-y-1.5">
               <Label htmlFor="doc-name">Name (optional)</Label>
               <Input
@@ -226,18 +215,18 @@ export function OnshapeAdminPage() {
               />
             </div>
             <div className="w-44 space-y-1.5">
-              <Label>Project</Label>
-              <Select value={projectSel} onValueChange={setProjectSel}>
+              <Label>Subsystem</Label>
+              <Select value={subsystemSel} onValueChange={setSubsystemSel}>
                 <SelectTrigger>
-                  <SelectValue placeholder="No project" />
+                  <SelectValue placeholder="No subsystem" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NO_PROJECT}>No project</SelectItem>
-                  {(projects ?? []).map((p) => (
-                    <SelectItem key={p._id} value={p._id}>
-                      {p.name}
+                  <SelectItem value={NO_SUBSYSTEM}>No subsystem</SelectItem>
+                  {(subsystems ?? []).map((sub) => (
+                    <SelectItem key={sub._id} value={sub._id}>
+                      {sub.name}
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground">
-                        {p.tag}
+                        {sub.code}
                       </span>
                     </SelectItem>
                   ))}
@@ -245,7 +234,7 @@ export function OnshapeAdminPage() {
               </Select>
             </div>
             <Button type="submit" disabled={saving}>
-              Assign
+              Map it
             </Button>
           </form>
           {note && <p className="mt-3 text-sm text-muted-foreground">{note}</p>}
@@ -267,9 +256,8 @@ export function OnshapeAdminPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Number</TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead>Project</TableHead>
+                  <TableHead>Subsystem</TableHead>
                   <TableHead>Onshape document</TableHead>
                   <TableHead />
                 </TableRow>
@@ -277,12 +265,9 @@ export function OnshapeAdminPage() {
               <TableBody>
                 {documents.map((d) => (
                   <TableRow key={d._id}>
-                    <TableCell className="font-mono">
-                      {d.documentNumber}
-                    </TableCell>
                     <TableCell>{d.name}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {projectName(d.projectId)}
+                      {subsystemName(d.subsystemId)}
                     </TableCell>
                     <TableCell>
                       <a

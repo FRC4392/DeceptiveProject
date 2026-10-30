@@ -2,11 +2,14 @@ import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 
+import type { Role } from "@/lib/roles";
+
 export type RosterEntry = {
   authId: string;
   name: string;
   email: string;
-  role?: "mentor" | "student";
+  /** The role the app acts on: a mentor-assigned one wins over Clerk's. */
+  role: Role;
 };
 
 /** The full team roster (bounded, small set). */
@@ -16,7 +19,7 @@ export function useRoster(): RosterEntry[] | undefined {
     authId: u.authId,
     name: u.name || u.email,
     email: u.email,
-    role: u.role,
+    role: u.appRole ?? (u.role === "mentor" ? "mentor" : "student"),
   }));
 }
 

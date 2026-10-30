@@ -12,10 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { PriorityBadge } from "@/components/pm/TaskMeta";
+import { PriorityBadge } from "@/components/pm/PriorityBadge";
 import { IssueFormDialog } from "@/components/pm/IssueFormDialog";
 import { issueRef, issueStateMeta, type IssueState } from "@/lib/github";
-import { useProjectArg } from "@/lib/project";
 import { cn } from "@/lib/utils";
 import { GitHubLogoIcon } from "@radix-ui/react-icons";
 
@@ -25,9 +24,7 @@ type KindFilter = "all" | "issues" | "prs";
 export function IssuesPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>("open");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
-  const projectArg = useProjectArg();
   const issues = useQuery(api.github.list, {
-    ...projectArg,
     state: stateFilter === "all" ? undefined : stateFilter,
   });
 
@@ -45,8 +42,8 @@ export function IssuesPage() {
         <div>
           <h1 className="brand-title text-3xl">Issues</h1>
           <p className="text-sm text-muted-foreground">
-            Software bugs and GitHub issues/PRs — each mirrors into a task on the
-            Software board.
+            Software bugs and GitHub issues/PRs — each mirrors into a task on
+            the Software board.
           </p>
         </div>
         <IssueFormDialog trigger={<Button>New issue</Button>} />

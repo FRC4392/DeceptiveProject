@@ -1,42 +1,22 @@
 import { useState } from "react";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import type { Id } from "../../convex/_generated/dataModel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { useIsMentor } from "@/lib/roles";
 import { CheckCircledIcon, CrossCircledIcon } from "@radix-ui/react-icons";
-
-const NO_PROJECT = "__none__";
 
 export function GitHubAdminPage() {
   const isMentor = useIsMentor();
   const config = useQuery(api.github.config);
-  const projects = useQuery(api.projects.list, { includeArchived: true });
   const importIssues = useAction(api.github.importIssues);
   const siteUrl = (import.meta.env.VITE_CONVEX_SITE_URL as string | undefined)
     ?.trim()
     .replace(/\/$/, "");
 
   const [repo, setRepo] = useState("");
-  const [importProject, setImportProject] = useState<string>(NO_PROJECT);
   const [importing, setImporting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -57,20 +37,13 @@ export function GitHubAdminPage() {
     setImporting(true);
     setNote(null);
     try {
-      const res = await importIssues({
-        repo: repo.trim(),
-        projectId:
-          importProject === NO_PROJECT
-            ? undefined
-            : (importProject as Id<"projects">),
-      });
+      const res = await importIssues({ repo: repo.trim() });
       setNote(
         `Imported ${res.imported} issue${res.imported === 1 ? "" : "s"}/PR${
           res.imported === 1 ? "" : "s"
         }.`,
       );
       setRepo("");
-      setImportProject(NO_PROJECT);
     } catch (err) {
       setNote(err instanceof Error ? err.message : "Import failed.");
     } finally {
@@ -167,25 +140,6 @@ export function GitHubAdminPage() {
                 placeholder="owner/name (e.g. deceivers/robot-2026)"
               />
             </div>
-            <div className="w-44 space-y-1.5">
-              <Label>Project</Label>
-              <Select value={importProject} onValueChange={setImportProject}>
-                <SelectTrigger>
-                  <SelectValue placeholder="No project" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_PROJECT}>No project</SelectItem>
-                  {(projects ?? []).map((p) => (
-                    <SelectItem key={p._id} value={p._id}>
-                      {p.name}
-                      <span className="ml-1.5 font-mono text-xs text-muted-foreground">
-                        {p.tag}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
             <Button
               type="submit"
               disabled={importing || !config?.tokenConfigured}
@@ -201,104 +155,7 @@ export function GitHubAdminPage() {
           {note && <p className="text-sm text-muted-foreground">{note}</p>}
         </CardContent>
       </Card>
-
-      <LinkedReposCard repos={config?.repos ?? []} />
     </div>
-  );
-}
-
-function LinkedReposCard({ repos }: { repos: string[] }) {
-  const projects = useQuery(api.projects.list, { includeArchived: true });
-  const mappings = useQuery(api.github.listRepoMappings);
-  const setRepoProject = useMutation(api.github.setRepoProject);
-  const removeMapping = useMutation(api.github.removeRepoMapping);
-
-  // Union of repos known from synced issues and repos with an explicit project
-  // mapping, so the list is a complete picture — mirroring Onshape's "Known
-  // documents" table.
-  const mappingByRepo = new Map(mappings?.map((m) => [m.repo, m]) ?? []);
-  const linked = [
-    ...new Set([...repos, ...(mappings?.map((m) => m.repo) ?? [])]),
-  ].sort((a, b) => a.localeCompare(b));
-
-  async function onProject(repo: string, value: string) {
-    const mapping = mappingByRepo.get(repo);
-    if (value === NO_PROJECT) {
-      if (mapping) await removeMapping({ id: mapping._id });
-    } else {
-      await setRepoProject({ repo, projectId: value as Id<"projects"> });
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Linked repositories</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="mb-3 text-sm text-muted-foreground">
-          Repositories syncing into the tracker and the project each maps to.
-          Assigning a project backfills that repo's unassigned issues and is
-          inherited by new synced issues; a per-issue choice always wins.
-        </p>
-        {mappings === undefined ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : linked.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No repositories linked yet. Import one above to get started.
-          </p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Repository</TableHead>
-                <TableHead>Project</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {linked.map((repo) => {
-                const mapping = mappingByRepo.get(repo);
-                return (
-                  <TableRow key={repo}>
-                    <TableCell>
-                      <a
-                        href={`https://github.com/${repo}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-mono text-xs text-primary hover:underline"
-                      >
-                        {repo}
-                      </a>
-                    </TableCell>
-                    <TableCell>
-                      <Select
-                        value={mapping?.projectId ?? NO_PROJECT}
-                        onValueChange={(v) => void onProject(repo, v)}
-                      >
-                        <SelectTrigger className="w-52">
-                          <SelectValue placeholder="No project" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={NO_PROJECT}>No project</SelectItem>
-                          {(projects ?? []).map((p) => (
-                            <SelectItem key={p._id} value={p._id}>
-                              {p.name}
-                              <span className="ml-1.5 font-mono text-xs text-muted-foreground">
-                                {p.tag}
-                              </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 

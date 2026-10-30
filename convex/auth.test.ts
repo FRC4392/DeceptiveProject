@@ -110,10 +110,7 @@ describe("Clerk auth", () => {
 
     await mentor.mutation(api.auth.storeCurrentUser);
     await expect(
-      mentor.mutation(api.boards.create, {
-        name: "Controls",
-        subsystem: "software",
-      }),
+      mentor.mutation(api.todos.createTag, { name: "Software" }),
     ).resolves.toBeTruthy();
 
     const student = t.withIdentity({
@@ -125,50 +122,37 @@ describe("Clerk auth", () => {
     });
     await student.mutation(api.auth.storeCurrentUser);
     await expect(
-      student.mutation(api.boards.create, {
-        name: "Drive",
-        subsystem: "mechanical",
-      }),
+      student.mutation(api.todos.createTag, { name: "Drive" }),
     ).rejects.toThrow("mentor role");
   });
 
-  test("My Tasks uses Clerk user ids", async () => {
+  test("My to-dos uses Clerk user ids", async () => {
     const t = convexTest(schema, modules);
     const user = t.withIdentity(asClerkUser("student"));
-    const boardId = await t.run((ctx) =>
-      ctx.db.insert("boards", {
-        name: "Software",
-        subsystem: "software",
-        order: 0,
-      }),
+    const seasonId = await t.run((ctx) =>
+      ctx.db.insert("seasons", { year: "27", name: "2027", active: true }),
     );
     await t.run(async (ctx) => {
-      await ctx.db.insert("tasks", {
-        title: "Assigned",
-        boardId,
-        assigneeIds: ["user_clerk_1"],
-        status: "todo",
+      await ctx.db.insert("todos", {
+        seasonId,
+        title: "Mine",
+        tagIds: [],
         priority: "medium",
-        labels: [],
-        dependsOn: [],
-        source: "manual",
+        claimedByUserId: "user_clerk_1",
       });
-      await ctx.db.insert("tasks", {
-        title: "Other",
-        boardId,
-        assigneeIds: ["another_user"],
-        status: "todo",
+      await ctx.db.insert("todos", {
+        seasonId,
+        title: "Someone else's",
+        tagIds: [],
         priority: "medium",
-        labels: [],
-        dependsOn: [],
-        source: "manual",
+        claimedByUserId: "another_user",
       });
     });
 
-    const mine = await user.query(api.tasks.listMine, {});
+    const mine = await user.query(api.todos.listMine, {});
 
     expect(mine).toHaveLength(1);
-    expect(mine[0].title).toBe("Assigned");
+    expect(mine[0].title).toBe("Mine");
   });
 
   test("Clerk webhook upserts and deletes local users", async () => {

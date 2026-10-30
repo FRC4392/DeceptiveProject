@@ -14,12 +14,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PriorityBadge } from "@/components/pm/TaskMeta";
+import { PriorityBadge } from "@/components/pm/PriorityBadge";
 import { IssueFormDialog } from "@/components/pm/IssueFormDialog";
 import { useIsMentor } from "@/lib/roles";
 import { initials, useRosterMap } from "@/lib/users";
-import { useActiveProject } from "@/lib/project";
-import { PRIORITIES, formatDateTime, type TaskPriority } from "@/lib/pm";
+import { PRIORITIES, type Priority } from "@/lib/priority";
+import { formatDateTime } from "@/lib/dates";
 import { issueRef, issueStateMeta } from "@/lib/github";
 import { cn } from "@/lib/utils";
 import {
@@ -28,8 +28,6 @@ import {
   Pencil1Icon,
   TrashIcon,
 } from "@radix-ui/react-icons";
-
-const NO_PROJECT = "__none__";
 
 export function IssueDetailPage() {
   const { issueId } = useParams<{ issueId: string }>();
@@ -56,7 +54,8 @@ export function IssueDetailPage() {
   const stateMeta = issueStateMeta(issue.state);
 
   async function handleDelete() {
-    if (!confirm(`Delete "${issue!.title}"? This removes its task too.`)) return;
+    if (!confirm(`Delete "${issue!.title}"? This removes its task too.`))
+      return;
     await removeIssue({ id });
     void navigate("/issues");
   }
@@ -143,7 +142,6 @@ export function IssueDetailPage() {
           <div className="space-y-4 rounded-lg border p-4">
             <StateControl issue={issue} />
             <PriorityControl issue={issue} />
-            <ProjectControl issue={issue} />
             {issue.repo && (
               <MetaRow label="Repo">
                 <span className="font-mono text-xs">{issueRef(issue)}</span>
@@ -170,16 +168,6 @@ export function IssueDetailPage() {
                     </Badge>
                   ))}
                 </div>
-              </MetaRow>
-            )}
-            {issue.linkedTaskId && (
-              <MetaRow label="Task">
-                <Link
-                  to={`/tasks/${issue.linkedTaskId}`}
-                  className="text-sm text-primary hover:underline"
-                >
-                  Open task →
-                </Link>
               </MetaRow>
             )}
           </div>
@@ -252,7 +240,7 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
         <Select
           value={issue.priority}
           onValueChange={(v) =>
-            void update({ id: issue._id, priority: v as TaskPriority })
+            void update({ id: issue._id, priority: v as Priority })
           }
         >
           <SelectTrigger>
@@ -274,13 +262,15 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
   const overridden = issue.priorityOverride !== undefined;
   return (
     <div className="space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">Priority</span>
+      <span className="text-xs font-medium text-muted-foreground">
+        Priority
+      </span>
       <Select
         value={issue.priorityOverride ?? AUTO_PRIORITY}
         onValueChange={(v) =>
           void update({
             id: issue._id,
-            priorityOverride: v === AUTO_PRIORITY ? null : (v as TaskPriority),
+            priorityOverride: v === AUTO_PRIORITY ? null : (v as Priority),
           })
         }
       >
@@ -300,37 +290,6 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
         {overridden ? "Pinned — survives re-sync." : "Currently"}
         {!overridden && <PriorityBadge priority={issue.priority} />}
       </p>
-    </div>
-  );
-}
-
-function ProjectControl({ issue }: { issue: Doc<"issues"> }) {
-  const { projects } = useActiveProject();
-  const update = useMutation(api.github.update);
-  return (
-    <div className="space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">Project</span>
-      <Select
-        value={issue.projectId ?? NO_PROJECT}
-        onValueChange={(v) =>
-          void update({
-            id: issue._id,
-            projectId: v === NO_PROJECT ? null : (v as Id<"projects">),
-          })
-        }
-      >
-        <SelectTrigger>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={NO_PROJECT}>No project</SelectItem>
-          {(projects ?? []).map((p) => (
-            <SelectItem key={p._id} value={p._id}>
-              {p.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
     </div>
   );
 }
@@ -370,7 +329,10 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
     setNote(null);
     try {
       if (toGitHub && canPostToGitHub) {
-        const res = await commentOnGitHub({ issueId: issue._id, body: trimmed });
+        const res = await commentOnGitHub({
+          issueId: issue._id,
+          body: trimmed,
+        });
         setNote(res.message);
         if (res.ok) setBody("");
       } else {

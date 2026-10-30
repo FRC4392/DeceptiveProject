@@ -1,7 +1,7 @@
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 
-export type Role = "mentor" | "student";
+export type Role = "student" | "lead" | "mentor" | "admin";
 
 /** The current authenticated user's Clerk profile + synced role. */
 export function useCurrentUser() {
@@ -14,6 +14,14 @@ export function useRole(): Role {
   return user?.role ?? "student";
 }
 
+/** Mentors and admins: settings, training sign-offs, deletes. */
 export function useIsMentor(): boolean {
-  return useRole() === "mentor";
+  const role = useRole();
+  return role === "mentor" || role === "admin";
+}
+
+/** Leads and above: drawing checks, moving parts back, resolving problems. */
+export function useIsLead(): boolean {
+  const role = useRole();
+  return role === "lead" || role === "mentor" || role === "admin";
 }
