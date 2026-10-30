@@ -33,7 +33,6 @@ export function OnshapeAdminPage() {
   const subsystems = useQuery(api.subsystems.list, {});
   const mapDocument = useMutation(api.onshape.mapDocument);
   const removeDoc = useMutation(api.onshape.removeDocument);
-  const connection = useQuery(api.onshapeOAuth.connectionStatus);
   const siteUrl = (import.meta.env.VITE_CONVEX_SITE_URL as string | undefined)
     ?.trim()
     .replace(/\/$/, "");
@@ -101,43 +100,7 @@ export function OnshapeAdminPage() {
         </p>
       </div>
 
-      <Panel
-        title="Connection"
-        bodyClass="flex flex-wrap items-center justify-between gap-3"
-      >
-        <div className="text-sm">
-          {connection === undefined ? (
-            <span className="text-muted-foreground">Loading…</span>
-          ) : connection.connected ? (
-            <span className="font-medium text-success">
-              ✓ Connected to Onshape
-            </span>
-          ) : (
-            <span className="text-muted-foreground">
-              Not connected. Authorize once so the “Sync to tracker” button can
-              pull parts on demand.
-            </span>
-          )}
-        </div>
-        {siteUrl ? (
-          <Button
-            asChild
-            variant={connection?.connected ? "outline" : "default"}
-          >
-            <a href={`${siteUrl}/onshape/oauth/start`}>
-              {connection?.connected ? "Reconnect" : "Connect Onshape"}
-            </a>
-          </Button>
-        ) : (
-          <Button disabled>Connect Onshape</Button>
-        )}
-        {!siteUrl && (
-          <p className="basis-full text-xs text-warning">
-            Set VITE_CONVEX_SITE_URL in .env.local to enable OAuth and panel
-            setup links.
-          </p>
-        )}
-      </Panel>
+      <ConnectionPanel siteUrl={siteUrl} />
 
       <ReleaseWebhookPanel siteUrl={siteUrl} />
 
@@ -286,6 +249,92 @@ export function OnshapeAdminPage() {
 }
 
 /**
+ * One OAuth token for the whole team. Any mentor can take it over by
+ * reconnecting — so this says whose it is, and whether it still works.
+ */
+function ConnectionPanel({ siteUrl }: { siteUrl?: string }) {
+  const connection = useQuery(api.onshapeOAuth.connectionStatus);
+  const beginConnect = useMutation(api.onshapeOAuth.beginConnect);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const broken = connection?.connected && connection.lastError;
+
+  async function connect() {
+    if (!siteUrl) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // The start endpoint is public, so it won't move without a state only a
+      // signed-in mentor can mint.
+      const state = await beginConnect({});
+      window.location.href = `${siteUrl}/onshape/oauth/start?state=${encodeURIComponent(state)}`;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't start that.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel
+      title="Connection"
+      bodyClass="flex flex-wrap items-center justify-between gap-3"
+    >
+      <div className="space-y-1 text-sm">
+        {connection === undefined ? (
+          <span className="text-muted-foreground">Loading…</span>
+        ) : !connection.connected ? (
+          <span className="text-muted-foreground">
+            Not connected. Authorize once so releases come in and the “Sync to
+            tracker” button can pull parts.
+          </span>
+        ) : broken ? (
+          <>
+            <span className="font-medium text-danger">
+              ✗ Onshape is refusing this connection
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {connection.lastError}
+              {connection.lastErrorAt &&
+                ` (${new Date(connection.lastErrorAt).toLocaleString()})`}
+            </p>
+          </>
+        ) : (
+          <span className="font-medium text-success">
+            ✓ Connected to Onshape
+          </span>
+        )}
+        {connection?.connected && (
+          <p className="text-xs text-muted-foreground">
+            {connection.connectedBy
+              ? `Authorized by ${connection.connectedBy}`
+              : "Authorized before the tracker started recording who"}
+            {connection.connectedAt &&
+              ` on ${new Date(connection.connectedAt).toLocaleDateString()}`}
+            . Calls are made as that account, so if they leave the Classroom
+            another mentor has to reconnect here.
+          </p>
+        )}
+      </div>
+      <Button
+        variant={connection?.connected && !broken ? "outline" : "default"}
+        disabled={busy || !siteUrl}
+        onClick={() => void connect()}
+      >
+        {connection?.connected ? "Reconnect" : "Connect Onshape"}
+      </Button>
+      {error && <p className="basis-full text-sm text-danger">{error}</p>}
+      {!siteUrl && (
+        <p className="basis-full text-xs text-warning">
+          Set VITE_CONVEX_SITE_URL in .env.local to enable OAuth and panel setup
+          links.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
+/**
  * The release webhook: Onshape calls the tracker the moment a release package
  * is approved, instead of waiting for someone to remember to open the panel.
  */
@@ -331,8 +380,15 @@ function ReleaseWebhookPanel({ siteUrl }: { siteUrl?: string }) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               {status.registered ? (
-                <span className="font-medium text-success">
-                  ✓ Registered with Onshape
+                <span
+                  className={cn(
+                    "font-medium",
+                    status.stale ? "text-warning" : "text-success",
+                  )}
+                >
+                  {status.stale
+                    ? "⚠ Registered, but needs re-registering"
+                    : "✓ Registered with Onshape"}
                 </span>
               ) : (
                 <span className="text-muted-foreground">
@@ -389,6 +445,15 @@ function ReleaseWebhookPanel({ siteUrl }: { siteUrl?: string }) {
                 npx convex env set ONSHAPE_WEBHOOK_SECRET &lt;a long random
                 string&gt;
               </span>
+            </p>
+          )}
+
+          {status.registered && status.stale && (
+            <p className="rounded border border-warning/40 bg-warning/5 p-2 text-xs">
+              The Onshape connection has been re-authorized since this webhook
+              was registered. Onshape doesn't say whether it survived, so turn
+              it off and register it again — otherwise a season with no releases
+              looks exactly like a webhook that quietly stopped.
             </p>
           )}
 

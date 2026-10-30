@@ -43,7 +43,10 @@ vi.mock("../../convex/_generated/api", () => ({
       listDocuments: "onshape.listDocuments",
       removeDocument: "onshape.removeDocument",
     },
-    onshapeOAuth: { connectionStatus: "onshapeOAuth.connectionStatus" },
+    onshapeOAuth: {
+      connectionStatus: "onshapeOAuth.connectionStatus",
+      beginConnect: "onshapeOAuth.beginConnect",
+    },
     onshapeWebhook: {
       status: "onshapeWebhook.status",
       register: "onshapeWebhook.register",
@@ -167,7 +170,14 @@ vi.mock("convex/react", () => ({
       case "github.stats":
         return { open: 0, closed: 0, prs: 0, total: 0 };
       case "onshapeOAuth.connectionStatus":
-        return { connected: false };
+        return {
+          connected: false,
+          expiresAt: null,
+          connectedBy: null,
+          connectedAt: null,
+          lastError: null,
+          lastErrorAt: null,
+        };
       case "onshapeWebhook.status":
         return {
           registered: false,
@@ -177,6 +187,7 @@ vi.mock("convex/react", () => ({
           registeredAt: null,
           lastPingAt: null,
           lastEventAt: null,
+          stale: false,
           secretConfigured: false,
         };
       case "settings.budget":

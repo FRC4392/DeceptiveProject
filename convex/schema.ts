@@ -364,12 +364,24 @@ export default defineSchema({
     accessToken: v.string(),
     refreshToken: v.string(),
     expiresAt: v.number(),
+    /** The `users.authId` of whoever authorized this connection. */
     connectedBy: v.optional(v.string()),
+    connectedAt: v.optional(v.number()),
+    // A query can't ask Onshape whether the token still works, so the fetch
+    // path writes down what happened last. Without this the admin page says
+    // "Connected" forever, including after the owner leaves the Classroom.
+    lastError: v.optional(v.string()),
+    lastErrorAt: v.optional(v.number()),
   }),
 
-  // Short-lived CSRF state values for the OAuth authorize round-trip.
+  // Short-lived CSRF state for the OAuth authorize round-trip. It doubles as
+  // proof that a mentor started the flow — /onshape/oauth/start is a public
+  // endpoint, and without this anyone who knew the URL could repoint the
+  // team's connection at their own Onshape account.
   onshapeOAuthState: defineTable({
     state: v.string(),
+    userId: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
   }).index("by_state", ["state"]),
 
   // The release webhook Onshape calls when a release package transitions.
@@ -385,6 +397,10 @@ export default defineSchema({
     lastPingAt: v.optional(v.number()),
     /** The last real transition we were told about. */
     lastEventAt: v.optional(v.number()),
+    // Set when the Onshape connection is re-authorized: the registration was
+    // made under the old authorization and may no longer be live, but Onshape
+    // doesn't tell us that — so say "re-register" rather than "✓ Registered".
+    staleSince: v.optional(v.number()),
   }).index("by_webhookId", ["webhookId"]),
 
   // Short-lived, single-use tokens for the Onshape right-panel app.

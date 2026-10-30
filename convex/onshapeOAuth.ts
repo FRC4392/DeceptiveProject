@@ -3,6 +3,7 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  mutation,
   query,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -17,6 +18,7 @@ import {
 } from "./lib/onshapeSync";
 import { esc, panelHtml } from "./lib/onshapePanelHtml";
 import { encryptToken, decryptToken } from "./lib/tokenCrypto";
+import { requireMentor } from "./lib/auth";
 
 const AUTHORIZE_URL = "https://oauth.onshape.com/oauth/authorize";
 const CALLBACK_PATH = "/onshape/oauth/callback";
@@ -26,16 +28,33 @@ function siteUrl(): string {
 }
 
 // ---- Token + state storage (internal) ----
-export const createState = internalMutation({
-  args: { state: v.string() },
-  returns: v.null(),
-  handler: async (ctx, { state }) => {
-    await ctx.db.insert("onshapeOAuthState", { state });
-    return null;
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Start a connection. Called from the admin page, so it runs as a signed-in
+ * mentor — which is the point: `/onshape/oauth/start` is a public endpoint
+ * with no identity of its own, and the state it demands is minted here.
+ *
+ * The same row remembers who started it, so the finished connection can say
+ * whose it is instead of leaving the team to remember.
+ */
+export const beginConnect = mutation({
+  args: {},
+  returns: v.string(),
+  handler: async (ctx) => {
+    const user = await requireMentor(ctx);
+    const state = crypto.randomUUID();
+    await ctx.db.insert("onshapeOAuthState", {
+      state,
+      userId: user.authId,
+      expiresAt: Date.now() + STATE_TTL_MS,
+    });
+    return state;
   },
 });
 
-export const consumeState = internalMutation({
+/** Look at a state without spending it — the redirect isn't the callback. */
+export const peekState = internalQuery({
   args: { state: v.string() },
   returns: v.boolean(),
   handler: async (ctx, { state }) => {
@@ -43,9 +62,27 @@ export const consumeState = internalMutation({
       .query("onshapeOAuthState")
       .withIndex("by_state", (q) => q.eq("state", state))
       .unique();
-    if (!row) return false;
+    // A row with no expiry predates this check and is treated as expired,
+    // rather than as a permanent key to the connection.
+    return row !== null && (row.expiresAt ?? 0) > Date.now();
+  },
+});
+
+export const consumeState = internalMutation({
+  args: { state: v.string() },
+  returns: v.union(
+    v.object({ userId: v.union(v.string(), v.null()) }),
+    v.null(),
+  ),
+  handler: async (ctx, { state }) => {
+    const row = await ctx.db
+      .query("onshapeOAuthState")
+      .withIndex("by_state", (q) => q.eq("state", state))
+      .unique();
+    if (!row) return null;
     await ctx.db.delete(row._id);
-    return true;
+    if ((row.expiresAt ?? 0) <= Date.now()) return null;
+    return { userId: row.userId ?? null };
   },
 });
 
@@ -59,6 +96,13 @@ export const storeTokens = internalMutation({
     accessToken: v.string(),
     refreshToken: v.string(),
     expiresAt: v.number(),
+    /**
+     * "connect" is somebody authorizing the app; "refresh" is the same
+     * authorization getting a new access token. Only the first changes who
+     * owns the connection — and only the first can invalidate the webhook.
+     */
+    reason: v.union(v.literal("connect"), v.literal("refresh")),
+    connectedBy: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -66,13 +110,47 @@ export const storeTokens = internalMutation({
       accessToken: await encryptToken(args.accessToken),
       refreshToken: await encryptToken(args.refreshToken),
       expiresAt: args.expiresAt,
+      // Whatever went wrong before, it was with the old token.
+      lastError: undefined,
+      lastErrorAt: undefined,
     };
+    const owner =
+      args.reason === "connect"
+        ? { connectedBy: args.connectedBy, connectedAt: Date.now() }
+        : {};
     const existing = await ctx.db.query("onshapeAuth").take(1);
     if (existing[0]) {
-      await ctx.db.patch(existing[0]._id, encrypted);
+      await ctx.db.patch(existing[0]._id, { ...encrypted, ...owner });
     } else {
-      await ctx.db.insert("onshapeAuth", encrypted);
+      await ctx.db.insert("onshapeAuth", { ...encrypted, ...owner });
     }
+
+    if (args.reason === "connect") {
+      // The webhook was registered under the previous authorization. Onshape
+      // won't tell us whether it survived, so stop claiming it did.
+      for (const hook of await ctx.db.query("onshapeWebhooks").collect()) {
+        await ctx.db.patch(hook._id, { staleSince: Date.now() });
+      }
+    }
+    return null;
+  },
+});
+
+/**
+ * Remember that Onshape turned us down. The admin page has no way to find
+ * this out on its own — a query can't call Onshape — so the one code path
+ * that does learn it writes it down.
+ */
+export const recordAuthFailure = internalMutation({
+  args: { error: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { error }) => {
+    const existing = await ctx.db.query("onshapeAuth").take(1);
+    if (!existing[0]) return null;
+    await ctx.db.patch(existing[0]._id, {
+      lastError: error,
+      lastErrorAt: Date.now(),
+    });
     return null;
   },
 });
@@ -112,33 +190,77 @@ export const getAuthInternal = internalQuery({
 // the stored tokens actually decrypt (not just that a row exists) so a
 // pre-encryption or stale-key row shows as disconnected rather than a false
 // "Connected" the UI can't act on.
+//
+// `lastError` is the other half of that honesty. A query can't ask Onshape
+// whether the refresh token still works, so a connection whose owner has left
+// the Classroom decrypts perfectly and fails every call. Reporting the last
+// failure is the difference between the page saying "Connected" forever and
+// the page saying "reconnect".
 export const connectionStatus = query({
   args: {},
   returns: v.object({
     connected: v.boolean(),
     expiresAt: v.union(v.number(), v.null()),
+    connectedBy: v.union(v.string(), v.null()),
+    connectedAt: v.union(v.number(), v.null()),
+    lastError: v.union(v.string(), v.null()),
+    lastErrorAt: v.union(v.number(), v.null()),
   }),
   handler: async (ctx) => {
+    const none = {
+      connected: false,
+      expiresAt: null,
+      connectedBy: null,
+      connectedAt: null,
+      lastError: null,
+      lastErrorAt: null,
+    };
     const rows = await ctx.db.query("onshapeAuth").take(1);
     const a = rows[0];
-    if (!a) return { connected: false, expiresAt: null };
+    if (!a) return none;
     try {
       await decryptToken(a.accessToken);
-      return { connected: true, expiresAt: a.expiresAt };
     } catch {
-      return { connected: false, expiresAt: null };
+      return none;
     }
+    const owner = a.connectedBy
+      ? await ctx.db
+          .query("users")
+          .withIndex("authId", (q) => q.eq("authId", a.connectedBy!))
+          .unique()
+      : null;
+    return {
+      connected: true,
+      expiresAt: a.expiresAt,
+      connectedBy: owner?.name ?? (a.connectedBy ? "someone else" : null),
+      connectedAt: a.connectedAt ?? null,
+      lastError: a.lastError ?? null,
+      lastErrorAt: a.lastErrorAt ?? null,
+    };
   },
 });
 
 // ---- OAuth authorization-code flow ----
-export const oauthStart = httpAction(async (ctx) => {
+export const oauthStart = httpAction(async (ctx, req) => {
   const clientId = process.env.ONSHAPE_OAUTH_CLIENT_ID;
   if (!clientId) {
     return htmlResponse("ONSHAPE_OAUTH_CLIENT_ID is not set.", 500);
   }
-  const state = crypto.randomUUID();
-  await ctx.runMutation(internal.onshapeOAuth.createState, { state });
+  // This endpoint is public and has no identity of its own, so it won't start
+  // anything a signed-in mentor didn't ask for: the state comes from
+  // `beginConnect`, and without a live one there is no redirect. Otherwise
+  // anyone with the URL could repoint the team's connection at their own
+  // Onshape account.
+  const state = new URL(req.url).searchParams.get("state") ?? "";
+  const valid: boolean = await ctx.runQuery(internal.onshapeOAuth.peekState, {
+    state,
+  });
+  if (!valid) {
+    return htmlResponse(
+      "Start the connection from Settings → Onshape in the tracker.",
+      400,
+    );
+  }
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -157,10 +279,11 @@ export const oauthCallback = httpAction(async (ctx, req) => {
   const state = url.searchParams.get("state");
   if (!code || !state) return htmlResponse("Missing code or state.", 400);
 
-  const validState = await ctx.runMutation(internal.onshapeOAuth.consumeState, {
-    state,
-  });
-  if (!validState) return htmlResponse("Invalid or expired state.", 400);
+  const consumed: { userId: string | null } | null = await ctx.runMutation(
+    internal.onshapeOAuth.consumeState,
+    { state },
+  );
+  if (!consumed) return htmlResponse("Invalid or expired state.", 400);
 
   const clientId = process.env.ONSHAPE_OAUTH_CLIENT_ID;
   const clientSecret = process.env.ONSHAPE_OAUTH_CLIENT_SECRET;
@@ -194,6 +317,8 @@ export const oauthCallback = httpAction(async (ctx, req) => {
     accessToken: tok.access_token,
     refreshToken: tok.refresh_token,
     expiresAt: Date.now() + (tok.expires_in ?? 3600) * 1000,
+    reason: "connect",
+    connectedBy: consumed.userId ?? undefined,
   });
   return htmlResponse("✅ Onshape connected. You can close this tab.");
 });

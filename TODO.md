@@ -83,8 +83,11 @@ Section numbers are from `FRC_PART_TRACKER_HANDOFF.md`.
   releases still arrive on their own. Making it lead-only instead needs a
   different gate: the panel authenticates with a shared secret and has no idea
   who is using it.
-- **Who owns the Onshape connection?** One team-wide OAuth token. If that
-  account leaves the team, the integration stops until someone reconnects.
+- [x] **Who owns the Onshape connection?** One team-wide OAuth token, now
+      recorded and shown on Settings → Onshape. Any mentor can take it over by
+      reconnecting — the row is simply overwritten — and the page warns when
+      Onshape starts refusing the token, and when a reconnect has left the
+      webhook registration needing to be made again.
 
 **Onshape's to answer** (§11):
 

@@ -198,6 +198,13 @@ export const status = query({
     registeredAt: v.union(v.number(), v.null()),
     lastPingAt: v.union(v.number(), v.null()),
     lastEventAt: v.union(v.number(), v.null()),
+    /**
+     * The Onshape connection has been re-authorized since this was
+     * registered, so it may no longer be live. Onshape doesn't say either
+     * way, and a webhook that silently stopped looks exactly like a season
+     * with no releases in it.
+     */
+    stale: v.boolean(),
     /** Whether ONSHAPE_WEBHOOK_SECRET is set on the deployment. */
     secretConfigured: v.boolean(),
   }),
@@ -213,6 +220,7 @@ export const status = query({
       registeredAt: row?.registeredAt ?? null,
       lastPingAt: row?.lastPingAt ?? null,
       lastEventAt: row?.lastEventAt ?? null,
+      stale: row?.staleSince !== undefined,
       secretConfigured: Boolean(process.env.ONSHAPE_WEBHOOK_SECRET),
     };
   },

@@ -386,6 +386,28 @@ One thing genuinely isn't reachable on this path:
   when the panel was opened on a version — or when the release webhook below
   brings the release in.
 
+### Who owns the connection
+
+One OAuth token for the whole team, authorized once by a mentor from
+**Settings → Onshape**. Calls are made as that account, so if they leave the
+Classroom another mentor reconnects there and takes it over — the stored
+connection is a single row and is simply overwritten. The page names whoever
+authorized it, so that isn't something the team has to remember.
+
+Two things used to fail silently and now don't:
+
+- A query can't ask Onshape whether a token still works, so a connection whose
+  owner had left kept reporting "Connected" while every call failed. The
+  refresh path writes down what happened, and the page shows it.
+- The webhook is registered under one authorization. Onshape doesn't say
+  whether it survives a re-authorization, so a reconnect marks the
+  registration as needing to be made again rather than leaving the page
+  claiming it's live.
+
+Starting the flow is mentor-only. `/onshape/oauth/start` is a public endpoint
+with no identity of its own, so it won't redirect without a short-lived state
+that `beginConnect` mints for a signed-in mentor.
+
 ### The release webhook
 
 Turn it on in **Settings → Onshape → Release webhook** (mentors only, and

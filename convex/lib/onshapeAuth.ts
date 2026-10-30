@@ -55,9 +55,13 @@ export async function refreshOnshapeToken(
     }),
   });
   if (!res.ok) {
-    throw new Error(
-      `Onshape token refresh failed: ${res.status}. Reconnect in Admin → Onshape.`,
-    );
+    // The admin page can't discover this for itself, so leave it a note. This
+    // is what a connection whose owner has left the Classroom looks like.
+    const message = `Onshape token refresh failed: ${res.status}. Reconnect in Settings → Onshape.`;
+    await ctx.runMutation(internal.onshapeOAuth.recordAuthFailure, {
+      error: message,
+    });
+    throw new Error(message);
   }
   const tok = (await res.json()) as {
     access_token: string;
@@ -68,6 +72,7 @@ export async function refreshOnshapeToken(
     accessToken: tok.access_token,
     refreshToken: tok.refresh_token ?? refreshToken,
     expiresAt: Date.now() + (tok.expires_in ?? 3600) * 1000,
+    reason: "refresh",
   });
   return tok.access_token;
 }
