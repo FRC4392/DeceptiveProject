@@ -193,8 +193,11 @@ disabled for exactly the reason the server would refuse it.
 
 ### Onshape, and the API budget
 
-The team's Onshape Classroom allows roughly **2,500 successful API calls a year
-for everyone**, so the tracker is built to need almost none of them:
+The team's Onshape Classroom allows **2,500 successful API calls a year for
+everyone**, and the app's own OAuth calls come out of that same allowance —
+confirmed, not assumed. FIRST teams can't currently get a larger one, so 2,500
+is the number to design against. The tracker is built to need almost none of
+them:
 
 - Getting a number and pasting it into Onshape costs **nothing**.
 - Nothing is written back into Onshape.

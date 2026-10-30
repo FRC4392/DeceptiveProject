@@ -86,11 +86,13 @@ Section numbers are from `FRC_PART_TRACKER_HANDOFF.md`.
 - **Who owns the Onshape connection?** One team-wide OAuth token. If that
   account leaves the team, the integration stops until someone reconnects.
 
-**Onshape's to answer** (§11, still open):
+**Onshape's to answer** (§11):
 
-- Do OAuth calls from a private app count against the Classroom's 2,500 a year,
-  or against the app owner's account? The whole budget design assumes the
-  Classroom's.
-- Can FIRST teams get a higher limit?
-- What are the real BOM CSV column names? The importer matches loosely and
-  ignores what it doesn't recognise, but it has never seen a real export.
+- [x] **Do the app's OAuth calls come out of the Classroom's 2,500 a year?**
+      Yes. That's what the budget meter and the modes have always assumed, so
+      the design stands as built.
+- [x] **Can FIRST teams get a higher limit?** No, not at the moment. 2,500 is
+      the number to design against.
+- [ ] **What are the real BOM CSV column names?** The importer matches loosely
+      and ignores what it doesn't recognise, but it has never seen a real
+      export.
