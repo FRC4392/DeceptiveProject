@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
@@ -12,7 +12,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -23,23 +22,23 @@ import {
 } from "@/components/ui/select";
 import { PRIORITIES, type Priority } from "@/lib/priority";
 
-
 /**
  * Create or edit a manual (tracker-only) issue. Synced GitHub issues aren't
  * edited here — their title/body/labels are owned by GitHub.
  */
 export function IssueFormDialog({
-  trigger,
+  open,
+  onOpenChange,
   issue,
 }: {
-  trigger: ReactNode;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   issue?: Doc<"issues">;
 }) {
   const createIssue = useMutation(api.github.createManualIssue);
   const updateIssue = useMutation(api.github.update);
   const isEdit = !!issue;
 
-  const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(issue?.title ?? "");
   const [body, setBody] = useState(issue?.body ?? "");
   const [priority, setPriority] = useState<Priority>(
@@ -76,15 +75,14 @@ export function IssueFormDialog({
         setBody("");
         setLabels("");
       }
-      setOpen(false);
+      onOpenChange(false);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit issue" : "New issue"}</DialogTitle>

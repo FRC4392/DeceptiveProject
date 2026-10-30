@@ -6,9 +6,9 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { TodoCard } from "@/components/tracker/TodoCard";
 import { TodoFormDialog } from "@/components/tracker/TodoFormDialog";
+import { FilterChip, FilterDivider } from "@/components/tracker/FilterChip";
 import { SetupPrompt } from "@/routes/PartsBoardPage";
 import { useRosterMap } from "@/lib/users";
-import { cn } from "@/lib/utils";
 
 type Filter = "all" | "grabs" | "mine";
 
@@ -65,7 +65,7 @@ export function TodoBoardPage() {
             {tag.name}
           </FilterChip>
         ))}
-        <span className="mx-1 hidden h-6 w-px bg-border sm:block" />
+        <FilterDivider />
         <FilterChip
           active={filter === "grabs"}
           onClick={() => setFilter(filter === "grabs" ? "all" : "grabs")}
@@ -145,30 +145,5 @@ export function TodoBoardPage() {
 
       <TodoFormDialog open={newOpen} onOpenChange={setNewOpen} />
     </div>
-  );
-}
-
-function FilterChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "min-h-11 rounded-full border px-4 text-sm transition-colors sm:min-h-9",
-        active
-          ? "border-transparent bg-foreground text-background"
-          : "bg-card hover:bg-accent",
-      )}
-    >
-      {children}
-    </button>
   );
 }
