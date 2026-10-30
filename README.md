@@ -169,6 +169,10 @@ bin and goes on the robot with its sub-assembly rather than being claimed on
 its own. Moving a part to the next stage releases the claim, since the next
 stage is different work.
 
+**My parts** shows both: the sub-assemblies you've picked up, each saying
+whether it can go together yet and what's holding it up, then the parts,
+grouped by the stage they're at.
+
 **Mentors can assign.** Claiming is for taking work yourself and refuses to
 take something someone else holds; a mentor picking a name on the part page
 (or a to-do page) hands it over regardless. Picking "Nobody" puts it back up

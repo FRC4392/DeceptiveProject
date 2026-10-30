@@ -22,8 +22,11 @@ import {
 import {
   ASSEMBLED_STAGE,
   READY_STAGE,
+  blockingSummary,
+  computeAssemblyStatuses,
   isSafeDrawingUrl,
   wouldCycle,
+  type AssemblyInput,
 } from "./lib/assembly";
 import {
   asStage,
@@ -183,6 +186,105 @@ export const list = query({
       });
     }
     return out;
+  },
+});
+
+/**
+ * The sub-assemblies this person has picked up, for "My parts" — with
+ * whether each can go together yet worked out here, so the screen doesn't
+ * have to pull the whole membership graph to find out.
+ */
+export const listMine = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      assembly: vSubAssembly,
+      subsystemName: v.string(),
+      ready: v.boolean(),
+      summary: v.string(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const userId = await requireUserId(ctx);
+    const season = await activeSeason(ctx);
+    if (!season) return [];
+
+    const all = await ctx.db
+      .query("subAssemblies")
+      .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+      .take(SCAN_LIMIT);
+    const mine = all.filter((a) => a.claimedByUserId === userId);
+    if (mine.length === 0) return [];
+
+    // Readiness needs the whole season's tree, since a child of mine may sit
+    // anywhere in it.
+    const members = await ctx.db.query("subAssemblyMembers").take(SCAN_LIMIT);
+    const parts = await ctx.db
+      .query("parts")
+      .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+      .take(SCAN_LIMIT);
+    const partById = new Map(parts.map((p) => [p._id as string, p]));
+    const cots = await ctx.db
+      .query("cotsItems")
+      .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+      .take(SCAN_LIMIT);
+    const cotsById = new Map(cots.map((c) => [c._id as string, c]));
+
+    const inputs: AssemblyInput[] = all.map((assembly) => {
+      const own = members.filter((m) => m.subAssemblyId === assembly._id);
+      return {
+        id: assembly._id,
+        number: assembly.partNumber,
+        name: assembly.name,
+        order: assembly.order,
+        completed: assembly.completedAt !== undefined,
+        childIds: own
+          .map((m) => m.childSubAssemblyId)
+          .filter((id): id is Id<"subAssemblies"> => id !== undefined),
+        members: [
+          ...own
+            .filter((m) => m.partId !== undefined)
+            .map((m) => {
+              const part = partById.get(m.partId as string);
+              return {
+                kind: "part" as const,
+                label: part?.partNumber ?? "a part",
+                stageLabel: "not in the bin yet",
+                ready: (part?.stage ?? 0) >= READY_STAGE,
+              };
+            }),
+          ...own
+            .filter((m) => m.cotsItemId !== undefined)
+            .map((m) => {
+              const item = cotsById.get(m.cotsItemId as string);
+              return {
+                kind: "cots" as const,
+                label: item?.name ?? "a bought item",
+                stageLabel: item?.status ?? "needed",
+                ready: item?.status === "arrived",
+              };
+            }),
+        ],
+      };
+    });
+    const statusById = new Map(
+      computeAssemblyStatuses(inputs).map((s) => [s.id, s]),
+    );
+
+    const subsystems = await ctx.db.query("subsystems").collect();
+    const subsystemName = new Map(
+      subsystems.map((s) => [s._id as string, s.name]),
+    );
+
+    return mine.map((assembly) => {
+      const status = statusById.get(assembly._id);
+      return {
+        assembly,
+        subsystemName: subsystemName.get(assembly.subsystemId as string) ?? "",
+        ready: status?.ready ?? false,
+        summary: status ? blockingSummary(status) : "",
+      };
+    });
   },
 });
 

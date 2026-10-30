@@ -25,6 +25,22 @@ const MINE = [
   } as unknown as Doc<"parts">,
 ];
 
+const ASSEMBLIES = [
+  {
+    assembly: {
+      _id: "sa_1",
+      _creationTime: 0,
+      subsystemId: "sub_int",
+      partNumber: "27-INT-005",
+      name: "Intake frame",
+      order: 1,
+    },
+    subsystemName: "Intake",
+    ready: false,
+    summary: "27-INT-002 not in the bin yet",
+  },
+] as unknown as never[];
+
 const ROSTER = [
   {
     _id: "u1" as Id<"users">,
@@ -41,6 +57,7 @@ beforeEach(() => {
   ) => {
     const name = getFunctionName(ref);
     if (name === getFunctionName(api.parts.listMine)) return MINE;
+    if (name === getFunctionName(api.subAssemblies.listMine)) return ASSEMBLIES;
     if (name === getFunctionName(api.users.list)) return ROSTER;
     if (name === getFunctionName(api.shop.listProcessTypes)) {
       return [{ _id: "p_router", name: "CNC router", order: 0 }];
@@ -50,6 +67,22 @@ beforeEach(() => {
 });
 
 describe("My parts", () => {
+  it("lists the sub-assemblies you've claimed alongside the parts", () => {
+    render(
+      <MemoryRouter>
+        <MyPartsPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("Sub-assemblies")).toBeInTheDocument();
+    expect(screen.getByText("Intake frame")).toBeInTheDocument();
+    expect(screen.getByText("27-INT-005")).toBeInTheDocument();
+    // It says why it can't go together yet, not just that it can't.
+    expect(
+      screen.getByText("27-INT-002 not in the bin yet"),
+    ).toBeInTheDocument();
+  });
+
   it("names you on your own parts rather than calling them up for grabs", () => {
     render(
       <MemoryRouter>

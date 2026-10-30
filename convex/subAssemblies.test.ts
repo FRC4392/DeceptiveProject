@@ -501,6 +501,41 @@ describe("building one", () => {
     expect(part?.assemblerUserId).toBe("student_1");
   });
 
+  test("my list shows what I picked up, and why it's waiting", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    const student = t.withIdentity(studentIdentity());
+    await student.mutation(api.auth.storeCurrentUser, {});
+    const rows = await listFor(mentor, intake._id);
+    const root = rows[0].assembly._id;
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: root,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+    });
+
+    // Nothing claimed yet.
+    expect(await student.query(api.subAssemblies.listMine, {})).toHaveLength(0);
+
+    await student.mutation(api.subAssemblies.claim, { id: root });
+    const mine = await student.query(api.subAssemblies.listMine, {});
+    expect(mine).toHaveLength(1);
+    expect(mine[0].assembly.partNumber).toBe("27-INT-000");
+    expect(mine[0].subsystemName).toBe("Intake");
+    expect(mine[0].ready).toBe(false);
+    expect(mine[0].summary).toMatch(/27-INT-001/);
+
+    // Once its part is in the bin it can go together.
+    await putInBin(mentor, parts[0]);
+    const after = await student.query(api.subAssemblies.listMine, {});
+    expect(after[0].ready).toBe(true);
+    expect(after[0].summary).toMatch(/in the bin/i);
+
+    // And it's only mine — the mentor's list stays empty.
+    expect(await mentor.query(api.subAssemblies.listMine, {})).toHaveLength(0);
+  });
+
   test("someone else can't take a claimed one", async () => {
     const t = convexTest(schema, modules);
     const { mentor, intake } = await setup(t);
