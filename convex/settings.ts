@@ -4,9 +4,16 @@
 // everyone, so the tracker counts every call it makes and drops features
 // rather than silently running the team out of allowance. Nothing here calls
 // Onshape; it only reads what was already spent.
-import { query, mutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  internalQuery,
+  internalMutation,
+  type QueryCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
 import { requireMentor } from "./lib/auth";
+import { modeForShare, type BudgetMode } from "./lib/budget";
 
 export const DEFAULTS = {
   apiLimit: 2500,
@@ -16,9 +23,10 @@ export const DEFAULTS = {
   waitingDays: 3,
   renewalDate: null as number | null,
   forcedMode: null as "normal" | "lean" | "manual" | null,
+  /** Why the mode was forced, when the app forced it rather than a mentor. */
+  forcedModeReason: null as string | null,
+  forcedModeAt: null as number | null,
 };
-
-export type BudgetMode = "normal" | "lean" | "manual";
 
 const vSettings = v.object({
   apiLimit: v.number(),
@@ -32,6 +40,8 @@ const vSettings = v.object({
     v.literal("manual"),
     v.null(),
   ),
+  forcedModeReason: v.union(v.string(), v.null()),
+  forcedModeAt: v.union(v.number(), v.null()),
 });
 
 export const get = query({
@@ -50,6 +60,10 @@ export const get = query({
       renewalDate: (map.get("renewalDate") as number | null) ?? null,
       forcedMode:
         (map.get("forcedMode") as BudgetMode | null | undefined) ?? null,
+      forcedModeReason:
+        (map.get("forcedModeReason") as string | null | undefined) ?? null,
+      forcedModeAt:
+        (map.get("forcedModeAt") as number | null | undefined) ?? null,
     };
   },
 });
@@ -85,42 +99,103 @@ export const budget = query({
     remaining: v.number(),
     mode: v.union(v.literal("normal"), v.literal("lean"), v.literal("manual")),
     forced: v.boolean(),
+    forcedReason: v.union(v.string(), v.null()),
+    forcedAt: v.union(v.number(), v.null()),
     renewalDate: v.union(v.number(), v.null()),
   }),
   handler: async (ctx) => {
-    const rows = await ctx.db.query("appSettings").collect();
-    const map = new Map(rows.map((r) => [r.key, r.value]));
-    const limit = (map.get("apiLimit") as number) ?? DEFAULTS.apiLimit;
-    const leanThreshold =
-      (map.get("leanThreshold") as number) ?? DEFAULTS.leanThreshold;
-    const manualThreshold =
-      (map.get("manualThreshold") as number) ?? DEFAULTS.manualThreshold;
-    const forcedMode =
-      (map.get("forcedMode") as BudgetMode | null | undefined) ?? null;
-
-    const counted = await ctx.db
-      .query("apiCalls")
-      .withIndex("by_counted", (q) => q.eq("counted", true))
-      .take(10000);
-    const used = counted.length;
-    const remaining = Math.max(0, limit - used);
-    const share = limit > 0 ? remaining / limit : 0;
-
-    const mode: BudgetMode =
-      forcedMode ??
-      (share < manualThreshold
-        ? "manual"
-        : share < leanThreshold
-          ? "lean"
-          : "normal");
-
+    const state = await budgetState(ctx);
     return {
-      used,
-      limit,
-      remaining,
-      mode,
-      forced: forcedMode !== null,
-      renewalDate: (map.get("renewalDate") as number | null) ?? null,
+      used: state.used,
+      limit: state.limit,
+      remaining: state.remaining,
+      mode: state.mode,
+      forced: state.forced,
+      forcedReason: state.forcedReason,
+      forcedAt: state.forcedAt,
+      renewalDate: state.renewalDate,
     };
   },
 });
+
+/**
+ * The mode, for the server side of the line. `onshapeFetch` asks this before
+ * every call, so it lives apart from the public `budget` query — that one is
+ * a meter for people, this one is a gate.
+ */
+export const currentMode = internalQuery({
+  args: {},
+  returns: v.union(v.literal("normal"), v.literal("lean"), v.literal("manual")),
+  handler: async (ctx) => (await budgetState(ctx)).mode,
+});
+
+/**
+ * Drop into manual mode because Onshape said so (a 402 means the allowance is
+ * gone). Recorded with a reason, because a mode nobody can explain is a mode
+ * someone will quietly switch back.
+ *
+ * Never overrides a mode a mentor forced by hand: if they chose it, they get
+ * to keep it.
+ */
+export const forceManualMode = internalMutation({
+  args: { reason: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { reason }) => {
+    const rows = await ctx.db.query("appSettings").collect();
+    const byKey = new Map(rows.map((r) => [r.key, r]));
+    if (byKey.get("forcedMode")?.value === "manual") return null;
+    const write = async (key: string, value: unknown) => {
+      const existing = byKey.get(key);
+      if (existing) await ctx.db.patch(existing._id, { value });
+      else await ctx.db.insert("appSettings", { key, value });
+    };
+    await write("forcedMode", "manual");
+    await write("forcedModeReason", reason);
+    await write("forcedModeAt", Date.now());
+    console.error(`Onshape budget: forced into manual mode — ${reason}`);
+    return null;
+  },
+});
+
+type BudgetState = {
+  used: number;
+  limit: number;
+  remaining: number;
+  mode: BudgetMode;
+  forced: boolean;
+  forcedReason: string | null;
+  forcedAt: number | null;
+  renewalDate: number | null;
+};
+
+async function budgetState(ctx: QueryCtx): Promise<BudgetState> {
+  const rows = await ctx.db.query("appSettings").collect();
+  const map = new Map(rows.map((r) => [r.key, r.value]));
+  const limit = (map.get("apiLimit") as number) ?? DEFAULTS.apiLimit;
+  const leanThreshold =
+    (map.get("leanThreshold") as number) ?? DEFAULTS.leanThreshold;
+  const manualThreshold =
+    (map.get("manualThreshold") as number) ?? DEFAULTS.manualThreshold;
+  const forcedMode =
+    (map.get("forcedMode") as BudgetMode | null | undefined) ?? null;
+
+  const counted = await ctx.db
+    .query("apiCalls")
+    .withIndex("by_counted", (q) => q.eq("counted", true))
+    .take(10000);
+  const used = counted.length;
+  const remaining = Math.max(0, limit - used);
+  const share = limit > 0 ? remaining / limit : 0;
+
+  return {
+    used,
+    limit,
+    remaining,
+    mode: forcedMode ?? modeForShare(share, leanThreshold, manualThreshold),
+    forced: forcedMode !== null,
+    forcedReason:
+      (map.get("forcedModeReason") as string | null | undefined) ?? null,
+    forcedAt: (map.get("forcedModeAt") as number | null | undefined) ?? null,
+    renewalDate: (map.get("renewalDate") as number | null) ?? null,
+  };
+}

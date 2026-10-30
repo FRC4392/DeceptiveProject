@@ -18,6 +18,7 @@ import type * as intake from "../intake.js";
 import type * as inventory from "../inventory.js";
 import type * as lib_assembly from "../lib/assembly.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_budget from "../lib/budget.js";
 import type * as lib_github from "../lib/github.js";
 import type * as lib_githubRest from "../lib/githubRest.js";
 import type * as lib_githubWebhookAuth from "../lib/githubWebhookAuth.js";
@@ -62,6 +63,7 @@ declare const fullApi: ApiFromModules<{
   inventory: typeof inventory;
   "lib/assembly": typeof lib_assembly;
   "lib/auth": typeof lib_auth;
+  "lib/budget": typeof lib_budget;
   "lib/github": typeof lib_github;
   "lib/githubRest": typeof lib_githubRest;
   "lib/githubWebhookAuth": typeof lib_githubWebhookAuth;

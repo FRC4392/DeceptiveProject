@@ -413,7 +413,10 @@ export const receiveRelease = internalMutation({
         q.eq("onshapeReleasePackageId", args.releasePackageId),
       )
       .first();
-    if (already) return null;
+    // A queued row is a release we were told about but couldn't afford to
+    // read. Reconcile is finishing that job, so fill it in rather than
+    // treating it as a duplicate and dropping the release on the floor.
+    if (already && already.status !== "queued") return null;
 
     const season = await requireActiveSeason(ctx);
     const now = Date.now();
@@ -447,19 +450,28 @@ export const receiveRelease = internalMutation({
       known,
     );
 
-    const intakeId = await ctx.db.insert("releaseIntakes", {
-      source: "onshape",
+    const fields = {
+      source: "onshape" as const,
       onshapeReleasePackageId: args.releasePackageId,
       label: args.label,
-      receivedAt: now,
-      status: "read",
+      status: "read" as const,
       payload: {
         releasePackageId: args.releasePackageId,
         state: args.state,
         messageId: args.messageId,
         raw: args.raw,
       },
-    });
+    };
+    let intakeId;
+    if (already) {
+      await ctx.db.patch(already._id, fields);
+      intakeId = already._id;
+    } else {
+      intakeId = await ctx.db.insert("releaseIntakes", {
+        ...fields,
+        receivedAt: now,
+      });
+    }
 
     // One lookup per document, not per item: a release of forty parts out of
     // one document shouldn't be forty reads of the same row.
@@ -542,5 +554,38 @@ export const receiveRelease = internalMutation({
     }
 
     return { intakeId, lines: classified.length + assemblies.length };
+  },
+});
+
+/**
+ * Park a release we were told about but can't afford to read.
+ *
+ * The notification was free and arrives once; losing it because the budget is
+ * spent would mean losing the release entirely. So the id is kept, and
+ * Reconcile reads it when there's allowance again.
+ */
+export const queueRelease = internalMutation({
+  args: { releasePackageId: v.string(), reason: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const already = await ctx.db
+      .query("releaseIntakes")
+      .withIndex("by_package", (q) =>
+        q.eq("onshapeReleasePackageId", args.releasePackageId),
+      )
+      .first();
+    if (already) return null;
+    await ctx.db.insert("releaseIntakes", {
+      source: "onshape",
+      onshapeReleasePackageId: args.releasePackageId,
+      label: `Release ${args.releasePackageId}`,
+      receivedAt: Date.now(),
+      status: "queued",
+      payload: {
+        releasePackageId: args.releasePackageId,
+        queuedBecause: args.reason,
+      },
+    });
+    return null;
   },
 });

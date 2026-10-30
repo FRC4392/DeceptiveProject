@@ -5,6 +5,25 @@
 // `internal.onshapeOAuth.*`.
 import type { ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
+import {
+  BUDGET_EXHAUSTED_STATUS,
+  RATE_LIMITED_STATUS,
+  RETRY_DELAYS_MS,
+  blockedReason,
+  type CallPurpose,
+} from "./budget";
+
+/**
+ * Thrown instead of calling Onshape, when the budget mode says not to. A
+ * distinct class so callers can tell "we chose not to" from "Onshape broke" —
+ * the first is a normal state with a manual way round it, the second isn't.
+ */
+export class BudgetBlockedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "BudgetBlockedError";
+  }
+}
 
 export const TOKEN_URL = "https://oauth.onshape.com/oauth/token";
 
@@ -85,7 +104,14 @@ export async function onshapeFetch(
   ctx: ActionCtx,
   url: string,
   init?: RequestInit,
+  purpose: CallPurpose = "sync",
 ): Promise<Response> {
+  // The budget mode decides before anything leaves the building. A refused
+  // call is not a failed call: nothing is sent, so nothing is recorded.
+  const mode = await ctx.runQuery(internal.settings.currentMode, {});
+  const refused = blockedReason(mode, purpose);
+  if (refused) throw new BudgetBlockedError(refused);
+
   const method = init?.method ?? "GET";
   const record = async (res: Response) => {
     // Onshape doesn't charge for failures, and `recordApiCall` applies that
@@ -105,8 +131,10 @@ export async function onshapeFetch(
         Authorization: `Bearer ${token}`,
       },
     });
+
   let res = await send(await getValidAccessToken(ctx));
   await record(res);
+
   if (res.status === 401) {
     try {
       res = await send(await forceRefreshAccessToken(ctx));
@@ -117,5 +145,28 @@ export async function onshapeFetch(
       console.error("Onshape token refresh after 401 failed:", err);
     }
   }
+
+  // 429 is a short per-endpoint window, not the yearly allowance, so riding it
+  // out is worth a few seconds. Rate-limited responses aren't counted, so the
+  // retries are free.
+  for (const delay of RETRY_DELAYS_MS) {
+    if (res.status !== RATE_LIMITED_STATUS) break;
+    await sleep(delay);
+    res = await send(await getValidAccessToken(ctx));
+    await record(res);
+  }
+
+  // 402 is the allowance itself being gone. Stop the app spending before it
+  // discovers this one call at a time.
+  if (res.status === BUDGET_EXHAUSTED_STATUS) {
+    await ctx.runMutation(internal.settings.forceManualMode, {
+      reason: `Onshape returned 402 on ${new URL(url).pathname} — the yearly allowance is gone.`,
+    });
+  }
+
   return res;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

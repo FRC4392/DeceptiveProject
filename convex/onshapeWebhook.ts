@@ -18,10 +18,12 @@ import {
   internalMutation,
   internalQuery,
   query,
+  type ActionCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { requireMentor } from "./lib/auth";
+import { requireLead, requireMentor } from "./lib/auth";
+import { blockedReason, isCallAllowed } from "./lib/budget";
 import { onshapeFetch } from "./lib/onshapeAuth";
 import { fetchReleasePackage } from "./lib/onshapeSync";
 import {
@@ -125,8 +127,13 @@ export const touch = internalMutation({
   },
 });
 
-/** Have we already taken this release in? Checked before spending a call. */
-export const intakeExists = internalQuery({
+/**
+ * Have we already dealt with this release? Checked before spending a call.
+ *
+ * A *queued* row doesn't count: that's a release we were told about but
+ * couldn't afford to read, and reading it is exactly what Reconcile is for.
+ */
+export const releaseHandled = internalQuery({
   args: { releasePackageId: v.string() },
   returns: v.boolean(),
   handler: async (ctx, { releasePackageId: id }) => {
@@ -134,7 +141,35 @@ export const intakeExists = internalQuery({
       .query("releaseIntakes")
       .withIndex("by_package", (q) => q.eq("onshapeReleasePackageId", id))
       .first();
-    return row !== null;
+    return row !== null && row.status !== "queued";
+  },
+});
+
+/** Releases parked by Manual mode, oldest first. */
+export const queuedReleases = internalQuery({
+  args: {},
+  returns: v.array(v.string()),
+  handler: async (ctx) => {
+    const rows = await ctx.db
+      .query("releaseIntakes")
+      .withIndex("by_status", (q) => q.eq("status", "queued"))
+      .take(100);
+    return rows
+      .map((r) => r.onshapeReleasePackageId)
+      .filter((id): id is string => id !== undefined);
+  },
+});
+
+export const callerIsLead = internalQuery({
+  args: {},
+  returns: v.boolean(),
+  handler: async (ctx) => {
+    try {
+      await requireLead(ctx);
+      return true;
+    } catch {
+      return false;
+    }
   },
 });
 
@@ -214,18 +249,23 @@ export const register = action({
     }
 
     const events = [RELEASE_TRANSITION_EVENT];
-    const res = await onshapeFetch(ctx, `${API_BASE}/api/webhooks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        events,
-        url: callbackUrl(secret),
-        // Each transition on its own: collapsing them would hide the move into
-        // RELEASED behind an earlier one we'd then ignore.
-        options: { collapseEvents: false },
-        ...(companyId ? { companyId } : {}),
-      }),
-    });
+    const res = await onshapeFetch(
+      ctx,
+      `${API_BASE}/api/webhooks`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          events,
+          url: callbackUrl(secret),
+          // Each transition on its own: collapsing them would hide the move
+          // into RELEASED behind an earlier one we'd then ignore.
+          options: { collapseEvents: false },
+          ...(companyId ? { companyId } : {}),
+        }),
+      },
+      "admin",
+    );
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       const hint =
@@ -276,6 +316,7 @@ async function unregisterWithOnshape(
       ctx,
       `${API_BASE}/api/webhooks/${encodeURIComponent(webhookId)}`,
       { method: "DELETE" },
+      "admin",
     );
   } catch (err) {
     // An already-gone webhook, or an expired token, shouldn't block the local
@@ -337,38 +378,103 @@ export const ingestRelease = internalAction({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const seen = await ctx.runQuery(internal.onshapeWebhook.intakeExists, {
-      releasePackageId: args.releasePackageId,
-    });
-    if (seen) return null;
-
-    const pkg = await fetchReleasePackage(ctx, args.releasePackageId);
-    const state = releaseState(pkg);
-    if (!isReleasedState(state)) {
-      // Submitted, rejected, or a custom workflow state we don't know. Either
-      // way the parts aren't real yet, and the next transition will tell us.
-      console.log(
-        `Onshape release ${args.releasePackageId} is "${state || "(no state)"}" — not taking it in.`,
-      );
-      return null;
-    }
-
-    const lines = releaseLines(pkg);
-    if (lines.length === 0) {
-      console.warn(
-        `Onshape release ${args.releasePackageId} is released but lists no items.`,
-      );
-      return null;
-    }
-
-    await ctx.runMutation(internal.onshape.receiveRelease, {
-      releasePackageId: args.releasePackageId,
-      label: releaseLabel(pkg),
-      state,
-      messageId: args.messageId,
-      raw: trimRawPackage(pkg),
-      items: lines,
-    });
+    await ingestOne(ctx, args.releasePackageId, args.messageId);
     return null;
+  },
+});
+
+/**
+ * Read one release and take it in. Returns false when it couldn't be done —
+ * the budget said no, or Onshape did — in which case the release is left
+ * queued rather than lost. The notification only comes once.
+ */
+async function ingestOne(
+  ctx: ActionCtx,
+  releasePackageId: string,
+  messageId?: string,
+): Promise<boolean> {
+  const handled = await ctx.runQuery(internal.onshapeWebhook.releaseHandled, {
+    releasePackageId,
+  });
+  if (handled) return true;
+
+  const mode = await ctx.runQuery(internal.settings.currentMode, {});
+  if (!isCallAllowed(mode, "release")) {
+    await ctx.runMutation(internal.onshape.queueRelease, {
+      releasePackageId,
+      reason: blockedReason(mode, "release") ?? "Onshape calls are paused.",
+    });
+    return false;
+  }
+
+  let pkg;
+  try {
+    pkg = await fetchReleasePackage(ctx, releasePackageId);
+  } catch (err) {
+    // Rate limited, 402, Onshape down: keep the id so Reconcile can try again.
+    await ctx.runMutation(internal.onshape.queueRelease, {
+      releasePackageId,
+      reason: err instanceof Error ? err.message : "The read failed.",
+    });
+    console.error(
+      `Onshape release ${releasePackageId} could not be read:`,
+      err,
+    );
+    return false;
+  }
+
+  const state = releaseState(pkg);
+  if (!isReleasedState(state)) {
+    // Submitted, rejected, or a custom workflow state we don't know. Either
+    // way the parts aren't real yet, and the next transition will tell us.
+    console.log(
+      `Onshape release ${releasePackageId} is "${state || "(no state)"}" — not taking it in.`,
+    );
+    return true;
+  }
+
+  const lines = releaseLines(pkg);
+  if (lines.length === 0) {
+    console.warn(
+      `Onshape release ${releasePackageId} is released but lists no items.`,
+    );
+    return true;
+  }
+
+  await ctx.runMutation(internal.onshape.receiveRelease, {
+    releasePackageId,
+    label: releaseLabel(pkg),
+    state,
+    messageId,
+    raw: trimRawPackage(pkg),
+    items: lines,
+  });
+  return true;
+}
+
+/**
+ * Read the releases Manual mode parked, now that there's allowance again.
+ *
+ * One call each, oldest first, and it stops at the first one that can't be
+ * read — if the budget ran out again there's no sense walking the rest of the
+ * queue to find that out ten more times.
+ */
+export const reconcile = action({
+  args: {},
+  returns: v.object({ processed: v.number(), remaining: v.number() }),
+  handler: async (ctx) => {
+    if (!(await ctx.runQuery(internal.onshapeWebhook.callerIsLead, {}))) {
+      throw new Error("Design leads and mentors only.");
+    }
+    const queued: string[] = await ctx.runQuery(
+      internal.onshapeWebhook.queuedReleases,
+      {},
+    );
+    let processed = 0;
+    for (const releasePackageId of queued) {
+      if (!(await ingestOne(ctx, releasePackageId))) break;
+      processed++;
+    }
+    return { processed, remaining: queued.length - processed };
   },
 });

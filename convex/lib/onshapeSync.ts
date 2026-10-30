@@ -293,6 +293,8 @@ export async function fetchReleasePackage(
   const res = await onshapeFetch(
     ctx,
     `${API_BASE}/api/releasepackages/${encodeURIComponent(releasePackageId)}?detailed=${detailed}`,
+    undefined,
+    "release",
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");

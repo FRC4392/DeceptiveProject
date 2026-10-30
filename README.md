@@ -210,6 +210,32 @@ for everyone**, so the tracker is built to need almost none of them:
   it to `apiCalls`, and only 2xx/3xx responses count — which is what the budget
   meter shows.
 
+**The modes are a brake, not a gauge.** Every call declares what it's for, and
+`convex/lib/budget.ts` decides whether the current mode allows it. A refused
+call is never sent, so it costs nothing:
+
+|                                  | Normal | Lean (< 30% left) | Manual (< 10%, or forced, or after a 402) |
+| -------------------------------- | ------ | ----------------- | ----------------------------------------- |
+| Release read (1 call, automatic) | yes    | yes               | **queued for Reconcile**                  |
+| Panel sync (1 call per part)     | yes    | **no**            | **no**                                    |
+| Registering the webhook          | yes    | yes               | yes                                       |
+
+Registering stays allowed in Manual on purpose: turning the integration off is
+how a mentor stops it spending, and refusing that one call would trap the team
+in the mode they're trying to escape.
+
+A release that arrives in Manual isn't lost — the notification was free and
+only comes once, so the package id is parked as a `queued` intake. **Reconcile**
+on New from Onshape reads them when there's allowance again, oldest first,
+stopping at the first one it still can't afford. A read that fails for any
+other reason queues the same way.
+
+A **429** is waited out — three retries, 1s/2s/4s — because it's a short
+per-endpoint window and rate-limited responses aren't charged for. A **402**
+means the year's allowance is gone, so the app forces itself into Manual
+immediately and records why; that reason shows on New from Onshape rather than
+leaving a mentor to wonder who changed the mode.
+
 **The tracker works with no Onshape connection at all.** A lead can type part
 numbers in by hand or upload a BOM CSV, and the same matching logic runs
 against them.
@@ -241,7 +267,8 @@ convex/
   settings.ts        app settings and the API budget meter
   onshape.ts         document to subsystem mapping, sync intake, call logging
   onshapeOAuth.ts    Onshape OAuth flow + right-panel httpActions
-  onshapeWebhook.ts  release webhook: registration, receiver, release intake
+  onshapeWebhook.ts  release webhook: registration, receiver, release
+                     intake, and Reconcile
   auth.ts            Clerk current-user query, local user sync, webhook,
                      and mentor-only Clerk roster backfill
   auth.config.ts     Convex auth provider config for Clerk JWT validation

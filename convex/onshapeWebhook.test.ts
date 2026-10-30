@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { encryptToken } from "./lib/tokenCrypto";
+import { RETRY_DELAYS_MS } from "./lib/budget";
 
 const modules = import.meta.glob("./**/*.ts");
 const ISSUER = "https://example.clerk.accounts.dev";
@@ -17,21 +18,33 @@ type Pkg = Record<string, unknown>;
  * so one stub covers the whole path — and the calls it records are also how
  * these tests count what a release costs.
  */
-function stubOnshape(pkg: Pkg | { status: number }) {
+function stubOnshape(...replies: Array<Pkg | { status: number }>) {
   const calls: string[] = [];
   const fetchMock = vi.fn(async (url: string | URL) => {
     const href = typeof url === "string" ? url : url.toString();
     calls.push(new URL(href).pathname);
-    if ("status" in pkg && typeof pkg.status === "number") {
-      return new Response("nope", { status: pkg.status });
+    // The last reply repeats, so one argument means "always this".
+    const reply = replies[Math.min(calls.length - 1, replies.length - 1)];
+    if ("status" in reply && typeof reply.status === "number") {
+      return new Response("nope", { status: reply.status });
     }
-    return new Response(JSON.stringify(pkg), {
+    return new Response(JSON.stringify(reply), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   });
   vi.stubGlobal("fetch", fetchMock);
   return calls;
+}
+
+/** Pin the budget mode the way a mentor's forced-mode switch would. */
+async function forceMode(
+  t: ReturnType<typeof convexTest>,
+  mode: "normal" | "lean" | "manual",
+) {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("appSettings", { key: "forcedMode", value: mode });
+  });
 }
 
 async function setup(t: ReturnType<typeof convexTest>) {
@@ -383,13 +396,17 @@ describe("taking a release in", () => {
     expect(lines[0].subsystemId).toBe(intake._id);
   });
 
-  test("a failed read leaves no half-built intake behind", async () => {
+  test("a failed read leaves the release queued, not lost", async () => {
     const t = convexTest(schema, modules);
     const { mentor } = await setup(t);
     const calls = stubOnshape({ status: 500 });
     await deliver(t);
     expect(calls).toEqual(["/api/releasepackages/rp_1"]);
-    expect(await mentor.query(api.intake.list, {})).toEqual([]);
+    // The notification only comes once, so the id has to survive the failure.
+    const [{ intake, lines }] = await mentor.query(api.intake.list, {});
+    expect(intake.status).toBe("queued");
+    expect(intake.onshapeReleasePackageId).toBe("rp_1");
+    expect(lines).toEqual([]);
   });
 });
 
@@ -522,5 +539,217 @@ describe("receiveRelease", () => {
       await t.mutation(internal.onshape.receiveRelease, args),
     ).not.toBeNull();
     expect(await t.mutation(internal.onshape.receiveRelease, args)).toBeNull();
+  });
+});
+
+describe("the budget mode as a brake", () => {
+  test("manual mode queues the release and reads nothing", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    await forceMode(t, "manual");
+    const calls = stubOnshape(
+      releasePackage([
+        { properties: [{ name: "Part number", value: "27-INT-101" }] },
+      ]),
+    );
+
+    await deliver(t);
+
+    expect(calls).toEqual([]);
+    const [{ intake, lines }] = await mentor.query(api.intake.list, {});
+    expect(intake.status).toBe("queued");
+    expect(intake.onshapeReleasePackageId).toBe("rp_1");
+    expect(lines).toEqual([]);
+  });
+
+  test("lean mode still takes releases in — that's the cheap path", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    await forceMode(t, "lean");
+    const calls = stubOnshape(
+      releasePackage([
+        { properties: [{ name: "Part number", value: "27-INT-101" }] },
+      ]),
+    );
+
+    await deliver(t);
+
+    expect(calls).toEqual(["/api/releasepackages/rp_1"]);
+    const [{ intake }] = await mentor.query(api.intake.list, {});
+    expect(intake.status).toBe("read");
+  });
+
+  test("lean mode refuses the panel sync — that's a call per part", async () => {
+    const t = convexTest(schema, modules);
+    const { intake } = await setup(t);
+    await forceMode(t, "lean");
+    const calls = stubOnshape({});
+
+    await expect(
+      t.action(internal.onshapeOAuth.syncElement, {
+        documentId: "doc_1",
+        wv: "w",
+        wvid: "ws_1",
+        elementId: "el_1",
+      }),
+    ).rejects.toThrow(/lean mode/i);
+    expect(calls).toEqual([]);
+    expect(intake).toBeDefined();
+  });
+
+  test("a refused call is not a spent call", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    await forceMode(t, "manual");
+    stubOnshape(releasePackage([]));
+    await deliver(t);
+    expect((await mentor.query(api.settings.budget, {})).used).toBe(0);
+  });
+
+  test("turning the webhook off still works in manual mode", async () => {
+    // Otherwise a mentor can't stop the thing that spent the budget.
+    vi.stubEnv("CONVEX_SITE_URL", "https://example.convex.site");
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    await forceMode(t, "manual");
+    await t.run(async (ctx) => {
+      await ctx.db.insert("onshapeWebhooks", {
+        webhookId: "wh_99",
+        events: ["onshape.workflow.transition"],
+        registeredAt: Date.now(),
+      });
+    });
+    stubOnshape({});
+
+    await mentor.action(api.onshapeWebhook.unregister, {});
+    expect((await mentor.query(api.onshapeWebhook.status, {})).registered).toBe(
+      false,
+    );
+  });
+});
+
+describe("reconciling what manual mode parked", () => {
+  async function queueOne(t: ReturnType<typeof convexTest>) {
+    await forceMode(t, "manual");
+    stubOnshape(releasePackage([]));
+    await deliver(t);
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("appSettings")
+        .withIndex("by_key", (q) => q.eq("key", "forcedMode"))
+        .unique();
+      if (row) await ctx.db.delete(row._id);
+    });
+  }
+
+  test("reads the queued release and fills the same intake", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake: subsystem, router } = await setup(t);
+    const { partNumber } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: subsystem._id,
+      name: "Side plate",
+      processTypeId: router._id,
+      qtyNeeded: 1,
+    });
+    await queueOne(t);
+
+    const calls = stubOnshape(
+      releasePackage([
+        {
+          properties: [
+            { name: "Part number", value: partNumber },
+            { name: "Revision", value: "B" },
+          ],
+        },
+      ]),
+    );
+    const result = await mentor.action(api.onshapeWebhook.reconcile, {});
+
+    expect(result).toEqual({ processed: 1, remaining: 0 });
+    expect(calls).toEqual(["/api/releasepackages/rp_1"]);
+    // Still one intake — the queued row was filled, not duplicated.
+    const list = await mentor.query(api.intake.list, {});
+    expect(list).toHaveLength(1);
+    expect(list[0].intake.status).toBe("read");
+    expect(list[0].lines[0]).toMatchObject({ partNumber, kind: "matched" });
+  });
+
+  test("stops at the first one it still can't read", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    await queueOne(t);
+    await forceMode(t, "manual");
+    const calls = stubOnshape(releasePackage([]));
+
+    expect(await mentor.action(api.onshapeWebhook.reconcile, {})).toEqual({
+      processed: 0,
+      remaining: 1,
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("a student can't reconcile", async () => {
+    const t = convexTest(schema, modules);
+    await setup(t);
+    const student = t.withIdentity({
+      subject: "student_2",
+      issuer: ISSUER,
+      email: "student2@example.com",
+    });
+    await student.mutation(api.auth.storeCurrentUser, {});
+    await expect(
+      student.action(api.onshapeWebhook.reconcile, {}),
+    ).rejects.toThrow(/leads and mentors/i);
+  });
+});
+
+describe("what Onshape says back", () => {
+  test("a 402 drops the app into manual mode with the reason recorded", async () => {
+    vi.stubEnv("CONVEX_SITE_URL", "https://example.convex.site");
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    stubOnshape({ status: 402 });
+
+    await expect(
+      mentor.action(api.onshapeWebhook.register, {}),
+    ).rejects.toThrow(/402/);
+
+    const budget = await mentor.query(api.settings.budget, {});
+    expect(budget.mode).toBe("manual");
+    expect(budget.forced).toBe(true);
+    expect(budget.forcedReason).toMatch(/402/);
+    expect(budget.forcedAt).toBeTypeOf("number");
+  });
+
+  test("a 402 doesn't count against the meter", async () => {
+    vi.stubEnv("CONVEX_SITE_URL", "https://example.convex.site");
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    stubOnshape({ status: 402 });
+    await mentor.action(api.onshapeWebhook.register, {}).catch(() => {});
+    expect((await mentor.query(api.settings.budget, {})).used).toBe(0);
+  });
+
+  // Real timers: the backoff really waits, and the first retry is a second.
+  // Worth the second to prove the loop retries and doesn't double-charge.
+  test("a 429 is waited out and retried", async () => {
+    vi.useRealTimers();
+    vi.stubEnv("CONVEX_SITE_URL", "https://example.convex.site");
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    const calls = stubOnshape({ status: 429 }, { id: "wh_99" });
+
+    expect(await mentor.action(api.onshapeWebhook.register, {})).toEqual({
+      webhookId: "wh_99",
+    });
+    expect(calls).toHaveLength(2);
+    // Onshape doesn't charge for the 429, and neither does the meter.
+    expect((await mentor.query(api.settings.budget, {})).used).toBe(1);
+  });
+
+  test("the backoff is bounded, so a stuck limit doesn't hammer", () => {
+    // Three retries, doubling. The integration test above covers the loop;
+    // this is the cap, which would otherwise take seven seconds to prove.
+    expect(RETRY_DELAYS_MS).toEqual([1_000, 2_000, 4_000]);
   });
 });

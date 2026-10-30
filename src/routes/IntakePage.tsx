@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,10 @@ export function IntakePage() {
   const budget = useQuery(api.settings.budget, {});
   const [tool, setTool] = useState<"none" | "manual" | "csv">("none");
 
+  const queued = (intakes ?? []).filter(
+    ({ intake }) => intake.status === "queued",
+  ).length;
+
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -38,6 +42,10 @@ export function IntakePage() {
           </p>
         </div>
       </header>
+
+      {budget && budget.mode !== "normal" && (
+        <BudgetBanner budget={budget} queued={queued} />
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <div className="space-y-6">
@@ -133,14 +141,96 @@ export function IntakePage() {
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Mode: <strong className="capitalize">{budget.mode}</strong>
-                {budget.forced && " (set by a mentor)"}. Change notifications
-                from Onshape are free; only reads and writes count.
+                {budget.forced &&
+                  (budget.forcedReason ? " (forced)" : " (set by a mentor)")}
+                . Change notifications from Onshape are free; only reads and
+                writes count.
               </p>
             </section>
           )}
         </aside>
       </div>
     </div>
+  );
+}
+
+/**
+ * Says the app has stopped spending, why, and what still works — because the
+ * modes only help if the lead can tell the difference between "Onshape is
+ * broken" and "we are being careful on purpose".
+ */
+function BudgetBanner({
+  budget,
+  queued,
+}: {
+  budget: {
+    mode: "normal" | "lean" | "manual";
+    forced: boolean;
+    forcedReason: string | null;
+    remaining: number;
+  };
+  queued: number;
+}) {
+  const reconcile = useAction(api.onshapeWebhook.reconcile);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const manual = budget.mode === "manual";
+  return (
+    <section
+      className={cn(
+        "rounded-lg border p-4",
+        manual
+          ? "border-danger/40 bg-danger/5"
+          : "border-warning/40 bg-warning/5",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h2 className="font-semibold">
+            {manual
+              ? "Onshape calls are paused"
+              : "Going easy on the Onshape budget"}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {manual
+              ? "Nothing is read from Onshape. Releases are still being told to us for free and parked below; typing numbers in and uploading a BOM both still work."
+              : "Releases still come in on their own. Syncing a whole element from the Onshape panel is off — it costs a call per part."}{" "}
+            {budget.remaining} calls left
+            {budget.forced && budget.forcedReason
+              ? ` · ${budget.forcedReason}`
+              : budget.forced
+                ? " · set by a mentor"
+                : ""}
+          </p>
+          {note && <p className="text-sm">{note}</p>}
+        </div>
+        {queued > 0 && (
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setNote(null);
+              reconcile({})
+                .then((r) =>
+                  setNote(
+                    r.processed === 0
+                      ? "Still no budget for it — nothing was read."
+                      : `Read ${r.processed} release${r.processed === 1 ? "" : "s"}${r.remaining > 0 ? `, ${r.remaining} still waiting` : ""}.`,
+                  ),
+                )
+                .catch((err: unknown) =>
+                  setNote(err instanceof Error ? err.message : "No luck."),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            Reconcile {queued}
+          </Button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -234,6 +324,14 @@ function IntakeCard({
 
       {error && <p className="text-sm text-danger">{error}</p>}
 
+      {intake.status === "queued" && (
+        <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+          Onshape told us about this one, but it hasn't been read yet
+          {queuedBecause(intake) ? ` — ${queuedBecause(intake)}` : ""}. Press
+          Reconcile at the top when there's budget again.
+        </p>
+      )}
+
       {unknown.length > 0 && (
         <div>
           <h3 className="text-sm font-semibold">
@@ -306,6 +404,14 @@ function IntakeCard({
       )}
     </section>
   );
+}
+
+/** Why a release is still sitting unread, if the queueing said. */
+function queuedBecause(intake: Doc<"releaseIntakes">): string | null {
+  const payload = intake.payload as { queuedBecause?: unknown } | undefined;
+  return typeof payload?.queuedBecause === "string"
+    ? payload.queuedBecause
+    : null;
 }
 
 function AssemblyLine({ line }: { line: Line }) {

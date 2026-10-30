@@ -48,6 +48,7 @@ vi.mock("../../convex/_generated/api", () => ({
       status: "onshapeWebhook.status",
       register: "onshapeWebhook.register",
       unregister: "onshapeWebhook.unregister",
+      reconcile: "onshapeWebhook.reconcile",
     },
     intake: { pendingCount: "intake.pendingCount", list: "intake.list" },
     parts: {
@@ -185,6 +186,8 @@ vi.mock("convex/react", () => ({
           remaining: 2500,
           mode: "normal",
           forced: false,
+          forcedReason: null,
+          forcedAt: null,
           renewalDate: null,
         };
       default:
