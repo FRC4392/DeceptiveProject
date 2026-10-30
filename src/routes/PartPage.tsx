@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Chip, FlagChips } from "@/components/tracker/PartChips";
 import { StageStrip } from "@/components/tracker/StageStrip";
 import { ProblemDialog } from "@/components/tracker/ProblemDialog";
+import { AssigneePicker } from "@/components/tracker/AssigneePicker";
 import { QtyCounter } from "@/components/tracker/QtyCounter";
 import {
   STAGE_LIST,
@@ -38,7 +39,7 @@ import {
   useProcessMap,
   useSubsystemMap,
 } from "@/lib/tracker";
-import { useIsLead } from "@/lib/roles";
+import { useIsLead, useIsMentor } from "@/lib/roles";
 import { useRosterMap } from "@/lib/users";
 import { onshapeElementUrl } from "../../convex/lib/onshapeLinks";
 import { cn } from "@/lib/utils";
@@ -57,11 +58,13 @@ export function PartPage() {
   const roster = useRosterMap();
   const actor = useActor();
   const isLead = useIsLead();
+  const isMentor = useIsMentor();
 
   const advancePart = useMutation(api.parts.advance);
   const moveTo = useMutation(api.parts.moveTo);
   const claim = useMutation(api.parts.claim);
   const unclaim = useMutation(api.parts.unclaim);
+  const assign = useMutation(api.parts.assign);
   const addNote = useMutation(api.parts.addNote);
   const resolveProblem = useMutation(api.parts.resolveProblem);
 
@@ -215,7 +218,15 @@ export function PartPage() {
                   {stageTask(stage, machine?.name)}
                 </h2>
               </div>
-              {claimant ? (
+              {isMentor && isClaimableStage(stage) ? (
+                <AssigneePicker
+                  value={part.claimedByUserId}
+                  label="Who's on this part"
+                  onChange={(userId) =>
+                    void run(() => assign({ partId: part._id, userId }))
+                  }
+                />
+              ) : claimant ? (
                 <p className="text-sm text-muted-foreground">
                   {claimant.name} claimed this
                 </p>

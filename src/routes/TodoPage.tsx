@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Chip } from "@/components/tracker/PartChips";
 import { TodoFormDialog } from "@/components/tracker/TodoFormDialog";
+import { AssigneePicker } from "@/components/tracker/AssigneePicker";
 import { initials } from "@/lib/stages";
-import { useIsLead } from "@/lib/roles";
+import { useIsLead, useIsMentor } from "@/lib/roles";
 import { useRosterMap } from "@/lib/users";
 
 /** One to-do, laid out like a part page: what it is, who's on it, notes. */
@@ -21,10 +22,12 @@ export function TodoPage() {
   const me = useQuery(api.auth.currentUser);
   const roster = useRosterMap();
   const isLead = useIsLead();
+  const isMentor = useIsMentor();
   const navigate = useNavigate();
 
   const claim = useMutation(api.todos.claim);
   const unclaim = useMutation(api.todos.unclaim);
+  const assign = useMutation(api.todos.assign);
   const setDone = useMutation(api.todos.setDone);
   const addNote = useMutation(api.todos.addNote);
   const remove = useMutation(api.todos.remove);
@@ -129,6 +132,17 @@ export function TodoPage() {
           <p className="mt-3 text-sm text-muted-foreground">
             {todo.description}
           </p>
+        )}
+
+        {isMentor && !done && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-sm text-muted-foreground">Who's on it</span>
+            <AssigneePicker
+              value={todo.claimedByUserId}
+              label="Who's on this to-do"
+              onChange={(userId) => run(assign({ id: todo._id, userId }))}
+            />
+          </div>
         )}
 
         <div className="mt-4 flex flex-wrap gap-2">

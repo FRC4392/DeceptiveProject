@@ -248,6 +248,28 @@ export const claim = mutation({
   },
 });
 
+/**
+ * Put someone else on a to-do. Mentors only, same as parts.
+ */
+export const assign = mutation({
+  args: { id: v.id("todos"), userId: v.union(v.string(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, { id, userId }) => {
+    await requireMentor(ctx);
+    const todo = await ctx.db.get(id);
+    if (!todo) throw new Error("That to-do is gone.");
+    if (userId !== null) {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("authId", (q) => q.eq("authId", userId))
+        .unique();
+      if (!user) throw new Error("That person hasn't signed in yet.");
+    }
+    await ctx.db.patch(id, { claimedByUserId: userId ?? undefined });
+    return null;
+  },
+});
+
 export const unclaim = mutation({
   args: { id: v.id("todos") },
   returns: v.null(),

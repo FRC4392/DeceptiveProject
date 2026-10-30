@@ -181,6 +181,93 @@ describe("moving a part along", () => {
     expect(part?.makerUserId).toBe("student_1");
   });
 
+  test("a mentor puts someone on a part, and takes them off", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router } = await setup(t);
+    const student = t.withIdentity(identity("student_1"));
+    await student.mutation(api.auth.storeCurrentUser, {});
+
+    const { partId } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: intake._id,
+      name: "Side plate",
+      processTypeId: router._id,
+      qtyNeeded: 1,
+    });
+
+    await mentor.mutation(api.parts.assign, { partId, userId: "student_1" });
+    expect(
+      (await mentor.query(api.parts.get, { id: partId }))?.claimedByUserId,
+    ).toBe("student_1");
+
+    await mentor.mutation(api.parts.assign, { partId, userId: null });
+    expect(
+      (await mentor.query(api.parts.get, { id: partId }))?.claimedByUserId,
+    ).toBeUndefined();
+  });
+
+  test("a mentor can hand a part from one person to another", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router } = await setup(t);
+    for (const who of ["student_1", "student_2"]) {
+      const caller = t.withIdentity(identity(who));
+      await caller.mutation(api.auth.storeCurrentUser, {});
+    }
+    const { partId } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: intake._id,
+      name: "Side plate",
+      processTypeId: router._id,
+      qtyNeeded: 1,
+    });
+
+    await t
+      .withIdentity(identity("student_1"))
+      .mutation(api.parts.claim, { partId });
+    // Claiming refuses to take someone else's; assigning is allowed to.
+    await mentor.mutation(api.parts.assign, { partId, userId: "student_2" });
+    expect(
+      (await mentor.query(api.parts.get, { id: partId }))?.claimedByUserId,
+    ).toBe("student_2");
+  });
+
+  test("students can't assign, and nobody can assign a stranger", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router } = await setup(t);
+    const student = t.withIdentity(identity("student_1"));
+    await student.mutation(api.auth.storeCurrentUser, {});
+    const { partId } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: intake._id,
+      name: "Side plate",
+      processTypeId: router._id,
+      qtyNeeded: 1,
+    });
+
+    await expect(
+      student.mutation(api.parts.assign, { partId, userId: "student_1" }),
+    ).rejects.toThrow(/mentor/i);
+
+    await expect(
+      mentor.mutation(api.parts.assign, { partId, userId: "never_signed_in" }),
+    ).rejects.toThrow(/hasn't signed in/i);
+  });
+
+  test("a part in the bin can't be assigned", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, print } = await setup(t);
+    const student = t.withIdentity(identity("student_1"));
+    await student.mutation(api.auth.storeCurrentUser, {});
+    const { partId } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: intake._id,
+      name: "Bearing block",
+      processTypeId: print._id,
+      qtyNeeded: 1,
+    });
+    await mentor.mutation(api.parts.moveTo, { partId, stage: 5 });
+
+    await expect(
+      mentor.mutation(api.parts.assign, { partId, userId: "student_1" }),
+    ).rejects.toThrow(/in the bin/i);
+  });
+
   test("something going wrong puts it back on the machine", async () => {
     const t = convexTest(schema, modules);
     const { mentor, intake, router } = await setup(t);

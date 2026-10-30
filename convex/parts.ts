@@ -526,6 +526,32 @@ export const claim = mutation({
   },
 });
 
+/**
+ * Put someone else on a part. Mentors only — claiming is for taking work
+ * yourself, this is for handing it out, and the two want different rules.
+ * Passing no userId takes whoever had it off.
+ */
+export const assign = mutation({
+  args: { partId: v.id("parts"), userId: v.union(v.string(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, { partId, userId }) => {
+    await requireMentor(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) throw new Error("That part is gone.");
+    if (userId !== null) {
+      const permission = canClaim(asStage(part.stage));
+      if (!permission.allowed) throw new Error(permission.reason);
+      const user = await ctx.db
+        .query("users")
+        .withIndex("authId", (q) => q.eq("authId", userId))
+        .unique();
+      if (!user) throw new Error("That person hasn't signed in yet.");
+    }
+    await ctx.db.patch(partId, { claimedByUserId: userId ?? undefined });
+    return null;
+  },
+});
+
 export const unclaim = mutation({
   args: { partId: v.id("parts") },
   returns: v.null(),

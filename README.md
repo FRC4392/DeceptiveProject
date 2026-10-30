@@ -169,6 +169,11 @@ bin and goes on the robot with its sub-assembly rather than being claimed on
 its own. Moving a part to the next stage releases the claim, since the next
 stage is different work.
 
+**Mentors can assign.** Claiming is for taking work yourself and refuses to
+take something someone else holds; a mentor picking a name on the part page
+(or a to-do page) hands it over regardless. Picking "Nobody" puts it back up
+for grabs.
+
 Students find parts by **typing the number** — there is no QR code or scanner
 anywhere in the app.
 

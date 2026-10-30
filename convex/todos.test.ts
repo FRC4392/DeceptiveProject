@@ -147,6 +147,36 @@ describe("to-dos", () => {
     ).toBeUndefined();
   });
 
+  test("a mentor puts someone on one, and takes them off", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    const student = t.withIdentity(identity("student_1"));
+    await student.mutation(api.auth.storeCurrentUser, {});
+    const id = await mentor.mutation(api.todos.create, { title: "Pack" });
+
+    await mentor.mutation(api.todos.assign, { id, userId: "student_1" });
+    expect((await mentor.query(api.todos.get, { id }))?.claimedByUserId).toBe(
+      "student_1",
+    );
+
+    await mentor.mutation(api.todos.assign, { id, userId: null });
+    expect(
+      (await mentor.query(api.todos.get, { id }))?.claimedByUserId,
+    ).toBeUndefined();
+  });
+
+  test("a student can't assign one", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    const student = t.withIdentity(identity("student_1"));
+    await student.mutation(api.auth.storeCurrentUser, {});
+    const id = await mentor.mutation(api.todos.create, { title: "Pack" });
+
+    await expect(
+      student.mutation(api.todos.assign, { id, userId: "student_1" }),
+    ).rejects.toThrow(/mentor/i);
+  });
+
   test("done and not done again, with who did it", async () => {
     const t = convexTest(schema, modules);
     const { mentor } = await setup(t);
