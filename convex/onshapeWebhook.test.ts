@@ -634,11 +634,9 @@ describe("reconciling what manual mode parked", () => {
     stubOnshape(releasePackage([]));
     await deliver(t);
     await t.run(async (ctx) => {
-      const row = await ctx.db
-        .query("appSettings")
-        .withIndex("by_key", (q) => q.eq("key", "forcedMode"))
-        .unique();
-      if (row) await ctx.db.delete(row._id);
+      for (const row of await ctx.db.query("appSettings").collect()) {
+        if (row.key === "forcedMode") await ctx.db.delete(row._id);
+      }
     });
   }
 
