@@ -340,6 +340,21 @@ describe("app smoke routes", () => {
     ]);
   });
 
+  it("lines the sidebar's divider up with the header's bottom border", () => {
+    // Two elements draw the app bar, and if their heights drift the two rules
+    // don't meet — a visible step across the top of every screen. jsdom does
+    // no layout, so compare the height each one is asking for.
+    const { container } = renderAt("/parts");
+    const heightOf = (el: Element | null) =>
+      el && Array.from(el.classList).find((c) => /^h-\d+$/.test(c));
+
+    const sidebarBar = container.querySelector("aside > div");
+    const headerBar = container.querySelector("header > div.lg\\:flex");
+
+    expect(heightOf(sidebarBar)).toBeDefined();
+    expect(heightOf(headerBar)).toBe(heightOf(sidebarBar));
+  });
+
   it("has a My Issues page that says when you've picked nothing up", () => {
     renderAt("/my-issues");
     expect(screen.getByText("My issues")).toBeInTheDocument();

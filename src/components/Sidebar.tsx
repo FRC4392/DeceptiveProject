@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import { Cross1Icon } from "@radix-ui/react-icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { APP_BAR_HEIGHT } from "@/lib/chrome";
 import logo from "@/assets/logo.png";
 
 export type NavItem = { to: string; label: string; badge?: number };
@@ -37,7 +38,12 @@ export function Sidebar({
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex h-16 shrink-0 items-center justify-between px-4">
+        <div
+          className={cn(
+            "flex shrink-0 items-center justify-between px-4",
+            APP_BAR_HEIGHT,
+          )}
+        >
           <NavLink to="/parts" className="flex items-center">
             <img
               src={logo}

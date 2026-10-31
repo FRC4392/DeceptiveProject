@@ -8,6 +8,8 @@ import { Sidebar, type NavSection } from "@/components/Sidebar";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useIsLead, useIsMentor } from "@/lib/roles";
+import { APP_BAR_HEIGHT } from "@/lib/chrome";
+import { cn } from "@/lib/utils";
 import logo from "@/assets/logo.png";
 
 /** Top-level authenticated app shell: sidebar nav + routed content. */
@@ -113,7 +115,14 @@ export function AppShell() {
           <div className="flex items-center justify-end gap-3 border-t px-4 py-2 lg:hidden">
             <ThemeToggle />
           </div>
-          <div className="hidden min-h-14 items-center gap-3 px-6 py-2 lg:flex">
+          {/* Same height as the sidebar's logo block, so this header's bottom
+              border and the sidebar's divider form one unbroken line. */}
+          <div
+            className={cn(
+              "hidden items-center gap-3 px-6 py-2 lg:flex",
+              APP_BAR_HEIGHT,
+            )}
+          >
             {season && (
               <p className="text-sm text-muted-foreground">
                 <span className="font-medium text-foreground">
