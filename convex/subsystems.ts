@@ -214,3 +214,78 @@ export const progress = query({
     return out;
   },
 });
+
+/** The number this subsystem will hand out next, for the Settings screen. */
+export const nextNumbers = query({
+  args: {},
+  returns: v.array(
+    v.object({ subsystemId: v.id("subsystems"), next: v.number() }),
+  ),
+  handler: async (ctx) => {
+    const season = await activeSeason(ctx);
+    if (!season) return [];
+    const subsystems = await ctx.db
+      .query("subsystems")
+      .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+      .collect();
+    const out = [];
+    for (const subsystem of subsystems) {
+      const counter = await ctx.db
+        .query("partNumberCounters")
+        .withIndex("by_season_and_subsystem", (q) =>
+          q.eq("seasonId", season._id).eq("subsystemId", subsystem._id),
+        )
+        .unique();
+      out.push({ subsystemId: subsystem._id, next: counter?.next ?? 1 });
+    }
+    return out;
+  },
+});
+
+/**
+ * Seed or correct the next number a subsystem hands out — picking up where a
+ * spreadsheet left off, or skipping a block someone numbered by hand.
+ *
+ * It only ever moves forward. A number is never reused, and nothing else in
+ * the system defends that: the counter is the only record of what has been
+ * handed out, so winding it back would quietly hand out a second 27-INT-104.
+ */
+export const setNextNumber = mutation({
+  args: { subsystemId: v.id("subsystems"), next: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { subsystemId, next }) => {
+    await requireMentor(ctx);
+    const season = await requireActiveSeason(ctx);
+    const subsystem = await ctx.db.get(subsystemId);
+    if (!subsystem) throw new Error("That subsystem is gone.");
+
+    const wanted = Math.round(next);
+    if (!Number.isFinite(wanted) || wanted < 1) {
+      throw new Error("The next number has to be 1 or more.");
+    }
+
+    const counter = await ctx.db
+      .query("partNumberCounters")
+      .withIndex("by_season_and_subsystem", (q) =>
+        q.eq("seasonId", season._id).eq("subsystemId", subsystemId),
+      )
+      .unique();
+    const current = counter?.next ?? 1;
+    if (wanted < current) {
+      throw new Error(
+        `This subsystem is already up to ${current}, and a number is never reused. Pick ${current} or higher.`,
+      );
+    }
+
+    if (counter) {
+      await ctx.db.patch(counter._id, { next: wanted });
+    } else {
+      await ctx.db.insert("partNumberCounters", {
+        seasonId: season._id,
+        subsystemId,
+        next: wanted,
+      });
+    }
+    return null;
+  },
+});

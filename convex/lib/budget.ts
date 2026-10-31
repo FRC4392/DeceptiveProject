@@ -13,19 +13,26 @@
  * - `sync` is the right-panel pull: one call per part, triggered by whoever
  *   opened the panel. On a forty-part assembly it costs forty times what a
  *   release does for the same information.
+ * - `bom` is reading what a released assembly contains, one call per
+ *   assembly on top of the release's own. It rides in on a release nobody
+ *   asked for, so it is held to the panel's standard rather than the
+ *   release's: worth it while there is room, never worth it when there isn't.
  * - `admin` is registering or removing the webhook.
  *
  * Pure so the policy can be read in one place and tested without a database.
  */
 
 export type BudgetMode = "normal" | "lean" | "manual";
-export type CallPurpose = "release" | "sync" | "admin";
+export type CallPurpose = "release" | "sync" | "bom" | "admin";
 
 export function isCallAllowed(mode: BudgetMode, purpose: CallPurpose): boolean {
   switch (purpose) {
     case "release":
       return mode !== "manual";
     case "sync":
+      return mode === "normal";
+    case "bom":
+      // An extra call per assembly, and the release is already in without it.
       return mode === "normal";
     case "admin":
       // Allowed even in Manual, deliberately. Turning the integration off is
@@ -44,6 +51,9 @@ export function blockedReason(
   purpose: CallPurpose,
 ): string | null {
   if (isCallAllowed(mode, purpose)) return null;
+  if (purpose === "bom") {
+    return "Onshape isn't in normal mode, so the release came in without reading what each assembly contains. Open the panel on it when there's budget again, or set the quantities by hand.";
+  }
   if (purpose === "sync") {
     return mode === "manual"
       ? "Onshape is in manual mode — the tracker isn't making any calls. Type the numbers in or upload a BOM under New from Onshape; both cost nothing."

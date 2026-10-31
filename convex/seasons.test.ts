@@ -219,3 +219,90 @@ describe("switching seasons", () => {
     expect(await makePart(mentor, "DRV", "Rail")).toBe("28-DRV-001");
   });
 });
+
+describe("how numbers are shaped and where they start", () => {
+  test("a subsystem can be told where to carry on from", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const subsystems = await mentor.query(api.subsystems.list, {});
+    const drv = subsystems.find((s) => s.code === "DRV")!;
+
+    await mentor.mutation(api.subsystems.setNextNumber, {
+      subsystemId: drv._id,
+      next: 120,
+    });
+
+    expect(await makePart(mentor, "DRV", "Rail")).toBe("27-DRV-120");
+    expect(await makePart(mentor, "DRV", "Rail two")).toBe("27-DRV-121");
+  });
+
+  test("the counter only ever moves forward", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const subsystems = await mentor.query(api.subsystems.list, {});
+    const drv = subsystems.find((s) => s.code === "DRV")!;
+    await makePart(mentor, "DRV", "Rail");
+    await makePart(mentor, "DRV", "Rail two");
+
+    // Winding it back would hand out 27-DRV-001 a second time.
+    await expect(
+      mentor.mutation(api.subsystems.setNextNumber, {
+        subsystemId: drv._id,
+        next: 1,
+      }),
+    ).rejects.toThrow(/never reused/);
+  });
+
+  test("only a mentor may seed it", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const subsystems = await mentor.query(api.subsystems.list, {});
+    const student = t.withIdentity(identity("student_1"));
+    await student.mutation(api.auth.storeCurrentUser, {});
+
+    await expect(
+      student.mutation(api.subsystems.setNextNumber, {
+        subsystemId: subsystems[0]._id,
+        next: 50,
+      }),
+    ).rejects.toThrow(/mentor/);
+  });
+
+  test("widening the padding restamps the 000s and holds for new numbers", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const season = (await mentor.query(api.seasons.active, {}))!;
+
+    await mentor.mutation(api.seasons.update, {
+      id: season._id,
+      numberPad: 4,
+    });
+
+    const rows = await mentor.query(api.subAssemblies.list, {
+      subsystemId: (await mentor.query(api.subsystems.list, {}))[0]._id,
+    });
+    expect(rows[0].assembly.partNumber).toBe("27-DRV-0000");
+    expect(await makePart(mentor, "DRV", "Rail")).toBe("27-DRV-0001");
+  });
+
+  test("the padding is fixed once the season has issued a number", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const season = (await mentor.query(api.seasons.active, {}))!;
+    await makePart(mentor, "DRV", "Rail");
+
+    // Mixing 27-DRV-001 and 27-DRV-0002 would stop "1" finding the first.
+    await expect(
+      mentor.mutation(api.seasons.update, { id: season._id, numberPad: 4 }),
+    ).rejects.toThrow(/already issued/);
+  });
+
+  test("a silly padding is refused", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const season = (await mentor.query(api.seasons.active, {}))!;
+    await expect(
+      mentor.mutation(api.seasons.update, { id: season._id, numberPad: 0 }),
+    ).rejects.toThrow(/between 1 and 6/);
+  });
+});

@@ -218,6 +218,9 @@ them:
   excludes them from the allowance) and the release itself is **one** call that
   returns every item with its number and revision. Syncing the same assembly
   from the panel costs one call per part instead.
+- A **released assembly costs one more call**, to read what it contains, and
+  only in Normal mode. So a release is one call plus one per assembly in it —
+  the only line in the budget that isn't a flat one.
 - Every call goes through one wrapper (`convex/lib/onshapeAuth.ts`) that logs
   it to `apiCalls`, and only 2xx/3xx responses count — which is what the budget
   meter shows.
@@ -226,11 +229,12 @@ them:
 `convex/lib/budget.ts` decides whether the current mode allows it. A refused
 call is never sent, so it costs nothing:
 
-|                                  | Normal | Lean (< 30% left) | Manual (< 10%, or forced, or after a 402) |
-| -------------------------------- | ------ | ----------------- | ----------------------------------------- |
-| Release read (1 call, automatic) | yes    | yes               | **queued for Reconcile**                  |
-| Panel sync (1 call per part)     | yes    | **no**            | **no**                                    |
-| Registering the webhook          | yes    | yes               | yes                                       |
+|                                    | Normal | Lean (< 30% left) | Manual (< 10%, or forced, or after a 402) |
+| ---------------------------------- | ------ | ----------------- | ----------------------------------------- |
+| Release read (1 call, automatic)   | yes    | yes               | **queued for Reconcile**                  |
+| Assembly BOM on a release (1 each) | yes    | **no**            | **no**                                    |
+| Panel sync (1 call per part)       | yes    | **no**            | **no**                                    |
+| Registering the webhook            | yes    | yes               | yes                                       |
 
 Registering stays allowed in Manual on purpose: turning the integration off is
 how a mentor stops it spending, and refusing that one call would trap the team
@@ -251,6 +255,26 @@ leaving a mentor to wonder who changed the mode.
 **The tracker works with no Onshape connection at all.** A lead can type part
 numbers in by hand or upload a BOM CSV, and the same matching logic runs
 against them.
+
+### Why nothing is written back
+
+Writing a part number into Onshape would stop students mistyping them, which
+is the one real argument for it. It stays unbuilt on purpose, and the reasons
+are worth keeping written down rather than rediscovering:
+
+- **The split that makes the budget work isn't read versus write**, it's
+  cheap-and-automatic versus expensive-and-discretionary. A write is one call
+  per part, triggered by whoever is getting a number — the highest-frequency
+  action in the app, taken by the people with least sight of the allowance.
+- **The scope isn't ours to grant from here.** The app requests no `scope` at
+  all; it takes whatever the Onshape OAuth application was registered with, in
+  Onshape's developer portal, outside this repo. Adding one also invalidates
+  the stored refresh token, so every mentor would have to reconnect.
+- **Pasting costs nothing and already works.** It needs no connection, no
+  scope and no allowance, which is why the whole tracker still works with
+  Onshape switched off.
+
+If it is ever built, the budget table above is where the decision lives.
 
 ## Project structure
 
@@ -517,6 +541,11 @@ Two things used to fail silently and now don't:
   registration as needing to be made again rather than leaving the page
   claiming it's live.
 
+The **company id** is read from Onshape once when the connection is made, and
+registering the release webhook uses it. The box on the Onshape page is still
+there as an override, prefilled with what was read — it used to be the only
+source, typed in with nothing checking it.
+
 Starting the flow is mentor-only. `/onshape/oauth/start` is a public endpoint
 with no identity of its own, so it won't redirect without a short-lived state
 that `beginConnect` mints for a signed-in mentor.
@@ -540,8 +569,14 @@ What actually crosses the wire is worth knowing, because it shapes the design:
    call, every item with its part number, revision and source document.
 4. Anything that isn't `RELEASED` is logged and dropped. A submitted or
    rejected package isn't a fact about the robot yet.
-5. The rest is the existing path — the same `releaseIntakeLines`, the same
-   screen, the same lead deciding. A release changes nothing on its own.
+5. Each released **assembly** gets one more call, reading what it contains so
+   the CAD's quantities arrive without anyone opening the panel. Refused
+   outside Normal mode, and a refusal doesn't cost the release: it comes in
+   anyway and the line says its contents weren't read.
+6. The rest is the existing path — the same `releaseIntakeLines`, the same
+   screen, the same lead deciding. A release changes nothing on its own, and
+   **nothing is written to an assembly's members**: a sync never rearranges a
+   tree someone built by hand, so the contents arrive as lines to apply.
 
 Because the notification is only an id, a forged call costs at most one wasted
 read: everything the board acts on is read back from Onshape over the
@@ -582,6 +617,15 @@ team is in) and Events (this season's calendar) — plus **Connections**, which
 is only the two
 outside services: Onshape and GitHub. Those two keep their own pages, reached
 from there.
+
+**Numbering** is set here too. Each subsystem row carries the number it hands
+out next, so a team picking the tracker up mid-season can carry on from where
+their spreadsheet stopped; it only ever moves forward, because a number is
+never reused and the counter is the only record of what has gone out. The
+Season tab sets how many digits the sequence is padded to, and fixes it the
+moment the season issues anything — `27-INT-104` and `27-INT-0104` are the
+same number to a person and two different keys to the search, so a season is
+all one shape or it is not searchable.
 
 People is the roster: everyone who has signed in, their email, and the role
 picker. "Sync from Clerk" pulls the roster across.

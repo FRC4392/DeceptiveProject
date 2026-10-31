@@ -2,7 +2,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -157,5 +157,151 @@ describe("taking a release in by hand", () => {
         csv: "Name,Quantity\nSide plate,2",
       }),
     ).rejects.toThrow(/Part number/);
+  });
+});
+
+describe("an assembly a release mentioned", () => {
+  /** A release carrying one assembly the board has never seen. */
+  async function unknownAssembly(t: ReturnType<typeof convexTest>) {
+    const { mentor, intake } = await setup(t);
+    const received = await t.mutation(internal.onshape.receiveRelease, {
+      releasePackageId: "rp_1",
+      label: "Intake release",
+      state: "RELEASED",
+      items: [
+        {
+          partNumber: "27-INT-040",
+          revision: "B",
+          name: "Roller assembly",
+          documentId: "doc1",
+          elementId: "el1",
+          versionId: "v1",
+          isAssembly: true,
+        },
+      ],
+    });
+    const [listed] = await mentor.query(api.intake.list, {});
+    return {
+      mentor,
+      intake,
+      intakeId: received!.intakeId,
+      lines: listed.lines,
+    };
+  }
+
+  test("can be added to the board, keeping its number and its CAD link", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, lines } = await unknownAssembly(t);
+    const line = lines.find((l) => l.target === "subAssembly")!;
+    expect(line.kind).toBe("unknown");
+
+    const id = await mentor.mutation(api.intake.createSubAssemblyFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+
+    const made = await mentor.query(api.subAssemblies.get, { id });
+    // The released number is kept: the CAD and the board agreeing is the point.
+    expect(made?.partNumber).toBe("27-INT-040");
+    expect(made?.revision).toBe("B");
+    expect(made?.onshapeElementId).toBe("el1");
+    expect(made?.lastReleasePackageId).toBe("rp_1");
+  });
+
+  test("finishes its intake instead of needing to be dismissed", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, intakeId, lines } = await unknownAssembly(t);
+
+    await mentor.mutation(api.intake.createSubAssemblyFromLine, {
+      lineId: lines.find((l) => l.target === "subAssembly")!._id,
+      subsystemId: intake._id,
+    });
+
+    const intakeRow = await t.run((ctx) => ctx.db.get(intakeId));
+    expect(intakeRow?.status).toBe("processed");
+  });
+
+  test("a matched one is decided by Apply, so the intake can close", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, lines } = await unknownAssembly(t);
+    // Put it on the board, then release it again.
+    await mentor.mutation(api.intake.createSubAssemblyFromLine, {
+      lineId: lines.find((l) => l.target === "subAssembly")!._id,
+      subsystemId: intake._id,
+    });
+    const secondRelease = await t.mutation(internal.onshape.receiveRelease, {
+      releasePackageId: "rp_2",
+      label: "Intake release again",
+      state: "RELEASED",
+      items: [
+        {
+          partNumber: "27-INT-040",
+          revision: "C",
+          name: "Roller assembly",
+          documentId: "doc1",
+          elementId: "el1",
+          versionId: "v2",
+          isAssembly: true,
+        },
+      ],
+    });
+
+    const second = secondRelease!.intakeId;
+    await mentor.mutation(api.intake.applyMatched, { intakeId: second });
+
+    const row = await t.run((ctx) => ctx.db.get(second));
+    expect(row?.status).toBe("processed");
+  });
+
+  test("ignoring the last line finishes the intake too", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intakeId, lines } = await unknownAssembly(t);
+
+    // The decision that completes an intake can come from any line, not just
+    // from Apply — this is the path that stayed open in the real app.
+    for (const line of lines) {
+      await mentor.mutation(api.intake.applyLine, {
+        lineId: line._id,
+        decision: "ignored",
+      });
+    }
+
+    const row = await t.run((ctx) => ctx.db.get(intakeId));
+    expect(row?.status).toBe("processed");
+  });
+
+  test("won't be added twice", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, lines } = await unknownAssembly(t);
+    const lineId = lines.find((l) => l.target === "subAssembly")!._id;
+    await mentor.mutation(api.intake.createSubAssemblyFromLine, {
+      lineId,
+      subsystemId: intake._id,
+    });
+
+    await expect(
+      mentor.mutation(api.intake.createSubAssemblyFromLine, {
+        lineId,
+        subsystemId: intake._id,
+      }),
+    ).rejects.toThrow(/already on the board/);
+  });
+
+  test("a part line is refused by it", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const { intakeId } = await mentor.mutation(api.intake.addManual, {
+      label: "By hand",
+      text: "27-INT-099",
+    });
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.intake._id).toBe(intakeId);
+
+    await expect(
+      mentor.mutation(api.intake.createSubAssemblyFromLine, {
+        lineId: listed.lines[0]._id,
+        subsystemId: intake._id,
+      }),
+    ).rejects.toThrow(/is a part/);
   });
 });

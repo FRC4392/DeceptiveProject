@@ -392,8 +392,8 @@ function IntakeCard({
             Assemblies · {assemblies.length}
           </h3>
           <p className="text-xs text-muted-foreground">
-            What the CAD says about the assembly itself. Sub-assemblies are
-            built on the subsystem page, not here.
+            What the CAD says about the assembly itself. One the board doesn't
+            know yet can be added here, keeping its number and its CAD link.
           </p>
           <div className="mt-2 space-y-2">
             {assemblies.map((line) => (
@@ -416,29 +416,75 @@ function queuedBecause(intake: Doc<"releaseIntakes">): string | null {
 
 function AssemblyLine({ line }: { line: Line }) {
   const applyLine = useMutation(api.intake.applyLine);
+  const createSubAssembly = useMutation(api.intake.createSubAssemblyFromLine);
+  const subsystems = useSubsystems();
+  const [subsystemId, setSubsystemId] = useState<string>(
+    (line.subsystemId as string | undefined) ?? "",
+  );
+  const [error, setError] = useState<string | null>(null);
+  // A known assembly needs no setting up; an unknown one is the whole reason
+  // this line couldn't be resolved before.
+  const addable = line.kind === "unknown";
+
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm">
-      <span>
-        {line.partNumber && (
-          <span className="mr-1.5 font-mono text-xs">{line.partNumber}</span>
-        )}
-        <span className="font-medium">{line.name}</span>
-        {line.revision && (
-          <span className="ml-1.5 font-mono text-xs text-muted-foreground">
-            · {line.revision}
+    <div className="rounded-lg border p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>
+          {line.partNumber && (
+            <span className="mr-1.5 font-mono text-xs">{line.partNumber}</span>
+          )}
+          <span className="font-medium">{line.name}</span>
+          {line.revision && (
+            <span className="ml-1.5 font-mono text-xs text-muted-foreground">
+              · {line.revision}
+            </span>
+          )}
+          <span className="block text-xs text-muted-foreground">
+            {line.note}
           </span>
-        )}
-        <span className="block text-xs text-muted-foreground">{line.note}</span>
-      </span>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() =>
-          void applyLine({ lineId: line._id, decision: "ignored" })
-        }
-      >
-        Got it
-      </Button>
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() =>
+            void applyLine({ lineId: line._id, decision: "ignored" })
+          }
+        >
+          Got it
+        </Button>
+      </div>
+
+      {addable && (
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <Select value={subsystemId} onValueChange={setSubsystemId}>
+            <SelectTrigger aria-label="Subsystem" className="w-56">
+              <SelectValue placeholder="Subsystem" />
+            </SelectTrigger>
+            <SelectContent>
+              {(subsystems ?? []).map((sub) => (
+                <SelectItem key={sub._id} value={sub._id}>
+                  {sub.code} · {sub.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setError(null);
+              createSubAssembly({
+                lineId: line._id,
+                subsystemId: subsystemId as Id<"subsystems">,
+              }).catch((err: unknown) =>
+                setError(err instanceof Error ? err.message : "No luck."),
+              );
+            }}
+          >
+            Add as a sub-assembly
+          </Button>
+        </div>
+      )}
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
     </div>
   );
 }

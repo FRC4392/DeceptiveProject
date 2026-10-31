@@ -28,18 +28,18 @@ The code is written and tested. None of it runs until these three happen.
 
 ## Housekeeping on the deployment
 
-- [ ] **Delete eleven dead tables and one leftover row.** `projects` still
+- [x] **Delete eleven dead tables and one leftover row.** `projects` still
       holds "Swerve Drive" from the old app. `boards`, `tasks`, `taskComments`,
       `taskAttachments`, `githubRepos`, `assemblySteps`, `assemblyStepParts`,
       `training`, `partComments`, `qcChecks` and `messages` are empty. All are
       gone from the schema, so the app can't see them — this is tidying, not a
       bug. Do it from `npx convex dashboard`; the CLI refuses mass deletes.
-- [ ] **Remove four unused env vars:** `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`,
+- [x] **Remove four unused env vars:** `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`,
       `WORKOS_WEBHOOK_SECRET`, `WORKOS_ACTION_SECRET`. Nothing in the code
       mentions them; they're left over from the previous auth system.
 - [ ] **Set `GITHUB_TOKEN`** if you want issue commenting and bulk import.
       Issue sync reads fine without it.
-- [ ] **Stamp the old events with a season**, with
+- [x] **Stamp the old events with a season**, with
       `npx convex run competitions:backfillSeason`. Events are per-season now;
       any added before that change have no season and show up nowhere until
       this runs. It reports what it touched and is safe to run twice.
@@ -49,15 +49,29 @@ The code is written and tested. None of it runs until these three happen.
 
 Section numbers are from `FRC_PART_TRACKER_HANDOFF.md`.
 
-- [ ] **Release-triggered assembly BOM read** (§8.2). Quantities only update
-      when someone opens the Onshape panel on an assembly.
-- [ ] **Part-number format and starting numbers in Settings** (§5). Only
-      subsystem codes are editable. Changing the `{YY}-{SUB}-{NNN}` shape, or
-      seeding a counter mid-season, currently means a code change.
-- [ ] **Company-ID lookup** (§8.2) — typed in by hand instead of read once.
-- [ ] **"Write it into Onshape for me"** (§5, Phase 3). Deliberately skipped:
-      the app never writes to Onshape. Worth a decision rather than a drift —
-      it's the one feature that would stop students mistyping their numbers.
+- [x] **Release-triggered assembly BOM read** (§8.2). A released assembly now
+      costs one more call to read what it contains, in Normal mode only, and
+      its contents arrive as lines with the CAD's quantities. It does **not**
+      write an assembly's members: a sync never rearranges a tree someone
+      built by hand, so a lead still applies them.
+- [x] **Part-number starting numbers and padding in Settings** (§5). Each
+      subsystem row sets the number it hands out next, forward only. The
+      Season tab sets the padding, fixed once the season has issued anything.
+      The separator and field order stay in code on purpose — `intake.ts` is
+      the one place that parses a number, and it reads year-then-code as a
+      literal prefix.
+- [x] **Company-ID lookup** (§8.2) — read from Onshape at connect, with the
+      hand-typed box kept as a prefilled override.
+- [x] **"Write it into Onshape for me"** (§5, Phase 3). **Decided: no.** See
+      "Why nothing is written back" in the README. The scope isn't ours to
+      grant from here — it lives in the Onshape developer portal, and adding
+      one invalidates the stored refresh token — and a write is one call per
+      part by the people with least sight of the allowance. The half-laid
+      groundwork that implied otherwise is gone.
+- [x] **An intake holding sub-assembly lines can't finish itself.** An unknown
+      assembly line can now be added to the board, keeping its released number
+      and its CAD link, and `applyMatched` decides matched assembly lines, so
+      the intake closes itself.
 
 ## Smaller
 
@@ -68,10 +82,6 @@ Section numbers are from `FRC_PART_TRACKER_HANDOFF.md`.
       is clean across the repo.
 - [x] **644 kB JS bundle**, past Vite's warning threshold. Fine for thirty
       people on school wifi, not fine forever.
-- [ ] **An intake holding sub-assembly lines can't finish itself.**
-      `applyMatched` skips them and they only accept "ignore", so a lead has to
-      press "Done with this". The real fix is letting a lead create a
-      sub-assembly straight from an unknown assembly line.
 
 ## Questions whose answers would change the code
 

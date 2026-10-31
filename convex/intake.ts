@@ -9,7 +9,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireLead } from "./lib/auth";
 import { requireActiveSeason } from "./lib/season";
-import { takePartNumber } from "./lib/numbering";
+import { assertNumberFree, takePartNumber } from "./lib/numbering";
 import {
   classifyRelease,
   parseBomCsv,
@@ -69,6 +69,9 @@ const vLine = v.object({
   target: v.optional(v.union(v.literal("part"), v.literal("subAssembly"))),
   subAssemblyId: v.optional(v.id("subAssemblies")),
   subsystemId: v.optional(v.id("subsystems")),
+  onshapeDocumentId: v.optional(v.string()),
+  onshapeElementId: v.optional(v.string()),
+  onshapeVersionId: v.optional(v.string()),
   note: v.optional(v.string()),
 });
 
@@ -296,6 +299,10 @@ export const applyLine = mutation({
       partId?: Id<"parts">,
     ) => {
       await ctx.db.patch(line._id, { decision, partId: partId ?? line.partId });
+      // Deciding the last line finishes the intake, the same way Apply does.
+      // Without this a lead could answer every line and still be left with
+      // "Done with this" to press, which is the whole complaint.
+      await maybeFinish(ctx, line.intakeId, lead.authId);
     };
 
     switch (args.decision) {
@@ -453,6 +460,76 @@ export const applyLine = mutation({
 });
 
 /** Apply every "matched" line at once — the common, boring case. */
+/**
+ * Put an assembly a release mentioned onto the board.
+ *
+ * The part decisions mean nothing for an assembly — there is no stage to move
+ * and no process to pick — so this is its own mutation rather than another
+ * branch of `applyLine`, which answers with a part id. It is the way an
+ * intake holding assembly lines finishes itself instead of being dismissed.
+ */
+export const createSubAssemblyFromLine = mutation({
+  args: {
+    lineId: v.id("releaseIntakeLines"),
+    subsystemId: v.id("subsystems"),
+    name: v.optional(v.string()),
+  },
+  returns: v.id("subAssemblies"),
+  handler: async (ctx, args) => {
+    const lead = await requireLead(ctx);
+    const line = await ctx.db.get(args.lineId);
+    if (!line) throw new Error("That line is gone.");
+    if (line.target !== "subAssembly") {
+      throw new Error("That line is a part. Add it to the board instead.");
+    }
+    if (line.subAssemblyId) {
+      throw new Error("That assembly is already on the board.");
+    }
+    const season = await requireActiveSeason(ctx);
+    const subsystem = await ctx.db.get(args.subsystemId);
+    if (!subsystem) throw new Error("That subsystem is gone.");
+
+    // Keep the released number when it looks like one of ours, the same rule
+    // a part follows — the CAD and the board agreeing is the whole point.
+    const released =
+      line.partNumber &&
+      normalizePartNumber(line.partNumber).startsWith(
+        normalizePartNumber(`${season.year}${subsystem.code}`),
+      )
+        ? line.partNumber
+        : null;
+    const partNumber =
+      released ?? (await takePartNumber(ctx, season, subsystem));
+    await assertNumberFree(ctx, partNumber);
+
+    const siblings = await ctx.db
+      .query("subAssemblies")
+      .withIndex("by_subsystem", (q) => q.eq("subsystemId", args.subsystemId))
+      .collect();
+    const order = siblings.reduce((max, sa) => Math.max(max, sa.order), 0) + 1;
+
+    const intake = await ctx.db.get(line.intakeId);
+    const subAssemblyId = await ctx.db.insert("subAssemblies", {
+      seasonId: season._id,
+      subsystemId: args.subsystemId,
+      partNumber,
+      partNumberKey: normalizePartNumber(partNumber),
+      name: (args.name ?? line.name).trim() || partNumber,
+      order,
+      revision: line.revision,
+      onshapeDocumentId: line.onshapeDocumentId,
+      onshapeElementId: line.onshapeElementId,
+      onshapeVersionId: line.onshapeVersionId,
+      lastReleasePackageId: intake?.onshapeReleasePackageId,
+      lastSyncedAt: Date.now(),
+    });
+
+    await ctx.db.patch(line._id, { decision: "created", subAssemblyId });
+    await maybeFinish(ctx, line.intakeId, lead.authId);
+    return subAssemblyId;
+  },
+});
+
 export const applyMatched = mutation({
   args: { intakeId: v.id("releaseIntakes") },
   returns: v.object({ moved: v.number() }),
@@ -466,7 +543,26 @@ export const applyMatched = mutation({
     let moved = 0;
 
     for (const line of lines) {
-      if (line.kind !== "matched" || line.decision || !line.partId) continue;
+      if (line.kind !== "matched" || line.decision) continue;
+
+      // An assembly the board already knows: take the revision across and
+      // call the line decided. Without this an intake carrying one could
+      // never finish itself, and a lead had to dismiss the whole thing.
+      if (line.target === "subAssembly") {
+        if (line.subAssemblyId) {
+          const assembly = await ctx.db.get(line.subAssemblyId);
+          if (assembly) {
+            await ctx.db.patch(assembly._id, {
+              revision: line.revision ?? assembly.revision,
+              lastSyncedAt: now,
+            });
+          }
+        }
+        await ctx.db.patch(line._id, { decision: "keep" });
+        continue;
+      }
+
+      if (!line.partId) continue;
       const part = await ctx.db.get(line.partId);
       if (!part) continue;
       const process = await ctx.db.get(part.processTypeId);

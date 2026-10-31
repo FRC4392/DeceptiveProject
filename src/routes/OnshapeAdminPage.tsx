@@ -428,13 +428,20 @@ function ReleaseWebhookPanel({ siteUrl }: { siteUrl?: string }) {
 
           {!status.registered && (
             <div className="w-full space-y-1.5 sm:w-72">
-              <Label htmlFor="company-id">Onshape company ID (optional)</Label>
+              <Label htmlFor="company-id">Onshape company ID</Label>
               <Input
                 id="company-id"
                 value={companyId}
                 onChange={(e) => setCompanyId(e.target.value)}
-                placeholder="for an enterprise or classroom"
+                placeholder={
+                  status.connectedCompanyId ?? "for an enterprise or classroom"
+                }
               />
+              <p className="text-xs text-muted-foreground">
+                {status.connectedCompanyId
+                  ? "Read from Onshape when the connection was made. Leave it blank to use that one."
+                  : "Optional. Onshape didn't report a company for the connected account, so type one if registering is refused."}
+              </p>
             </div>
           )}
 

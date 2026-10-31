@@ -90,6 +90,11 @@ export default defineSchema({
     year: v.string(),
     name: v.string(),
     active: v.boolean(),
+    // How many digits the sequence is padded to; missing means three.
+    // Settable only while the season has issued nothing, because
+    // normalizePartNumber strips separators but not leading zeros — mix 104
+    // and 0104 in one season and typing "104" stops finding the second.
+    numberPad: v.optional(v.number()),
   }),
 
   // The subsystems the robot is split into. `code` is the middle segment of a
@@ -379,6 +384,12 @@ export default defineSchema({
     target: v.optional(v.union(v.literal("part"), v.literal("subAssembly"))),
     subAssemblyId: v.optional(v.id("subAssemblies")),
     subsystemId: v.optional(v.id("subsystems")),
+    // Where it came from in CAD. Kept on the line because an assembly the
+    // board doesn't know yet has nowhere else to put them, and creating a
+    // sub-assembly from the line needs them to build its deep link.
+    onshapeDocumentId: v.optional(v.string()),
+    onshapeElementId: v.optional(v.string()),
+    onshapeVersionId: v.optional(v.string()),
     note: v.optional(v.string()),
   }).index("by_intake", ["intakeId"]),
 
@@ -421,6 +432,9 @@ export default defineSchema({
     // "Connected" forever, including after the owner leaves the Classroom.
     lastError: v.optional(v.string()),
     lastErrorAt: v.optional(v.number()),
+    // Read from Onshape when the connection is made, so registering the
+    // webhook doesn't depend on someone pasting the right id.
+    companyId: v.optional(v.string()),
   }),
 
   // Short-lived CSRF state for the OAuth authorize round-trip. It doubles as

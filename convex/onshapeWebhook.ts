@@ -25,7 +25,11 @@ import { v } from "convex/values";
 import { requireLead, requireMentor } from "./lib/auth";
 import { blockedReason, isCallAllowed } from "./lib/budget";
 import { onshapeFetch } from "./lib/onshapeAuth";
-import { fetchReleasePackage } from "./lib/onshapeSync";
+import {
+  fetchAssemblyDefinition,
+  fetchReleasePackage,
+} from "./lib/onshapeSync";
+import { rootSubAssemblies } from "./lib/onshapeAssembly";
 import {
   RELEASE_TRANSITION_EVENT,
   isLifecycleEvent,
@@ -194,6 +198,8 @@ export const status = query({
     registered: v.boolean(),
     webhookId: v.union(v.string(), v.null()),
     companyId: v.union(v.string(), v.null()),
+    /** Read from Onshape at connect; the fallback when none is typed in. */
+    connectedCompanyId: v.union(v.string(), v.null()),
     events: v.array(v.string()),
     registeredAt: v.union(v.number(), v.null()),
     lastPingAt: v.union(v.number(), v.null()),
@@ -212,10 +218,12 @@ export const status = query({
     await requireMentor(ctx);
     const rows = await ctx.db.query("onshapeWebhooks").take(1);
     const row = rows[0];
+    const auth = await ctx.db.query("onshapeAuth").take(1);
     return {
       registered: row !== undefined,
       webhookId: row?.webhookId ?? null,
       companyId: row?.companyId ?? null,
+      connectedCompanyId: auth[0]?.companyId ?? null,
       events: row?.events ?? [],
       registeredAt: row?.registeredAt ?? null,
       lastPingAt: row?.lastPingAt ?? null,
@@ -228,13 +236,29 @@ export const status = query({
 
 // ---- Register / unregister with Onshape ----
 
+/** The company read from Onshape when the connection was made. */
+export const connectedCompanyId = internalQuery({
+  args: {},
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("onshapeAuth").take(1);
+    return rows[0]?.companyId ?? null;
+  },
+});
+
 export const register = action({
   args: { companyId: v.optional(v.string()) },
   returns: v.object({ webhookId: v.string() }),
-  handler: async (ctx, { companyId }) => {
+  handler: async (ctx, args) => {
     if (!(await ctx.runQuery(internal.onshapeWebhook.callerIsMentor, {}))) {
       throw new Error("Mentors only.");
     }
+    // A typed id still wins — it is the override for the case the lookup got
+    // wrong — but nobody should have to paste one we already read.
+    const companyId =
+      args.companyId ??
+      (await ctx.runQuery(internal.onshapeWebhook.connectedCompanyId, {})) ??
+      undefined;
     const secret = process.env.ONSHAPE_WEBHOOK_SECRET;
     if (!secret) {
       throw new Error(
@@ -449,12 +473,58 @@ async function ingestOne(
     return true;
   }
 
+  // What each released assembly contains, one call each on top of the
+  // release's own. Checked against the mode first rather than letting the
+  // fetch throw: the release call is already spent, and losing the whole
+  // ingest over an extra read would be the wrong trade.
+  const assemblyContents: {
+    elementId: string;
+    children: {
+      elementId: string;
+      documentId: string;
+      name: string;
+      quantity: number;
+    }[];
+  }[] = [];
+  let bomUnread = false;
+  for (const item of lines) {
+    if (!item.isAssembly) continue;
+    if (!item.documentId || !item.elementId || !item.versionId) continue;
+    if (!isCallAllowed(mode, "bom")) {
+      bomUnread = true;
+      continue;
+    }
+    try {
+      const def = await fetchAssemblyDefinition(
+        ctx,
+        item.documentId,
+        "v",
+        item.versionId,
+        item.elementId,
+        "bom",
+      );
+      assemblyContents.push({
+        elementId: item.elementId,
+        children: rootSubAssemblies(def, item.documentId),
+      });
+    } catch (err) {
+      // The release itself is good; only its quantities are missing.
+      bomUnread = true;
+      console.error(
+        `Could not read the BOM for assembly ${item.elementId}:`,
+        err,
+      );
+    }
+  }
+
   await ctx.runMutation(internal.onshape.receiveRelease, {
     releasePackageId,
     label: releaseLabel(pkg),
     state,
     messageId,
     raw: trimRawPackage(pkg),
+    assemblyContents,
+    bomUnread,
     items: lines,
   });
   return true;

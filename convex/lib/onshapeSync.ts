@@ -8,6 +8,7 @@ import {
   type AssemblyChild,
 } from "./onshapeAssembly";
 import { onshapeFetch } from "./onshapeAuth";
+import type { CallPurpose } from "./budget";
 import type { ReleasePackage } from "./onshapeRelease";
 
 const API_BASE = process.env.ONSHAPE_BASE_URL ?? "https://cad.onshape.com";
@@ -73,16 +74,19 @@ export async function fetchElementInfo(
 
 // The full assembly definition — its instances and flattened occurrences drive
 // the per-part quantity counting in `aggregateAssemblyParts`.
-async function fetchAssemblyDefinition(
+export async function fetchAssemblyDefinition(
   ctx: ActionCtx,
   documentId: string,
   wv: string,
   wvid: string,
   elementId: string,
+  purpose: CallPurpose = "sync",
 ): Promise<Parameters<typeof aggregateAssemblyParts>[0]> {
   const res = await onshapeFetch(
     ctx,
     `${API_BASE}/api/assemblies/d/${documentId}/${wv}/${wvid}/e/${elementId}?excludeSuppressed=true`,
+    undefined,
+    purpose,
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -99,9 +103,9 @@ async function fetchAssemblyDefinition(
 
 // A part to sync, normalized across both element types. For a Part Studio the
 // source is the element itself and quantity is 1; for an Assembly the source is
-// the part's owning Part Studio and quantity is its placement count. `enrichable`
-// is true when the source lives in the same document as the opened element, i.e.
-// when we can read its metadata/thumbnail and write its part number back.
+// the part's owning Part Studio and quantity is its placement count.
+// `sameDocument` is what decides whether its metadata is reachable at all —
+// only parts in the opened document can be read.
 type NormalizedPart = {
   partId: string;
   name: string;
@@ -110,7 +114,6 @@ type NormalizedPart = {
   sourceElementId: string;
   sameDocument: boolean;
   quantity: number;
-  enrichable: boolean;
 };
 
 // The stable key a part is tracked under (also its `onshapeElementId`). Composite
@@ -193,7 +196,6 @@ export async function resolveSyncParts(
         sourceElementId: p.sourceElementId,
         sameDocument: p.sameDocument,
         quantity: p.quantity,
-        enrichable: p.sameDocument,
       };
     });
     return { elementType, elementName, children, parts };
@@ -216,14 +218,38 @@ export async function resolveSyncParts(
       sourceElementId: elementId,
       sameDocument: true,
       quantity: 1,
-      enrichable: true,
     }),
   );
   return { elementType, elementName, children: [], parts };
 }
 
-// Read a part's current "Part number" metadata property, returning both its id
-// (needed to write back) and current value. null if the property isn't present.
+/**
+ * The company the authorised account belongs to, read once when a mentor
+ * connects. Registering a release webhook on a Classroom needs company scope,
+ * and the id used to be pasted in by hand with nothing checking it.
+ *
+ * Declared "admin" so it works in every budget mode, like the webhook calls it
+ * serves — the wrapper's default would make it "sync" and lock it out of lean.
+ */
+export async function fetchCompanyId(ctx: ActionCtx): Promise<string | null> {
+  const res = await onshapeFetch(
+    ctx,
+    `${API_BASE}/api/companies`,
+    undefined,
+    "admin",
+  );
+  if (!res.ok) return null;
+  // Onshape has answered this one both ways over the years; take either.
+  const json = (await res.json()) as
+    | { items?: Array<{ id?: string }> }
+    | Array<{ id?: string }>;
+  const items = Array.isArray(json) ? json : (json.items ?? []);
+  return items[0]?.id ?? null;
+}
+
+// Read a part's current "Part number" metadata property. null if the property
+// isn't present. The value only — the app reads Onshape and never writes to it,
+// so the property's own id would be a loose end rather than a spare part.
 export async function fetchPartNumberProperty(
   ctx: ActionCtx,
   documentId: string,
@@ -231,7 +257,7 @@ export async function fetchPartNumberProperty(
   wvid: string,
   elementId: string,
   partId: string,
-): Promise<{ propertyId: string; value: string } | null> {
+): Promise<{ value: string } | null> {
   const res = await onshapeFetch(
     ctx,
     `${API_BASE}/api/metadata/d/${documentId}/${wv}/${wvid}/e/${elementId}/p/${encodeURIComponent(partId)}`,
@@ -244,10 +270,7 @@ export async function fetchPartNumberProperty(
     (p) => p.name === PART_NUMBER_PROPERTY,
   );
   if (!prop) return null;
-  return {
-    propertyId: prop.propertyId,
-    value: typeof prop.value === "string" ? prop.value : "",
-  };
+  return { value: typeof prop.value === "string" ? prop.value : "" };
 }
 
 /**

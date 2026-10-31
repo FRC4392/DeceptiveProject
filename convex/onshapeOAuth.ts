@@ -10,6 +10,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { htmlResponse, TOKEN_URL } from "./lib/onshapeAuth";
+import { fetchCompanyId } from "./lib/onshapeSync";
 import {
   fetchElementPartNumberProperty,
   fetchPartNumberProperty,
@@ -91,6 +92,16 @@ export const consumeState = internalMutation({
 // stored row is ciphertext. `onshapeAuth` is a single-row table, so a
 // reconnect (Admin → Onshape → Connect) naturally re-encrypts under the
 // current key; there's no separate migration path for existing rows.
+export const storeCompanyId = internalMutation({
+  args: { companyId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { companyId }) => {
+    const existing = await ctx.db.query("onshapeAuth").take(1);
+    if (existing[0]) await ctx.db.patch(existing[0]._id, { companyId });
+    return null;
+  },
+});
+
 export const storeTokens = internalMutation({
   args: {
     accessToken: v.string(),
@@ -320,6 +331,20 @@ export const oauthCallback = httpAction(async (ctx, req) => {
     reason: "connect",
     connectedBy: consumed.userId ?? undefined,
   });
+
+  // One call, once, to save a mentor pasting an id nothing validates. A
+  // failure here is not a failed connection — the webhook page still takes
+  // the id by hand.
+  try {
+    const companyId = await fetchCompanyId(ctx);
+    if (companyId) {
+      await ctx.runMutation(internal.onshapeOAuth.storeCompanyId, {
+        companyId,
+      });
+    }
+  } catch (err) {
+    console.error("Could not read the Onshape company:", err);
+  }
   return htmlResponse("✅ Onshape connected. You can close this tab.");
 });
 

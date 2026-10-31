@@ -188,6 +188,7 @@ function ThisSeasonPanel({ season }: { season: Doc<"seasons"> }) {
   const update = useMutation(api.seasons.update);
   const [year, setYear] = useState(season.year);
   const [name, setName] = useState(season.name);
+  const [pad, setPad] = useState(String(season.numberPad ?? 3));
   const [error, setError] = useState<string | null>(null);
 
   return (
@@ -213,11 +214,37 @@ function ThisSeasonPanel({ season }: { season: Doc<"seasons"> }) {
             onChange={(e) => setName(e.target.value)}
           />
         </div>
+        <div className="grid gap-2">
+          <Label htmlFor="se-pad">Digits in the number</Label>
+          <Input
+            id="se-pad"
+            type="number"
+            min={1}
+            max={6}
+            className="w-20"
+            value={pad}
+            onChange={(e) => setPad(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Parts read{" "}
+            <span className="font-mono">
+              {year || "27"}-INT-
+              {"1".padStart(Math.min(6, Math.max(1, Number(pad) || 3)), "0")}
+            </span>
+            . Fixed once this season has handed a number out, because widening
+            it would stop a search for 104 finding 0104.
+          </p>
+        </div>
         <Button
           className="justify-self-start"
           onClick={() => {
             setError(null);
-            update({ id: season._id, year, name }).catch((err: unknown) =>
+            update({
+              id: season._id,
+              year,
+              name,
+              numberPad: Number(pad) || undefined,
+            }).catch((err: unknown) =>
               setError(err instanceof Error ? err.message : "No luck."),
             );
           }}
@@ -353,6 +380,7 @@ function SeasonsPanel({ season }: { season: Doc<"seasons"> }) {
 function SubsystemSettings() {
   const subsystems = useSubsystems();
   const roster = useRoster();
+  const nextNumbers = useQuery(api.subsystems.nextNumbers, {});
   const create = useMutation(api.subsystems.create);
   const update = useMutation(api.subsystems.update);
   const remove = useMutation(api.subsystems.remove);
@@ -394,6 +422,13 @@ function SubsystemSettings() {
                 ))}
               </SelectContent>
             </Select>
+            <NextNumberBox
+              subsystemId={s._id}
+              next={
+                nextNumbers?.find((n) => n.subsystemId === s._id)?.next ?? 1
+              }
+              onError={setError}
+            />
             <Button
               variant="ghost"
               size="sm"
@@ -449,6 +484,44 @@ function SubsystemSettings() {
       </div>
       {error && <p className="mt-2 text-sm text-danger">{error}</p>}
     </Panel>
+  );
+}
+
+/**
+ * The number this subsystem hands out next. Editable because a team picking
+ * the tracker up mid-season needs to start where their spreadsheet stopped,
+ * and it only moves forward — the server refuses the rest.
+ */
+function NextNumberBox({
+  subsystemId,
+  next,
+  onError,
+}: {
+  subsystemId: Id<"subsystems">;
+  next: number;
+  onError: (message: string | null) => void;
+}) {
+  const setNextNumber = useMutation(api.subsystems.setNextNumber);
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      Next
+      <Input
+        type="number"
+        min={next}
+        defaultValue={next}
+        key={`${subsystemId}-${next}`}
+        aria-label="Next part number"
+        className="h-9 w-20"
+        onBlur={(e) => {
+          const wanted = Math.round(Number(e.target.value));
+          if (!Number.isFinite(wanted) || wanted === next) return;
+          onError(null);
+          setNextNumber({ subsystemId, next: wanted }).catch((err: unknown) =>
+            onError(err instanceof Error ? err.message : "No luck."),
+          );
+        }}
+      />
+    </label>
   );
 }
 

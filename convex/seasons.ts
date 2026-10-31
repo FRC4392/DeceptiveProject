@@ -3,6 +3,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireMentor } from "./lib/auth";
 import { ensureDefaultSubAssembly } from "./subAssemblies";
+import { DEFAULT_PAD, defaultSubAssemblyNumber } from "./lib/numbering";
+import { normalizePartNumber } from "./lib/stages";
 
 const vSeason = v.object({
   _id: v.id("seasons"),
@@ -113,11 +115,16 @@ export const update = mutation({
     id: v.id("seasons"),
     year: v.optional(v.string()),
     name: v.optional(v.string()),
+    /** Digits the sequence is padded to. Only before anything is issued. */
+    numberPad: v.optional(v.number()),
   },
   returns: v.null(),
-  handler: async (ctx, { id, year, name }) => {
+  handler: async (ctx, { id, year, name, numberPad }) => {
     await requireMentor(ctx);
     const patch: Partial<Doc<"seasons">> = {};
+    if (numberPad !== undefined) {
+      patch.numberPad = await settableNumberPad(ctx, id, numberPad);
+    }
     if (year !== undefined) {
       const trimmed = year.trim();
       await assertYearFree(ctx, trimmed, id);
@@ -128,6 +135,70 @@ export const update = mutation({
     return null;
   },
 });
+
+/**
+ * Widening the padding mid-season would split the search key: a part keyed
+ * 27INT104 and one keyed 27INT0104 are the same number to a person and two
+ * different strings to `normalizePartNumber`, which strips separators but
+ * not leading zeros — so typing "104" would stop finding the second.
+ *
+ * Rather than warn about that, it simply isn't allowed once the season has
+ * handed anything out. The {YY}-{SUB}-000 defaults every season is born with
+ * cost the counter nothing, so they don't count as issued — they are
+ * re-stamped here instead, being the only numbers that exist at this point.
+ */
+async function settableNumberPad(
+  ctx: MutationCtx,
+  seasonId: Id<"seasons">,
+  pad: number,
+): Promise<number> {
+  const next = Math.round(pad);
+  if (!Number.isFinite(next) || next < 1 || next > 6) {
+    throw new Error("Padding has to be between 1 and 6 digits.");
+  }
+  const season = await ctx.db.get(seasonId);
+  if (!season) throw new Error("That season is gone.");
+  if ((season.numberPad ?? DEFAULT_PAD) === next) return next;
+
+  const parts = await ctx.db
+    .query("parts")
+    .withIndex("by_season", (q) => q.eq("seasonId", seasonId))
+    .take(1);
+  const counters = await ctx.db
+    .query("partNumberCounters")
+    .filter((q) => q.eq(q.field("seasonId"), seasonId))
+    .take(1);
+  const assemblies = await ctx.db
+    .query("subAssemblies")
+    .withIndex("by_season", (q) => q.eq("seasonId", seasonId))
+    .collect();
+  if (parts.length > 0 || counters.length > 0) {
+    throw new Error(
+      "This season has already issued numbers, so the padding is fixed. Set it on a new season instead.",
+    );
+  }
+  if (assemblies.some((a) => a.isDefault !== true)) {
+    throw new Error(
+      "This season has sub-assemblies already, so the padding is fixed.",
+    );
+  }
+
+  // Re-stamp the born-with defaults so the season is all one shape.
+  for (const assembly of assemblies) {
+    const subsystem = await ctx.db.get(assembly.subsystemId);
+    if (!subsystem) continue;
+    const partNumber = defaultSubAssemblyNumber(
+      season.year,
+      subsystem.code,
+      next,
+    );
+    await ctx.db.patch(assembly._id, {
+      partNumber,
+      partNumberKey: normalizePartNumber(partNumber),
+    });
+  }
+  return next;
+}
 
 export const setActive = mutation({
   args: { id: v.id("seasons") },

@@ -89,7 +89,11 @@ export async function ensureDefaultSubAssembly(
     .unique();
   if (existing) return existing._id;
 
-  const partNumber = defaultSubAssemblyNumber(season.year, subsystem.code);
+  const partNumber = defaultSubAssemblyNumber(
+    season.year,
+    subsystem.code,
+    season.numberPad,
+  );
   return ctx.db.insert("subAssemblies", {
     seasonId: season._id,
     subsystemId: subsystem._id,

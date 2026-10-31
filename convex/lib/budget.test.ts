@@ -11,12 +11,16 @@ describe("what each mode allows", () => {
   const table: Array<[BudgetMode, CallPurpose, boolean]> = [
     ["normal", "release", true],
     ["normal", "sync", true],
+    ["normal", "bom", true],
     ["normal", "admin", true],
     ["lean", "release", true],
     ["lean", "sync", false],
+    // An extra call per assembly, and the release is already in without it.
+    ["lean", "bom", false],
     ["lean", "admin", true],
     ["manual", "release", false],
     ["manual", "sync", false],
+    ["manual", "bom", false],
     ["manual", "admin", true],
   ];
 
@@ -65,5 +69,21 @@ describe("picking a mode from what's left", () => {
   test("under the manual threshold is manual", () => {
     expect(modeForShare(0.09, 0.3, 0.1)).toBe("manual");
     expect(modeForShare(0, 0.3, 0.1)).toBe("manual");
+  });
+});
+
+describe("why a call was refused", () => {
+  test("a blocked BOM read says the release still came in", () => {
+    // blockedReason falls through to the release message without its own
+    // branch, which would claim a release was queued when it wasn't.
+    const reason = blockedReason("lean", "bom");
+    expect(reason).toMatch(/came in without reading/);
+    expect(reason).not.toMatch(/queued/);
+  });
+
+  test("nothing is refused in normal mode", () => {
+    for (const purpose of ["release", "sync", "bom", "admin"] as const) {
+      expect(blockedReason("normal", purpose)).toBeNull();
+    }
   });
 });

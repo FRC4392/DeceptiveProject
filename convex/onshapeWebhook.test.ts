@@ -751,3 +751,87 @@ describe("what Onshape says back", () => {
     expect(RETRY_DELAYS_MS).toEqual([1_000, 2_000, 4_000]);
   });
 });
+
+describe("reading what a released assembly contains", () => {
+  /** A release carrying one assembly, plus the BOM reply for it. */
+  const assemblyItem = {
+    elementType: "ASSEMBLY",
+    documentId: "doc1",
+    elementId: "el1",
+    versionId: "v1",
+    properties: [
+      { name: "Part number", value: "27-INT-040" },
+      { name: "Name", value: "Roller assembly" },
+    ],
+  };
+  const bomReply = {
+    rootAssembly: {
+      instances: [
+        {
+          id: "i1",
+          type: "Assembly",
+          documentId: "doc1",
+          elementId: "child1",
+          name: "End cap assembly <1>",
+        },
+        {
+          id: "i2",
+          type: "Assembly",
+          documentId: "doc1",
+          elementId: "child1",
+          name: "End cap assembly <2>",
+        },
+      ],
+      occurrences: [],
+    },
+    subAssemblies: [],
+  };
+
+  test("costs one extra call and lands the contents as lines", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    const calls = stubOnshape(releasePackage([assemblyItem]), bomReply);
+
+    await deliver(t);
+
+    // The release, then the assembly's own BOM.
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("/api/assemblies/");
+
+    const [listed] = await mentor.query(api.intake.list, {});
+    const child = listed.lines.find((l) => l.name.startsWith("End cap"));
+    // Placed twice in the CAD, and the count comes across with it.
+    expect(child?.quantity).toBe(2);
+    expect(child?.kind).toBe("unknown");
+  });
+
+  test("lean mode takes the release in anyway and says what it skipped", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    await forceMode(t, "lean");
+    const calls = stubOnshape(releasePackage([assemblyItem]));
+
+    await deliver(t);
+
+    // The release still came in; only the extra read was refused.
+    expect(calls).toHaveLength(1);
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.lines.length).toBeGreaterThan(0);
+    const assembly = listed.lines.find((l) => l.target === "subAssembly");
+    expect(assembly?.note).toMatch(/wasn't read/);
+  });
+
+  test("a BOM that can't be read doesn't lose the release", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    const calls = stubOnshape(releasePackage([assemblyItem]), { status: 500 });
+
+    await deliver(t);
+
+    expect(calls).toHaveLength(2);
+    const [listed] = await mentor.query(api.intake.list, {});
+    const assembly = listed.lines.find((l) => l.target === "subAssembly");
+    expect(assembly?.partNumber).toBe("27-INT-040");
+    expect(assembly?.note).toMatch(/wasn't read/);
+  });
+});

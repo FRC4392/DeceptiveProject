@@ -309,6 +309,9 @@ async function recordAssemblyLine(
     kind: line.kind,
     subAssemblyId: match?._id,
     subsystemId: match?.subsystemId ?? args.subsystemId,
+    onshapeDocumentId: args.onshapeDocumentId,
+    onshapeElementId: args.onshapeElementId,
+    onshapeVersionId: args.versionId,
     note: line.explanation,
   });
 
@@ -333,6 +336,8 @@ async function recordAssemblyLine(
       kind: childMatch ? "matched" : "unknown",
       subAssemblyId: childMatch?._id,
       subsystemId: childMatch?.subsystemId ?? args.subsystemId,
+      onshapeDocumentId: child.documentId,
+      onshapeElementId: child.elementId,
       note: childMatch
         ? `Inside ${args.assembly.name} in the CAD.`
         : `Inside ${args.assembly.name} in the CAD, but not on the board yet.`,
@@ -401,6 +406,24 @@ export const receiveRelease = internalMutation({
     /** The raw package, kept so the first real one can be read by a human. */
     raw: v.optional(v.any()),
     items: v.array(vReleaseItem),
+    /** What each released assembly contains, when the BOM could be read. */
+    assemblyContents: v.optional(
+      v.array(
+        v.object({
+          elementId: v.string(),
+          children: v.array(
+            v.object({
+              elementId: v.string(),
+              documentId: v.string(),
+              name: v.string(),
+              quantity: v.number(),
+            }),
+          ),
+        }),
+      ),
+    ),
+    /** At least one assembly's contents went unread — say so on the line. */
+    bomUnread: v.optional(v.boolean()),
   },
   returns: v.union(
     v.object({ intakeId: v.id("releaseIntakes"), lines: v.number() }),
@@ -541,8 +564,44 @@ export const receiveRelease = internalMutation({
         subAssemblyId: match?._id,
         subsystemId:
           match?.subsystemId ?? (await subsystemFor(item.documentId)),
-        note: line.explanation,
+        onshapeDocumentId: item.documentId,
+        onshapeElementId: item.elementId,
+        onshapeVersionId: item.versionId,
+        note: args.bomUnread
+          ? `${line.explanation} What it contains wasn't read.`
+          : line.explanation,
       });
+
+      // One line per thing placed directly inside it, with the CAD's own
+      // count — the same lines the Onshape panel produces, so a lead reads
+      // one screen either way. Nothing is written to the assembly's members:
+      // a sync never rearranges a tree someone built by hand.
+      const contents = (args.assemblyContents ?? []).find(
+        (a) => a.elementId === item.elementId,
+      );
+      for (const child of contents?.children ?? []) {
+        const childMatch = await findSubAssembly(
+          ctx,
+          child.elementId,
+          undefined,
+        );
+        await ctx.db.insert("releaseIntakeLines", {
+          intakeId,
+          target: "subAssembly",
+          partNumber: childMatch?.partNumber,
+          name: child.name,
+          quantity: child.quantity,
+          kind: childMatch ? "matched" : "unknown",
+          subAssemblyId: childMatch?._id,
+          subsystemId:
+            childMatch?.subsystemId ?? (await subsystemFor(child.documentId)),
+          onshapeDocumentId: child.documentId,
+          onshapeElementId: child.elementId,
+          note: childMatch
+            ? `Inside ${line.name} in the CAD.`
+            : `Inside ${line.name} in the CAD, but not on the board yet.`,
+        });
+      }
       if (match) {
         await ctx.db.patch(match._id, {
           onshapeDocumentId: item.documentId ?? match.onshapeDocumentId,

@@ -3,6 +3,13 @@ import type { Doc } from "../_generated/dataModel";
 import { formatPartNumber, normalizePartNumber } from "./stages";
 
 /**
+ * Digits the sequence is padded to when a season doesn't say otherwise.
+ * A season may widen it, but only before it has issued anything — see
+ * `seasons.update`, and the comment on `seasons.numberPad` in the schema.
+ */
+export const DEFAULT_PAD = 3;
+
+/**
  * The next number for a subsystem, taken inside the mutation's transaction so
  * two students pressing "Get a part number" at the same moment can't be handed
  * the same one. A number is never reused — not even one belonging to a part
@@ -35,7 +42,12 @@ export async function takePartNumber(
       next: 2,
     });
   }
-  return formatPartNumber(season.year, subsystem.code, sequence);
+  return formatPartNumber(
+    season.year,
+    subsystem.code,
+    sequence,
+    season.numberPad ?? DEFAULT_PAD,
+  );
 }
 
 /**
@@ -43,8 +55,12 @@ export async function takePartNumber(
  * one that going together means the subsystem is on the robot. It costs the
  * counter nothing because the counter starts at 1.
  */
-export function defaultSubAssemblyNumber(year: string, code: string): string {
-  return formatPartNumber(year, code, 0);
+export function defaultSubAssemblyNumber(
+  year: string,
+  code: string,
+  pad: number = DEFAULT_PAD,
+): string {
+  return formatPartNumber(year, code, 0, pad);
 }
 
 /**
