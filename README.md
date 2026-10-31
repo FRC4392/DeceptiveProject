@@ -154,7 +154,10 @@ A part's **process** decides which stages it skips: a 3D print needs no
 drawing, and a part with no finishing goes from the machine straight to the
 bin. Bought (COTS) items get no part number at all — they're tracked per
 subsystem as _Needed → Ordered → Arrived_, and _Arrived_ counts as ready to
-assemble.
+assemble. The three states are three buttons on the subsystem's parts list, so
+saying "that turned up" is one press at the bench; ordering one asks when it's
+due. Anyone can add one or correct a vendor, and a lead can delete one. A
+sub-assembly won't complete while a bought item it needs is still on order.
 
 **The app issues part numbers**, `{YY}-{SUB}-{NNN}` (e.g. `27-INT-104`), from a
 counter per season and subsystem. Convex runs each mutation as a transaction,
