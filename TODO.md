@@ -1,87 +1,68 @@
 # What's left
 
-Written 30 October 2026, on the `new-tracker` branch. Build, lint and all 260
-tests pass; the working tree is clean. Everything below is either configuration
-nobody has done yet, a thing the handoff asked for that isn't built, or a
+Written 31 October 2026, on the `new-tracker` branch. Build, lint and all 442
+tests pass; the working tree is clean. Everything below is either
+configuration nobody has done yet, a rough edge worth knowing about, or a
 question whose answer would change the code.
 
-## Blocking: the release webhook doesn't work yet
+## Blocking: the release webhook still isn't live
 
-The code is written and tested. None of it runs until these three happen.
+The secret is set on the dev deployment and the code is written and tested.
+Two things stand between that and a release actually arriving.
 
-- [ ] **Set the shared secret**, with
-      `npx convex env set ONSHAPE_WEBHOOK_SECRET "$(openssl rand -base64 32)"`.
-      Without it `/onshape/webhook` answers 503 to everything, which is the
-      deliberate closed-by-default behaviour.
 - [ ] **Register the webhook** in Settings → Onshape → Release webhook. This
       needs a **company admin** Onshape account; the button says so if the
-      connected account isn't one.
+      connected account isn't one. The company id is read from Onshape at
+      connect now, so the box below it only matters if that lookup came back
+      empty — which it will for any connection made before 31 October, since
+      it only runs when a mentor connects.
 - [ ] **Check a real release against what the code assumes.** Onshape's
-      published docs don't describe `onshape.workflow.transition` and don't say
-      what `detailed=true` returns — the field names come from Onshape's own
-      sample client. Release one real part, then read
+      published docs don't describe `onshape.workflow.transition` and don't
+      say what `detailed=true` returns — the field names come from Onshape's
+      own sample client. Release one real part, then read
       `releaseIntakes.payload.raw` in the Convex dashboard and confirm:
   - `objectType` and `objectId` are really on the notification
   - released items carry **Part number** and **Revision** properties
   - assembly items carry `elementType: "ASSEMBLY"` — if they don't, assemblies
     come through as parts and nothing says so
+  - the **assembly BOM read** works against a real release. It is new, and
+    every test of it so far has run against a stubbed fetch — the parsing is
+    covered, the `/api/assemblies` call itself has never met Onshape on this
+    path. Watch the budget meter: a release with assemblies in it now costs
+    one call plus one per assembly.
 
 ## Housekeeping on the deployment
 
-- [x] **Delete eleven dead tables and one leftover row.** `projects` still
-      holds "Swerve Drive" from the old app. `boards`, `tasks`, `taskComments`,
-      `taskAttachments`, `githubRepos`, `assemblySteps`, `assemblyStepParts`,
-      `training`, `partComments`, `qcChecks` and `messages` are empty. All are
-      gone from the schema, so the app can't see them — this is tidying, not a
-      bug. Do it from `npx convex dashboard`; the CLI refuses mass deletes.
-- [x] **Remove four unused env vars:** `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`,
-      `WORKOS_WEBHOOK_SECRET`, `WORKOS_ACTION_SECRET`. Nothing in the code
-      mentions them; they're left over from the previous auth system.
 - [ ] **Set `GITHUB_TOKEN`** if you want issue commenting and bulk import.
       Issue sync reads fine without it.
-- [x] **Stamp the old events with a season**, with
-      `npx convex run competitions:backfillSeason`. Events are per-season now;
-      any added before that change have no season and show up nowhere until
-      this runs. It reports what it touched and is safe to run twice.
-- [ ] **Push `new-tracker`.** Thirteen commits, no remote branch, no PR.
+- [ ] **Push `new-tracker`.** Thirty-one commits ahead of `main`, no remote
+      branch, no PR.
+- [ ] **Deploy to production**, which is still on the old schema. It needs the
+      same two steps dev had: push, then
+      `npx convex run competitions:backfillSeason` — the backfill is
+      per-deployment, and running it on dev did nothing for prod. Events added
+      before they were season-scoped show up nowhere until it runs.
 
-## From the handoff, not built
+## Rough edges
 
-Section numbers are from `FRC_PART_TRACKER_HANDOFF.md`.
-
-- [x] **Release-triggered assembly BOM read** (§8.2). A released assembly now
-      costs one more call to read what it contains, in Normal mode only, and
-      its contents arrive as lines with the CAD's quantities. It does **not**
-      write an assembly's members: a sync never rearranges a tree someone
-      built by hand, so a lead still applies them.
-- [x] **Part-number starting numbers and padding in Settings** (§5). Each
-      subsystem row sets the number it hands out next, forward only. The
-      Season tab sets the padding, fixed once the season has issued anything.
-      The separator and field order stay in code on purpose — `intake.ts` is
-      the one place that parses a number, and it reads year-then-code as a
-      literal prefix.
-- [x] **Company-ID lookup** (§8.2) — read from Onshape at connect, with the
-      hand-typed box kept as a prefilled override.
-- [x] **"Write it into Onshape for me"** (§5, Phase 3). **Decided: no.** See
-      "Why nothing is written back" in the README. The scope isn't ours to
-      grant from here — it lives in the Onshape developer portal, and adding
-      one invalidates the stored refresh token — and a write is one call per
-      part by the people with least sight of the allowance. The half-laid
-      groundwork that implied otherwise is gone.
-- [x] **An intake holding sub-assembly lines can't finish itself.** An unknown
-      assembly line can now be added to the board, keeping its released number
-      and its CAD link, and `applyMatched` decides matched assembly lines, so
-      the intake closes itself.
-
-## Smaller
-
-- [x] **Formatting.** Six files had drifted from Prettier before this branch
-      started — `convex/lib/github.ts`, `convex/lib/github.test.ts`,
-      `convex/lib/tokenCrypto.ts`, `index.html`, `src/components/ui/badge.tsx`
-      and `src/components/ui/table.tsx`. Reformatted; `npm run format:check`
-      is clean across the repo.
-- [x] **644 kB JS bundle**, past Vite's warning threshold. Fine for thirty
-      people on school wifi, not fine forever.
+- [ ] **Error messages show raw Convex noise.** A failed mutation renders the
+      whole `[CONVEX M(…)] [Request ID: …] Server Error Uncaught Error:`
+      wrapper, and then `at handler …` after it, around a sentence written
+      for the person who hit it. Seeding a counter backwards, for instance,
+      answers with a clear "pick 15 or higher" that nobody will read. All 36
+      sites do `err instanceof Error ? err.message : "No luck."` with no
+      shared helper; one that strips the wrapper would fix it everywhere.
+- [ ] **682 kB JS bundle**, past Vite's 500 kB warning. It was 644 kB when
+      this file was first written, so it is growing, not shrinking. Fine for
+      thirty people on school wifi, not fine forever — the warning itself
+      suggests `manualChunks` or dynamic imports.
+- [ ] **The logo is a 1,035 kB PNG**, larger than the whole JS bundle and
+      loaded on every page. Resizing or converting it is the cheapest
+      performance win available.
+- [ ] **`parts.lastReleasePackageId` is declared and never written.** Its
+      sub-assembly twin is written now, when one is created from a release
+      line; the parts side is still a field nothing fills in. Either write it
+      where a release moves a part on, or drop it.
 
 ## Questions whose answers would change the code
 
@@ -96,20 +77,11 @@ Section numbers are from `FRC_PART_TRACKER_HANDOFF.md`.
   on. It means that under 30% budget, nobody can sync from the Onshape panel —
   releases still arrive on their own. Making it lead-only instead needs a
   different gate: the panel authenticates with a shared secret and has no idea
-  who is using it.
-- [x] **Who owns the Onshape connection?** One team-wide OAuth token, now
-      recorded and shown on Settings → Onshape. Any mentor can take it over by
-      reconnecting — the row is simply overwritten — and the page warns when
-      Onshape starts refusing the token, and when a reconnect has left the
-      webhook registration needing to be made again.
+  who is using it. The release-triggered BOM read is gated the same way, so
+  whatever is decided here should apply to both.
 
-**Onshape's to answer** (§11):
+**Onshape's to answer:**
 
-- [x] **Do the app's OAuth calls come out of the Classroom's 2,500 a year?**
-      Yes. That's what the budget meter and the modes have always assumed, so
-      the design stands as built.
-- [x] **Can FIRST teams get a higher limit?** No, not at the moment. 2,500 is
-      the number to design against.
 - [ ] **What are the real BOM CSV column names?** The importer matches loosely
       and ignores what it doesn't recognise, but it has never seen a real
       export.
