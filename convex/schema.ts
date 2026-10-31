@@ -220,7 +220,13 @@ export default defineSchema({
     ),
     vendor: v.optional(v.string()),
     vendorPartNumber: v.optional(v.string()),
+    /** When it's expected to turn up. Known only sometimes. */
     eta: v.optional(v.number()),
+    // When each step actually happened. Stamped on the move rather than
+    // asked for — nobody is going to fill in a date field to tell the app
+    // something it already knows, and an empty one tells you nothing.
+    orderedAt: v.optional(v.number()),
+    arrivedAt: v.optional(v.number()),
     cost: v.optional(v.number()),
   })
     .index("by_subsystem", ["subsystemId"])

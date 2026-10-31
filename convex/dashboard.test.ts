@@ -177,3 +177,80 @@ describe("what still has to be bought", () => {
     });
   });
 });
+
+describe("when a bought item moved", () => {
+  async function anItem(t: ReturnType<typeof convexTest>) {
+    const { mentor, intake } = await setup(t);
+    const id = await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Wheels",
+      qtyNeeded: 4,
+    });
+    return { mentor, id };
+  }
+
+  test("ordering one stamps today without anyone typing a date", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, id } = await anItem(t);
+    const before = Date.now();
+
+    await mentor.mutation(api.cots.setStatus, { id, status: "ordered" });
+
+    const item = await t.run((ctx) => ctx.db.get(id));
+    expect(item?.orderedAt).toBeGreaterThanOrEqual(before);
+    expect(item?.arrivedAt).toBeUndefined();
+  });
+
+  test("marking it arrived stamps that too, and keeps the order date", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, id } = await anItem(t);
+    await mentor.mutation(api.cots.setStatus, { id, status: "ordered" });
+    const ordered = (await t.run((ctx) => ctx.db.get(id)))?.orderedAt;
+
+    await mentor.mutation(api.cots.setStatus, { id, status: "arrived" });
+
+    const item = await t.run((ctx) => ctx.db.get(id));
+    expect(item?.orderedAt).toBe(ordered);
+    expect(item?.arrivedAt).toBeTypeOf("number");
+  });
+
+  test("re-marking it doesn't move the date it already has", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, id } = await anItem(t);
+    await mentor.mutation(api.cots.setStatus, { id, status: "ordered" });
+    const first = (await t.run((ctx) => ctx.db.get(id)))?.orderedAt;
+
+    await mentor.mutation(api.cots.setStatus, { id, status: "ordered" });
+    expect((await t.run((ctx) => ctx.db.get(id)))?.orderedAt).toBe(first);
+  });
+
+  test("moving it back forgets what hadn't happened after all", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, id } = await anItem(t);
+    await mentor.mutation(api.cots.setStatus, { id, status: "arrived" });
+
+    await mentor.mutation(api.cots.setStatus, { id, status: "ordered" });
+    expect((await t.run((ctx) => ctx.db.get(id)))?.arrivedAt).toBeUndefined();
+
+    await mentor.mutation(api.cots.setStatus, { id, status: "needed" });
+    const item = await t.run((ctx) => ctx.db.get(id));
+    expect(item?.orderedAt).toBeUndefined();
+    expect(item?.eta).toBeUndefined();
+  });
+
+  test("a date typed in afterwards wins over the stamp", async () => {
+    // "It actually came on Tuesday."
+    const t = convexTest(schema, modules);
+    const { mentor, id } = await anItem(t);
+    const tuesday = new Date("2026-03-03T12:00:00").getTime();
+
+    await mentor.mutation(api.cots.setStatus, { id, status: "arrived" });
+    await mentor.mutation(api.cots.setStatus, {
+      id,
+      status: "arrived",
+      arrivedAt: tuesday,
+    });
+
+    expect((await t.run((ctx) => ctx.db.get(id)))?.arrivedAt).toBe(tuesday);
+  });
+});

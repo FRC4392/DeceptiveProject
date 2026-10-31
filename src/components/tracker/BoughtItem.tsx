@@ -45,24 +45,72 @@ function fromDateInput(value: string): number | null {
   return Number.isFinite(at) ? at : null;
 }
 
-/** When it's expected. Only worth asking once something is actually ordered. */
-function EtaField({ item }: { item: Doc<"cotsItems"> }) {
+/**
+ * The dates on a bought item. Each one is already filled in by the time it's
+ * shown — the move stamped it — so this is for correcting a date, not for
+ * supplying one.
+ */
+function DateFields({ item }: { item: Doc<"cotsItems"> }) {
   const setStatus = useMutation(api.cots.setStatus);
+
+  function set(field: "eta" | "orderedAt" | "arrivedAt", value: string) {
+    void setStatus({
+      id: item._id,
+      status: item.status,
+      [field]: fromDateInput(value),
+    });
+  }
+
   return (
-    <label className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="text-muted-foreground">Due</span>
+    <div className="flex flex-wrap gap-4">
+      {item.orderedAt !== undefined && (
+        <DateField
+          label="Ordered on"
+          value={item.orderedAt}
+          name={`When ${item.name} was ordered`}
+          onChange={(next) => set("orderedAt", next)}
+        />
+      )}
+      {item.status === "ordered" && (
+        <DateField
+          label="Expected"
+          value={item.eta}
+          name={`When ${item.name} is expected`}
+          onChange={(next) => set("eta", next)}
+        />
+      )}
+      {item.arrivedAt !== undefined && (
+        <DateField
+          label="Arrived on"
+          value={item.arrivedAt}
+          name={`When ${item.name} arrived`}
+          onChange={(next) => set("arrivedAt", next)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DateField({
+  label,
+  value,
+  name,
+  onChange,
+}: {
+  label: string;
+  value?: number;
+  name: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-1 text-sm">
+      <span className="block text-xs text-muted-foreground">{label}</span>
       <Input
         type="date"
-        defaultValue={toDateInput(item.eta)}
-        aria-label={`When ${item.name} is due`}
+        defaultValue={toDateInput(value)}
+        aria-label={name}
         className="h-9 w-40"
-        onChange={(e) =>
-          void setStatus({
-            id: item._id,
-            status: "ordered",
-            eta: fromDateInput(e.target.value),
-          })
-        }
+        onChange={(e) => onChange(e.target.value)}
       />
     </label>
   );
@@ -101,13 +149,8 @@ export function BoughtItemDetail({
 
   function move(status: CotsStatus) {
     setError(null);
-    void setStatus({
-      id: item._id,
-      status,
-      // Back to needed means it isn't on its way, so a date for its arrival
-      // would be a date for nothing.
-      ...(status === "needed" ? { eta: null } : {}),
-    }).catch((err: unknown) =>
+    // The dates follow from the move, so the server stamps and clears them.
+    void setStatus({ id: item._id, status }).catch((err: unknown) =>
       setError(err instanceof Error ? err.message : "That didn't work."),
     );
   }
@@ -161,7 +204,7 @@ export function BoughtItemDetail({
             </Detail>
           </dl>
 
-          {item.status === "ordered" && <EtaField item={item} />}
+          <DateFields item={item} />
           {error && <p className="text-sm text-danger">{error}</p>}
         </div>
 

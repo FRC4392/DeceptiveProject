@@ -98,15 +98,12 @@ describe("opening a bought item", () => {
     expect(screen.getByText("4.50 each · 54.00 total")).toBeInTheDocument();
   });
 
-  it("lets a lead move it back, and clears the date on the way", async () => {
+  it("lets a lead move it back", async () => {
     const user = userEvent.setup();
     openDetail(item({ status: "ordered", eta: 1800000000000 }));
     await user.click(screen.getByRole("button", { name: "Move it back" }));
-    expect(setStatus).toHaveBeenCalledWith({
-      id: "c_1",
-      status: "needed",
-      eta: null,
-    });
+    // The server clears the stamps; the button just says which way to go.
+    expect(setStatus).toHaveBeenCalledWith({ id: "c_1", status: "needed" });
   });
 
   it("doesn't offer moving back or deleting to anyone else", () => {
@@ -128,16 +125,48 @@ describe("opening a bought item", () => {
     expect(remove).toHaveBeenCalledWith({ id: "c_1" });
   });
 
-  it("only asks when it's due once something is ordered", () => {
+  it("shows no dates on something nobody has bought yet", () => {
     openDetail(item());
     expect(
-      screen.queryByLabelText('When Compliant wheel, 2" is due'),
+      screen.queryByLabelText(/was ordered|is expected|arrived/),
     ).not.toBeInTheDocument();
+  });
 
-    openDetail(item({ status: "ordered" }));
+  it("shows when it was ordered, and when it's expected", () => {
+    openDetail(item({ status: "ordered", orderedAt: 1800000000000 }));
     expect(
-      screen.getByLabelText('When Compliant wheel, 2" is due'),
+      screen.getByLabelText('When Compliant wheel, 2" was ordered'),
     ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('When Compliant wheel, 2" is expected'),
+    ).toBeInTheDocument();
+  });
+
+  it("shows when it arrived, and stops asking when it's expected", () => {
+    openDetail(
+      item({
+        status: "arrived",
+        orderedAt: 1800000000000,
+        arrivedAt: 1800100000000,
+      }),
+    );
+    expect(
+      screen.getByLabelText('When Compliant wheel, 2" arrived'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('When Compliant wheel, 2" is expected'),
+    ).not.toBeInTheDocument();
+  });
+
+  it("a date can be corrected afterwards", async () => {
+    const user = userEvent.setup();
+    openDetail(item({ status: "arrived", arrivedAt: 1800000000000 }));
+    const field = screen.getByLabelText('When Compliant wheel, 2" arrived');
+    await user.clear(field);
+    await user.type(field, "2026-03-03");
+    expect(setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "c_1", status: "arrived" }),
+    );
   });
 
   it("says so when the move is refused", async () => {

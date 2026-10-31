@@ -24,6 +24,8 @@ const vCots = v.object({
   vendor: v.optional(v.string()),
   vendorPartNumber: v.optional(v.string()),
   eta: v.optional(v.number()),
+  orderedAt: v.optional(v.number()),
+  arrivedAt: v.optional(v.number()),
   cost: v.optional(v.number()),
 });
 
@@ -76,17 +78,55 @@ export const create = mutation({
   },
 });
 
+/**
+ * Move a bought item along, and write down when.
+ *
+ * The date is stamped here rather than asked for. Someone marking a box of
+ * wheels as arrived is telling the app it happened now; making them then pick
+ * today out of a date picker is asking them to repeat themselves, and the
+ * field sits empty when they don't bother.
+ *
+ * Moving backwards clears the stamp for the step being undone, because a
+ * date saying a thing arrived is a lie about something sitting in a cupboard
+ * at the vendor.
+ */
 export const setStatus = mutation({
   args: {
     id: v.id("cotsItems"),
     status: statusValidator,
     eta: v.optional(v.union(v.number(), v.null())),
+    /** Correcting the stamp afterwards — "it actually came on Tuesday". */
+    orderedAt: v.optional(v.union(v.number(), v.null())),
+    arrivedAt: v.optional(v.union(v.number(), v.null())),
   },
   returns: v.null(),
-  handler: async (ctx, { id, status, eta }) => {
+  handler: async (ctx, { id, status, eta, orderedAt, arrivedAt }) => {
     await requireUserId(ctx);
+    const item = await ctx.db.get(id);
+    if (!item) throw new Error("That item is gone.");
+
+    const now = Date.now();
     const patch: Partial<Doc<"cotsItems">> = { status };
+
+    if (status === "needed") {
+      // Not on its way at all: nothing has happened to it yet.
+      patch.orderedAt = undefined;
+      patch.arrivedAt = undefined;
+      patch.eta = undefined;
+    } else if (status === "ordered") {
+      patch.orderedAt = item.orderedAt ?? now;
+      patch.arrivedAt = undefined;
+    } else {
+      // It can arrive without anyone having recorded the order.
+      patch.orderedAt = item.orderedAt;
+      patch.arrivedAt = item.arrivedAt ?? now;
+    }
+
+    // An explicit date always wins, so a correction sticks.
     if (eta !== undefined) patch.eta = eta ?? undefined;
+    if (orderedAt !== undefined) patch.orderedAt = orderedAt ?? undefined;
+    if (arrivedAt !== undefined) patch.arrivedAt = arrivedAt ?? undefined;
+
     await ctx.db.patch(id, patch);
     return null;
   },
