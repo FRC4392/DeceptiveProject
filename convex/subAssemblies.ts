@@ -208,6 +208,75 @@ export const list = query({
   },
 });
 
+/** One sub-assembly, for its own page. */
+export const get = query({
+  args: { id: v.id("subAssemblies") },
+  returns: v.union(vSubAssembly, v.null()),
+  handler: (ctx, { id }) => ctx.db.get(id),
+});
+
+export const notes = query({
+  args: { subAssemblyId: v.id("subAssemblies") },
+  returns: v.array(
+    v.object({
+      _id: v.id("subAssemblyNotes"),
+      _creationTime: v.number(),
+      subAssemblyId: v.id("subAssemblies"),
+      userId: v.string(),
+      body: v.string(),
+    }),
+  ),
+  handler: async (ctx, { subAssemblyId }) => {
+    const rows = await ctx.db
+      .query("subAssemblyNotes")
+      .withIndex("by_subAssembly", (q) => q.eq("subAssemblyId", subAssemblyId))
+      .collect();
+    return rows.sort((a, b) => b._creationTime - a._creationTime);
+  },
+});
+
+export const addNote = mutation({
+  args: { subAssemblyId: v.id("subAssemblies"), body: v.string() },
+  returns: v.id("subAssemblyNotes"),
+  handler: async (ctx, { subAssemblyId, body }) => {
+    const userId = await requireUserId(ctx);
+    const trimmed = body.trim();
+    if (trimmed.length === 0) throw new Error("Write something first.");
+    return ctx.db.insert("subAssemblyNotes", {
+      subAssemblyId,
+      userId,
+      body: trimmed,
+    });
+  },
+});
+
+/** Built, reopened, and the build count moving — newest first. */
+export const history = query({
+  args: { subAssemblyId: v.id("subAssemblies") },
+  returns: v.array(
+    v.object({
+      _id: v.id("assemblyEvents"),
+      _creationTime: v.number(),
+      subAssemblyId: v.id("subAssemblies"),
+      kind: v.union(
+        v.literal("built"),
+        v.literal("reopened"),
+        v.literal("qty_built"),
+      ),
+      userId: v.string(),
+      from: v.optional(v.number()),
+      to: v.optional(v.number()),
+    }),
+  ),
+  handler: async (ctx, { subAssemblyId }) => {
+    const events = await ctx.db
+      .query("assemblyEvents")
+      .withIndex("by_subAssembly", (q) => q.eq("subAssemblyId", subAssemblyId))
+      .collect();
+    return events.sort((a, b) => b._creationTime - a._creationTime);
+  },
+});
+
 /**
  * The sub-assemblies this person has picked up, for "My parts" — with
  * whether each can go together yet worked out here, so the screen doesn't
@@ -307,48 +376,6 @@ export const listMine = query({
   },
 });
 
-/** Everything in this subsystem that no sub-assembly holds yet. */
-export const unassigned = query({
-  args: { subsystemId: v.id("subsystems") },
-  returns: v.object({
-    partIds: v.array(v.id("parts")),
-    cotsItemIds: v.array(v.id("cotsItems")),
-  }),
-  handler: async (ctx, { subsystemId }) => {
-    const assemblies = await ctx.db
-      .query("subAssemblies")
-      .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
-      .collect();
-    const held = new Set<string>();
-    for (const assembly of assemblies) {
-      const members = await ctx.db
-        .query("subAssemblyMembers")
-        .withIndex("by_parent", (q) => q.eq("subAssemblyId", assembly._id))
-        .collect();
-      for (const m of members) {
-        if (m.partId) held.add(m.partId);
-        if (m.cotsItemId) held.add(m.cotsItemId);
-      }
-    }
-
-    const parts = await ctx.db
-      .query("parts")
-      .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
-      .take(SCAN_LIMIT);
-    const cots = await ctx.db
-      .query("cotsItems")
-      .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
-      .take(SCAN_LIMIT);
-
-    return {
-      partIds: parts
-        .filter((p) => !p.isArchived && !held.has(p._id))
-        .map((p) => p._id),
-      cotsItemIds: cots.filter((c) => !held.has(c._id)).map((c) => c._id),
-    };
-  },
-});
-
 // ---- Editing ----
 
 export const rename = mutation({
@@ -391,6 +418,19 @@ export const remove = mutation({
       .withIndex("by_child", (q) => q.eq("childSubAssemblyId", id))
       .collect();
     for (const link of parentLinks) await ctx.db.delete(link._id);
+
+    for (const note of await ctx.db
+      .query("subAssemblyNotes")
+      .withIndex("by_subAssembly", (q) => q.eq("subAssemblyId", id))
+      .collect()) {
+      await ctx.db.delete(note._id);
+    }
+    for (const event of await ctx.db
+      .query("assemblyEvents")
+      .withIndex("by_subAssembly", (q) => q.eq("subAssemblyId", id))
+      .collect()) {
+      await ctx.db.delete(event._id);
+    }
 
     await ctx.db.delete(id);
     return null;
@@ -592,6 +632,20 @@ export const demand = query({
      * caller named an assembly.
      */
     allowance: v.array(v.object({ refId: v.string(), max: v.number() })),
+    /**
+     * Parts and bought items the tree doesn't fully account for. `planned` is
+     * what someone set out to make, `claimed` is what every assembly between
+     * them asked for; `claimed === 0` means nothing is waiting on it at all.
+     */
+    loose: v.array(
+      v.object({
+        refId: v.string(),
+        kind: v.union(v.literal("part"), v.literal("cots")),
+        label: v.string(),
+        planned: v.number(),
+        claimed: v.number(),
+      }),
+    ),
   }),
   handler: async (ctx, { subsystemId, forAssemblyId }) => {
     const placements = await subsystemPlacements(ctx, subsystemId);
@@ -655,6 +709,21 @@ export const demand = query({
             max: remainingFor(rolled, refId, forAssemblyId, count),
           }))
         : [],
+      loose: Array.from(planned).flatMap(([refId, count]) => {
+        const claimed = rolled.perRef.get(refId) ?? 0;
+        const named = labels.get(refId);
+        return claimed < count && named
+          ? [
+              {
+                refId,
+                kind: named.kind,
+                label: named.label,
+                planned: count,
+                claimed,
+              },
+            ]
+          : [];
+      }),
       shortfalls: findShortfalls(rolled, planned).flatMap((short) => {
         const named = labels.get(short.refId);
         return named
@@ -705,7 +774,7 @@ export const setQtyBuilt = mutation({
   args: { id: v.id("subAssemblies"), qtyBuilt: v.number() },
   returns: v.null(),
   handler: async (ctx, { id, qtyBuilt }) => {
-    await requireUserId(ctx);
+    const userId = await requireUserId(ctx);
     const assembly = await ctx.db.get(id);
     if (!assembly) throw new Error("That sub-assembly is gone.");
     const target = unitsOf({
@@ -714,9 +783,18 @@ export const setQtyBuilt = mutation({
       spares: assembly.qtySpares,
       placements: [],
     });
-    await ctx.db.patch(id, {
-      qtyBuilt: Math.min(target, Math.max(0, Math.round(qtyBuilt))),
-    });
+    const next = Math.min(target, Math.max(0, Math.round(qtyBuilt)));
+    const before = assembly.qtyBuilt ?? 0;
+    await ctx.db.patch(id, { qtyBuilt: next });
+    if (next !== before) {
+      await ctx.db.insert("assemblyEvents", {
+        subAssemblyId: id,
+        kind: "qty_built",
+        userId,
+        from: before,
+        to: next,
+      });
+    }
     return null;
   },
 });
@@ -880,6 +958,12 @@ export const complete = mutation({
       ),
     });
 
+    await ctx.db.insert("assemblyEvents", {
+      subAssemblyId: id,
+      kind: "built",
+      userId: actor.userId,
+    });
+
     // Building this one may have been the last thing a shared part was
     // waiting on, so sweep the assemblies it also belongs to.
     moved += await releaseSharedParts(ctx, id, actor, now);
@@ -1010,10 +1094,15 @@ export const reopen = mutation({
   args: { id: v.id("subAssemblies") },
   returns: v.null(),
   handler: async (ctx, { id }) => {
-    await requireLead(ctx);
+    const user = await requireLead(ctx);
     await ctx.db.patch(id, {
       completedAt: undefined,
       completedByUserId: undefined,
+    });
+    await ctx.db.insert("assemblyEvents", {
+      subAssemblyId: id,
+      kind: "reopened",
+      userId: user.authId,
     });
     return null;
   },

@@ -21,6 +21,7 @@ import { PartPage } from "@/routes/PartPage";
 import { ShopPage } from "@/routes/ShopPage";
 import { MyPartsPage } from "@/routes/MyPartsPage";
 import { SubsystemsPage } from "@/routes/SubsystemsPage";
+import { AssemblyPage } from "@/routes/AssemblyPage";
 import { IntakePage } from "@/routes/IntakePage";
 import { InventoryPage } from "@/routes/InventoryPage";
 import { OrderingPage } from "@/routes/OrderingPage";
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/parts/from-onshape" element={<IntakePage />} />
           <Route path="/parts/:partId" element={<PartPage />} />
           <Route path="/subsystems" element={<SubsystemsPage />} />
+          <Route path="/assemblies/:assemblyId" element={<AssemblyPage />} />
           <Route path="/my-parts" element={<MyPartsPage />} />
           <Route path="/manufacturing" element={<ShopPage />} />
           <Route path="/ordering" element={<OrderingPage />} />

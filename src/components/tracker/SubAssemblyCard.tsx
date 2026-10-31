@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation } from "convex/react";
 import { ExternalLinkIcon } from "@radix-ui/react-icons";
 import { api } from "../../../convex/_generated/api";
@@ -25,6 +26,7 @@ export function SubAssemblyCard({
   completeReason,
   isLead,
   units,
+  to,
 }: {
   assembly: Doc<"subAssemblies">;
   status: AssemblyStatus;
@@ -35,6 +37,11 @@ export function SubAssemblyCard({
   isLead: boolean;
   /** Whole units the robot needs, once placements are multiplied out. */
   units?: number;
+  /**
+   * Its own page. Only the number and name link there — the card holds
+   * buttons, and a button inside a link is both invalid and a misclick.
+   */
+  to?: string;
 }) {
   const currentUserId = useCurrentUserId();
   const claim = useMutation(api.subAssemblies.claim);
@@ -65,20 +72,44 @@ export function SubAssemblyCard({
       )}
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-mono text-xs text-muted-foreground">
-          {assembly.partNumber}
-        </span>
-        <span
-          className={cn(
-            "text-xs font-semibold",
-            status.ready ? "text-success" : "text-muted-foreground",
+        {to ? (
+          <Link
+            to={to}
+            className="font-mono text-xs text-muted-foreground hover:underline"
+          >
+            {assembly.partNumber}
+          </Link>
+        ) : (
+          <span className="font-mono text-xs text-muted-foreground">
+            {assembly.partNumber}
+          </span>
+        )}
+        <span className="flex items-center gap-2">
+          {assembly.isDefault && (
+            // The subsystem itself. Marking this one built is what "it's on
+            // the robot" means, so say which one it is.
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              whole subsystem
+            </span>
           )}
-        >
-          {status.done ? "Done" : status.ready ? "Go" : "Waiting"}
+          <span
+            className={cn(
+              "text-xs font-semibold",
+              status.ready ? "text-success" : "text-muted-foreground",
+            )}
+          >
+            {status.done ? "Done" : status.ready ? "Go" : "Waiting"}
+          </span>
         </span>
       </div>
       <p className="mt-1 font-medium">
-        {assembly.name}
+        {to ? (
+          <Link to={to} className="hover:underline">
+            {assembly.name}
+          </Link>
+        ) : (
+          assembly.name
+        )}
         {units !== undefined && units > 1 && (
           // Two rollers on the robot is not the same job as one, and the
           // number comes from the CAD rather than from anyone's memory.

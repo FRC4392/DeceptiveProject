@@ -17,6 +17,7 @@ import type * as http from "../http.js";
 import type * as intake from "../intake.js";
 import type * as inventory from "../inventory.js";
 import type * as lib_assembly from "../lib/assembly.js";
+import type * as lib_assemblyTree from "../lib/assemblyTree.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_budget from "../lib/budget.js";
 import type * as lib_github from "../lib/github.js";
@@ -62,6 +63,7 @@ declare const fullApi: ApiFromModules<{
   intake: typeof intake;
   inventory: typeof inventory;
   "lib/assembly": typeof lib_assembly;
+  "lib/assemblyTree": typeof lib_assemblyTree;
   "lib/auth": typeof lib_auth;
   "lib/budget": typeof lib_budget;
   "lib/github": typeof lib_github;

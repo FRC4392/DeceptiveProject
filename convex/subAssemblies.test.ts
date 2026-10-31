@@ -342,13 +342,13 @@ describe("what a sub-assembly is made of", () => {
     ).rejects.toThrow(/Move or delete what's inside it first/);
   });
 
-  test("anything no sub-assembly holds shows as unassigned", async () => {
+  test("anything no sub-assembly holds is left over", async () => {
     const t = convexTest(schema, modules);
     const { mentor, intake, parts } = await setup(t);
-    const before = await mentor.query(api.subAssemblies.unassigned, {
+    const before = await mentor.query(api.subAssemblies.demand, {
       subsystemId: intake._id,
     });
-    expect(before.partIds).toHaveLength(3);
+    expect(before.loose).toHaveLength(3);
 
     const rows = await listFor(mentor, intake._id);
     await mentor.mutation(api.subAssemblies.setMembers, {
@@ -357,10 +357,10 @@ describe("what a sub-assembly is made of", () => {
       cotsItemIds: [],
       childIds: [],
     });
-    const after = await mentor.query(api.subAssemblies.unassigned, {
+    const after = await mentor.query(api.subAssemblies.demand, {
       subsystemId: intake._id,
     });
-    expect(after.partIds).toHaveLength(2);
+    expect(after.loose).toHaveLength(2);
   });
 });
 
@@ -982,5 +982,205 @@ describe("an assembly placed more often than it's built", () => {
       subsystemId: intake._id,
     });
     expect(after.underbuilt).toEqual([]);
+  });
+});
+
+describe("one sub-assembly on its own", () => {
+  test("can be fetched by id, and a stale id reads as gone", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+
+    const got = await mentor.query(api.subAssemblies.get, {
+      id: rows[0].assembly._id,
+    });
+    expect(got?.partNumber).toBe("27-INT-000");
+
+    const { id } = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Frame",
+    });
+    await mentor.mutation(api.subAssemblies.remove, { id });
+    expect(await mentor.query(api.subAssemblies.get, { id })).toBeNull();
+  });
+});
+
+describe("notes on a sub-assembly", () => {
+  test("come back newest first, and an empty one is refused", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    const id = rows[0].assembly._id;
+
+    await mentor.mutation(api.subAssemblies.addNote, {
+      subAssemblyId: id,
+      body: "Left plate first",
+    });
+    await mentor.mutation(api.subAssemblies.addNote, {
+      subAssemblyId: id,
+      body: "  Bolts are M4  ",
+    });
+
+    const notes = await mentor.query(api.subAssemblies.notes, {
+      subAssemblyId: id,
+    });
+    expect(notes.map((n) => n.body)).toEqual([
+      "Bolts are M4",
+      "Left plate first",
+    ]);
+
+    await expect(
+      mentor.mutation(api.subAssemblies.addNote, {
+        subAssemblyId: id,
+        body: "   ",
+      }),
+    ).rejects.toThrow(/Write something/);
+  });
+
+  test("go when the sub-assembly does", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const { id } = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Frame",
+    });
+    await mentor.mutation(api.subAssemblies.addNote, {
+      subAssemblyId: id,
+      body: "Scrapped the first one",
+    });
+
+    await mentor.mutation(api.subAssemblies.remove, { id });
+
+    expect(
+      await mentor.query(api.subAssemblies.notes, { subAssemblyId: id }),
+    ).toEqual([]);
+  });
+});
+
+describe("the history of a sub-assembly", () => {
+  test("records the build count moving, but not a no-op", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    const id = rows[0].assembly._id;
+    await mentor.mutation(api.subAssemblies.setUnits, { id, qtyNeeded: 3 });
+
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, { id, qtyBuilt: 2 });
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, { id, qtyBuilt: 2 });
+
+    const events = await mentor.query(api.subAssemblies.history, {
+      subAssemblyId: id,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe("qty_built");
+    expect(events[0].from).toBe(0);
+    expect(events[0].to).toBe(2);
+  });
+
+  test("records being built and then reopened, newest first", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    const id = rows[0].assembly._id;
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+    });
+    await putInBin(mentor, parts[0]);
+
+    await mentor.mutation(api.subAssemblies.complete, { id });
+    await mentor.mutation(api.subAssemblies.reopen, { id });
+
+    const events = await mentor.query(api.subAssemblies.history, {
+      subAssemblyId: id,
+    });
+    expect(events.map((e) => e.kind)).toEqual(["reopened", "built"]);
+    expect(events[0].userId).toBe("mentor_1");
+  });
+});
+
+describe("what no sub-assembly has spoken for", () => {
+  test("lists a part nothing holds at all", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: rows[0].assembly._id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+    });
+
+    const { loose } = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+
+    // Two of the three parts are in nothing, so nothing is waiting on them.
+    const untouched = loose.filter((l) => l.claimed === 0);
+    expect(untouched).toHaveLength(2);
+    expect(loose.find((l) => l.refId === parts[0])).toBeUndefined();
+  });
+
+  test("lists a part only some of which is spoken for", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 5 });
+    });
+    const rows = await listFor(mentor, intake._id);
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: rows[0].assembly._id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+      quantities: [{ refId: parts[0], quantity: 2 }],
+    });
+
+    const { loose } = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+
+    const partial = loose.find((l) => l.refId === parts[0]);
+    expect(partial).toMatchObject({ planned: 5, claimed: 2, kind: "part" });
+  });
+
+  test("says nothing about a part the tree fully accounts for", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 2 });
+    });
+    const rows = await listFor(mentor, intake._id);
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: rows[0].assembly._id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+      quantities: [{ refId: parts[0], quantity: 2 }],
+    });
+
+    const { loose } = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+    expect(loose.find((l) => l.refId === parts[0])).toBeUndefined();
+  });
+
+  test("counts a bought item the same way", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Bearing",
+      qtyNeeded: 4,
+    });
+
+    const { loose } = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+
+    const bearing = loose.find((l) => l.label === "Bearing");
+    expect(bearing).toMatchObject({ kind: "cots", planned: 4, claimed: 0 });
   });
 });

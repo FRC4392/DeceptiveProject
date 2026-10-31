@@ -1,17 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import {
-  Cross2Icon,
-  ExternalLinkIcon,
-  MinusIcon,
-  PlusIcon,
-} from "@radix-ui/react-icons";
+import { MinusIcon, PlusIcon } from "@radix-ui/react-icons";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { onshapeElementUrl } from "../../../convex/lib/onshapeLinks";
 import { wouldCycle } from "../../../convex/lib/assembly";
 import { cn } from "@/lib/utils";
 
@@ -25,44 +19,32 @@ export type AssemblyRow = {
 };
 
 /**
- * Setting up what a subsystem goes together from.
+ * What one sub-assembly is made of: the parts and bought items it needs, and
+ * the sub-assemblies that go inside it.
  *
- * One sub-assembly is edited at a time — listing every part against every
- * sub-assembly at once was unreadable the moment nesting arrived.
+ * One at a time, on that assembly's own page — listing every part against
+ * every sub-assembly at once was unreadable the moment nesting arrived.
  */
-export function SubAssemblyEditor({
-  subsystemId,
+export function AssemblyMembers({
+  selected,
   rows,
   parts,
   cots,
-  onDone,
 }: {
-  subsystemId: Id<"subsystems">;
+  selected: AssemblyRow;
+  /** Every sibling, for the "inside it" picker. */
   rows: AssemblyRow[];
   parts: Doc<"parts">[];
   cots: Doc<"cotsItems">[];
-  onDone: () => void;
 }) {
-  const create = useMutation(api.subAssemblies.create);
-  const rename = useMutation(api.subAssemblies.rename);
-  const remove = useMutation(api.subAssemblies.remove);
   const setMembers = useMutation(api.subAssemblies.setMembers);
-  const setUnits = useMutation(api.subAssemblies.setUnits);
-  const setQtyBuilt = useMutation(api.subAssemblies.setQtyBuilt);
-  const setDrawing = useMutation(api.subAssemblies.setDrawing);
-  const unassigned = useQuery(api.subAssemblies.unassigned, { subsystemId });
-
-  const [selectedId, setSelectedId] = useState<Id<"subAssemblies"> | null>(
-    rows[0]?.assembly._id ?? null,
-  );
-  const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const allowance = useQuery(
-    api.subAssemblies.demand,
-    selectedId ? { subsystemId, forAssemblyId: selectedId } : "skip",
-  );
-
-  const selected = rows.find((r) => r.assembly._id === selectedId) ?? rows[0];
+  // One query for both halves: the per-member ceiling, and what the tree
+  // still doesn't account for.
+  const demand = useQuery(api.subAssemblies.demand, {
+    subsystemId: selected.assembly.subsystemId,
+    forAssemblyId: selected.assembly._id,
+  });
 
   function run(action: Promise<unknown>) {
     setError(null);
@@ -86,7 +68,7 @@ export function SubAssemblyEditor({
 
   function alsoIn(memberId: string): string | undefined {
     const others = (usersOf.get(memberId) ?? []).filter(
-      (row) => row.assembly._id !== selected?.assembly._id,
+      (row) => row.assembly._id !== selected.assembly._id,
     );
     if (others.length === 0) return undefined;
     return others.length === 1
@@ -94,45 +76,13 @@ export function SubAssemblyEditor({
       : `also in ${others.length} others`;
   }
 
-  /** How many of a member this assembly uses. */
-  /**
-   * Take everything going, as much of each as the plan allows. Selecting all
-   * and then setting twenty quantities by hand was the actual job, so this
-   * does the part people were going to do anyway.
-   */
-  function takeAll() {
-    const refs = [
-      ...availableParts.map((p) => p._id as string),
-      ...availableCots.map((c) => c._id as string),
-    ];
-    const quantities = refs.flatMap((refId) => {
-      const most = maxOf(refId);
-      return Number.isFinite(most) && most > 1
-        ? [{ refId, quantity: most }]
-        : [];
-    });
-    save({
-      partIds: availableParts.map((p) => p._id),
-      cotsItemIds: availableCots.map((c) => c._id),
-      quantities,
-    });
-  }
-
-  function clearAll() {
-    save({ partIds: [], cotsItemIds: [], quantities: [] });
-  }
-
   /** The most of one member a single unit of this assembly may take. */
   function maxOf(memberId: string): number {
-    return (
-      allowance?.allowance.find((a) => a.refId === memberId)?.max ?? Infinity
-    );
+    return demand?.allowance.find((a) => a.refId === memberId)?.max ?? Infinity;
   }
 
   function qtyOf(memberId: string): number {
-    return (
-      selected?.quantities.find((q) => q.refId === memberId)?.quantity ?? 1
-    );
+    return selected.quantities.find((q) => q.refId === memberId)?.quantity ?? 1;
   }
 
   function save(
@@ -140,7 +90,6 @@ export function SubAssemblyEditor({
       quantities?: { refId: string; quantity: number }[];
     },
   ) {
-    if (!selected) return;
     run(
       setMembers({
         id: selected.assembly._id,
@@ -153,9 +102,7 @@ export function SubAssemblyEditor({
   }
 
   function setQty(memberId: string, quantity: number) {
-    const rest = (selected?.quantities ?? []).filter(
-      (q) => q.refId !== memberId,
-    );
+    const rest = selected.quantities.filter((q) => q.refId !== memberId);
     save({
       quantities:
         quantity > 1 ? [...rest, { refId: memberId, quantity }] : rest,
@@ -166,363 +113,221 @@ export function SubAssemblyEditor({
     return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
   }
 
-  const availableParts = parts;
-  const availableCots = cots;
-  const totalPickable = availableParts.length + availableCots.length;
-  const chosen =
-    (selected?.partIds.length ?? 0) + (selected?.cotsItemIds.length ?? 0);
-  const allChosen = totalPickable > 0 && chosen === totalPickable;
+  /**
+   * Take everything there's still room for, as much of each as the plan
+   * leaves. Selecting all and then setting twenty quantities by hand was the
+   * actual job, so this does the part people were going to do anyway.
+   *
+   * Anything already spoken for down to the last one is left alone. Taking it
+   * regardless is how a part ends up promised to two assemblies at once, and
+   * nobody pressing one button means to do that. Ticking such a part by hand
+   * still works — sharing is deliberate, and the shortfall list says so out
+   * loud — but it isn't something to sweep up in bulk.
+   */
+  function takeAll() {
+    const taken = new Set(takeable);
+    save({
+      partIds: parts.map((p) => p._id).filter((id) => taken.has(id)),
+      cotsItemIds: cots.map((c) => c._id).filter((id) => taken.has(id)),
+      quantities: takeable.flatMap((refId) => {
+        const most = maxOf(refId);
+        return Number.isFinite(most) && most > 1
+          ? [{ refId, quantity: most }]
+          : [];
+      }),
+    });
+  }
+
+  function clearAll() {
+    save({ partIds: [], cotsItemIds: [], quantities: [] });
+  }
+
+  const isChosen = (refId: string) =>
+    selected.partIds.includes(refId as Id<"parts">) ||
+    selected.cotsItemIds.includes(refId as Id<"cotsItems">);
+  // What there's still room to take: anything with some of it left, plus
+  // whatever this assembly already holds, which you must be able to untick.
+  const takeable = [
+    ...parts.map((p) => p._id as string),
+    ...cots.map((c) => c._id as string),
+  ].filter((refId) => maxOf(refId) >= 1 || isChosen(refId));
+  const chosenCount = selected.partIds.length + selected.cotsItemIds.length;
+  const allChosen = takeable.length > 0 && takeable.every(isChosen);
+  const loose = demand?.loose ?? [];
 
   return (
-    <div className="mt-3 grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
-      {/* Which one you're editing */}
-      <div className="space-y-1">
-        {rows.map((row) => (
-          <button
-            key={row.assembly._id}
-            type="button"
-            onClick={() => setSelectedId(row.assembly._id)}
-            className={cn(
-              "flex min-h-11 w-full items-center gap-2 rounded-md border px-3 text-left text-sm",
-              row.assembly._id === selected?.assembly._id
-                ? "border-primary bg-primary/10"
-                : "hover:bg-accent",
-            )}
-          >
-            <span className="font-mono text-xs text-muted-foreground">
-              {row.assembly.partNumber}
-            </span>
-            <span className="truncate">{row.assembly.name}</span>
-            {row.assembly.isDefault && (
-              <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-                whole thing
-              </span>
-            )}
-          </button>
-        ))}
+    <div>
+      <label className="flex min-h-9 items-center gap-2 border-b pb-2 text-sm">
+        <Checkbox
+          checked={allChosen}
+          // Until the ceilings arrive every part looks unlimited, and this
+          // would take ones the plan has nothing left of.
+          disabled={takeable.length === 0 || demand === undefined}
+          aria-label="Select every part"
+          onCheckedChange={() => (allChosen ? clearAll() : takeAll())}
+        />
+        <span className="font-medium">Select all</span>
+        <span className="text-xs text-muted-foreground">
+          {chosenCount} of {takeable.length}
+        </span>
+      </label>
 
-        <div className="flex gap-2 pt-2">
-          <Input
-            value={name}
-            placeholder="Frame assembly"
-            aria-label="New sub-assembly"
-            onChange={(e) => setName(e.target.value)}
-          />
-          <Button
-            disabled={name.trim().length === 0}
-            onClick={() =>
-              run(
-                create({ subsystemId, name }).then((made) => {
-                  setName("");
-                  setSelectedId(made.id);
-                }),
-              )
-            }
-          >
-            Add
-          </Button>
-        </div>
+      <div className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+        {parts.map((part) => {
+          const elsewhere = alsoIn(part._id);
+          const chosen = selected.partIds.includes(part._id);
+          const noneLeft = !chosen && maxOf(part._id) < 1;
+          return (
+            <label
+              key={part._id}
+              className="flex min-h-9 items-center gap-2 text-sm"
+            >
+              <Checkbox
+                checked={chosen}
+                onCheckedChange={() =>
+                  save({ partIds: toggle(selected.partIds, part._id) })
+                }
+              />
+              <span className="font-mono text-xs text-muted-foreground">
+                {part.partNumber}
+              </span>
+              <span className="truncate">{part.name}</span>
+              {chosen && (
+                <QtyBox
+                  value={qtyOf(part._id)}
+                  max={maxOf(part._id)}
+                  onChange={(n) => setQty(part._id, n)}
+                  label={`How many ${part.partNumber}`}
+                />
+              )}
+              {noneLeft ? (
+                <span className="shrink-0 text-xs text-warning">
+                  none left{elsewhere ? ` · ${elsewhere}` : ""}
+                </span>
+              ) : (
+                elsewhere && (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {elsewhere}
+                  </span>
+                )
+              )}
+            </label>
+          );
+        })}
+        {cots.map((item) => {
+          const elsewhere = alsoIn(item._id);
+          const chosen = selected.cotsItemIds.includes(item._id);
+          const noneLeft = !chosen && maxOf(item._id) < 1;
+          return (
+            <label
+              key={item._id}
+              className="flex min-h-9 items-center gap-2 text-sm"
+            >
+              <Checkbox
+                checked={chosen}
+                onCheckedChange={() =>
+                  save({
+                    cotsItemIds: toggle(selected.cotsItemIds, item._id),
+                  })
+                }
+              />
+              <span className="text-xs text-muted-foreground">bought</span>
+              <span className="truncate">{item.name}</span>
+              {chosen && (
+                <QtyBox
+                  value={qtyOf(item._id)}
+                  max={maxOf(item._id)}
+                  onChange={(n) => setQty(item._id, n)}
+                  label={`How many ${item.name}`}
+                />
+              )}
+              {noneLeft ? (
+                <span className="shrink-0 text-xs text-warning">
+                  none left{elsewhere ? ` · ${elsewhere}` : ""}
+                </span>
+              ) : (
+                elsewhere && (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {elsewhere}
+                  </span>
+                )
+              )}
+            </label>
+          );
+        })}
       </div>
 
-      {/* What's in it */}
-      {selected && (
-        <div className="rounded-lg border p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-xs text-muted-foreground">
-              {selected.assembly.partNumber}
-            </span>
-            <Input
-              defaultValue={selected.assembly.name}
-              key={selected.assembly._id}
-              aria-label="Sub-assembly name"
-              className="max-w-xs"
-              onBlur={(e) => {
-                const next = e.target.value.trim();
-                if (next.length > 0 && next !== selected.assembly.name) {
-                  run(rename({ id: selected.assembly._id, name: next }));
-                }
-              }}
-            />
-            {!selected.assembly.isDefault && (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Remove ${selected.assembly.name}`}
-                onClick={() =>
-                  run(
-                    remove({ id: selected.assembly._id }).then(() =>
-                      setSelectedId(rows[0]?.assembly._id ?? null),
-                    ),
+      {/* Other sub-assemblies that can go inside this one */}
+      <p className="mt-4 border-b pb-2 text-sm font-medium">
+        Sub-assemblies inside it
+      </p>
+      <div className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+        {rows
+          .filter((row) => row.assembly._id !== selected.assembly._id)
+          .map((row) => {
+            const elsewhere = alsoIn(row.assembly._id);
+            const loops = wouldCycle(
+              selected.assembly._id,
+              row.assembly._id,
+              edges,
+            );
+            const chosen = selected.childIds.includes(row.assembly._id);
+            return (
+              <label
+                key={row.assembly._id}
+                className={cn(
+                  "flex min-h-9 items-center gap-2 text-sm",
+                  loops && "text-muted-foreground",
+                )}
+              >
+                <Checkbox
+                  checked={chosen}
+                  disabled={loops}
+                  onCheckedChange={() =>
+                    save({
+                      childIds: toggle(selected.childIds, row.assembly._id),
+                    })
+                  }
+                />
+                <span className="font-mono text-xs text-muted-foreground">
+                  {row.assembly.partNumber}
+                </span>
+                <span className="truncate">{row.assembly.name}</span>
+                {chosen && (
+                  <QtyBox
+                    value={qtyOf(row.assembly._id)}
+                    onChange={(n) => setQty(row.assembly._id, n)}
+                    label={`How many ${row.assembly.name}`}
+                  />
+                )}
+                {loops ? (
+                  <span className="shrink-0 text-xs">holds this one</span>
+                ) : (
+                  elsewhere && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {elsewhere}
+                    </span>
                   )
-                }
-              >
-                <Cross2Icon className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-
-          <label className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-            <span className="shrink-0 text-muted-foreground">
-              Assembly drawing
-            </span>
-            <Input
-              defaultValue={selected.assembly.drawingUrl ?? ""}
-              key={`${selected.assembly._id}-drawing`}
-              className="w-full sm:w-96"
-              placeholder="https://… a link whoever builds it can open"
-              aria-label="Assembly drawing link"
-              onBlur={(e) => {
-                const next = e.target.value.trim();
-                if (next !== (selected.assembly.drawingUrl ?? "")) {
-                  run(
-                    setDrawing({
-                      id: selected.assembly._id,
-                      url: next.length > 0 ? next : null,
-                    }),
-                  );
-                }
-              }}
-            />
-          </label>
-
-          <div className="mt-3 flex flex-wrap items-end gap-4 text-sm">
-            <label className="space-y-1">
-              <span className="block text-muted-foreground">On the robot</span>
-              <Input
-                type="number"
-                min={1}
-                key={`needed-${selected.assembly._id}`}
-                defaultValue={selected.assembly.qtyNeeded ?? 1}
-                aria-label="How many go on the robot"
-                className="h-9 w-20"
-                onBlur={(e) => {
-                  const next = Math.max(1, Math.round(Number(e.target.value)));
-                  if (
-                    Number.isFinite(next) &&
-                    next !== (selected.assembly.qtyNeeded ?? 1)
-                  ) {
-                    run(
-                      setUnits({
-                        id: selected.assembly._id,
-                        qtyNeeded: next,
-                      }),
-                    );
-                  }
-                }}
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="block text-muted-foreground">Spares</span>
-              <Input
-                type="number"
-                min={0}
-                key={`spares-${selected.assembly._id}`}
-                defaultValue={selected.assembly.qtySpares ?? 0}
-                aria-label="Spare units to build"
-                className="h-9 w-20"
-                onBlur={(e) => {
-                  const next = Math.max(0, Math.round(Number(e.target.value)));
-                  if (
-                    Number.isFinite(next) &&
-                    next !== (selected.assembly.qtySpares ?? 0)
-                  ) {
-                    run(
-                      setUnits({
-                        id: selected.assembly._id,
-                        qtySpares: next,
-                      }),
-                    );
-                  }
-                }}
-              />
-            </label>
-            <BuiltCounter
-              assembly={selected.assembly}
-              onChange={(qtyBuilt) =>
-                run(setQtyBuilt({ id: selected.assembly._id, qtyBuilt }))
-              }
-            />
-          </div>
-
-          <p className="mt-2 text-sm text-muted-foreground">
-            {onshapeElementUrl(selected.assembly) ? (
-              <a
-                href={onshapeElementUrl(selected.assembly)!}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="inline-flex items-center gap-1.5 font-medium text-primary underline-offset-4 hover:underline"
-              >
-                Assembly CAD
-                <ExternalLinkIcon className="h-3 w-3" />
-              </a>
-            ) : (
-              "No CAD linked yet — a sync from Onshape fills this in."
-            )}
+                )}
+              </label>
+            );
+          })}
+        {rows.length === 1 && (
+          <p className="text-sm text-muted-foreground">
+            Add another sub-assembly to put one inside this.
           </p>
+        )}
+      </div>
 
-          <label className="mt-4 flex min-h-9 items-center gap-2 border-b pb-2 text-sm">
-            <Checkbox
-              checked={allChosen}
-              disabled={totalPickable === 0}
-              aria-label="Select every part"
-              onCheckedChange={() => (allChosen ? clearAll() : takeAll())}
-            />
-            <span className="font-medium">Select all</span>
-            <span className="text-xs text-muted-foreground">
-              {chosen} of {totalPickable}
-            </span>
-          </label>
-
-          <div className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
-            {parts.map((part) => {
-              const elsewhere = alsoIn(part._id);
-              const chosen = selected.partIds.includes(part._id);
-              return (
-                <label
-                  key={part._id}
-                  className="flex min-h-9 items-center gap-2 text-sm"
-                >
-                  <Checkbox
-                    checked={chosen}
-                    onCheckedChange={() =>
-                      save({ partIds: toggle(selected.partIds, part._id) })
-                    }
-                  />
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {part.partNumber}
-                  </span>
-                  <span className="truncate">{part.name}</span>
-                  {chosen && (
-                    <QtyBox
-                      value={qtyOf(part._id)}
-                      max={maxOf(part._id)}
-                      onChange={(n) => setQty(part._id, n)}
-                      label={`How many ${part.partNumber}`}
-                    />
-                  )}
-                  {elsewhere && (
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {elsewhere}
-                    </span>
-                  )}
-                </label>
-              );
-            })}
-            {cots.map((item) => {
-              const elsewhere = alsoIn(item._id);
-              return (
-                <label
-                  key={item._id}
-                  className="flex min-h-9 items-center gap-2 text-sm"
-                >
-                  <Checkbox
-                    checked={selected.cotsItemIds.includes(item._id)}
-                    onCheckedChange={() =>
-                      save({
-                        cotsItemIds: toggle(selected.cotsItemIds, item._id),
-                      })
-                    }
-                  />
-                  <span className="text-xs text-muted-foreground">bought</span>
-                  <span className="truncate">{item.name}</span>
-                  {selected.cotsItemIds.includes(item._id) && (
-                    <QtyBox
-                      value={qtyOf(item._id)}
-                      max={maxOf(item._id)}
-                      onChange={(n) => setQty(item._id, n)}
-                      label={`How many ${item.name}`}
-                    />
-                  )}
-                  {elsewhere && (
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {elsewhere}
-                    </span>
-                  )}
-                </label>
-              );
-            })}
-          </div>
-
-          {/* Other sub-assemblies that can go inside this one */}
-          <p className="mt-4 border-b pb-2 text-sm font-medium">
-            Sub-assemblies inside it
-          </p>
-          <div className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
-            {rows
-              .filter((row) => row.assembly._id !== selected.assembly._id)
-              .map((row) => {
-                const elsewhere = alsoIn(row.assembly._id);
-                const loops = wouldCycle(
-                  selected.assembly._id,
-                  row.assembly._id,
-                  edges,
-                );
-                const chosen = selected.childIds.includes(row.assembly._id);
-                return (
-                  <label
-                    key={row.assembly._id}
-                    className={cn(
-                      "flex min-h-9 items-center gap-2 text-sm",
-                      loops && "text-muted-foreground",
-                    )}
-                  >
-                    <Checkbox
-                      checked={chosen}
-                      disabled={loops}
-                      onCheckedChange={() =>
-                        save({
-                          childIds: toggle(selected.childIds, row.assembly._id),
-                        })
-                      }
-                    />
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {row.assembly.partNumber}
-                    </span>
-                    <span className="truncate">{row.assembly.name}</span>
-                    {chosen && (
-                      <QtyBox
-                        value={qtyOf(row.assembly._id)}
-                        onChange={(n) => setQty(row.assembly._id, n)}
-                        label={`How many ${row.assembly.name}`}
-                      />
-                    )}
-                    {loops ? (
-                      <span className="shrink-0 text-xs">holds this one</span>
-                    ) : (
-                      elsewhere && (
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {elsewhere}
-                        </span>
-                      )
-                    )}
-                  </label>
-                );
-              })}
-            {rows.length === 1 && (
-              <p className="text-sm text-muted-foreground">
-                Add another sub-assembly to put one inside this.
-              </p>
-            )}
-          </div>
-
-          {unassigned && unassigned.partIds.length > 0 && (
-            <p className="mt-4 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
-              {unassigned.partIds.length} part
-              {unassigned.partIds.length === 1 ? " isn't" : "s aren't"} in any
-              sub-assembly yet, so nothing is waiting on
-              {unassigned.partIds.length === 1 ? " it" : " them"}.
-            </p>
-          )}
-
-          {error && <p className="mt-2 text-sm text-danger">{error}</p>}
-        </div>
+      {loose.length > 0 && (
+        <p className="mt-4 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
+          {loose.length === 1
+            ? "One thing here isn't fully accounted for by any sub-assembly yet."
+            : `${loose.length} things here aren't fully accounted for by any sub-assembly yet.`}
+        </p>
       )}
 
-      <div className="lg:col-span-2">
-        <Button variant="outline" onClick={onDone}>
-          Done
-        </Button>
-      </div>
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
     </div>
   );
 }
@@ -588,7 +393,7 @@ function QtyBox({
  * "2/3" rather than done-or-not, because a sub-assembly needed twice with
  * one built is neither.
  */
-function BuiltCounter({
+export function BuiltCounter({
   assembly,
   onChange,
 }: {

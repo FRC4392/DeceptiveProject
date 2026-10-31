@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { useQuery } from "convex/react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { Chip } from "@/components/tracker/PartChips";
-import { SubAssemblyEditor } from "@/components/tracker/SubAssemblies";
+import { BoughtItemDetail } from "@/components/tracker/BoughtItem";
 import { SubAssemblyCard } from "@/components/tracker/SubAssemblyCard";
 import { CLAIM_COPY } from "@/components/tracker/ClaimLine";
 import { cotsChipClass, cotsStatusLabel } from "@/lib/cots";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useIsLead } from "@/lib/roles";
 import { useActor } from "@/lib/tracker";
 import { isMentorOrAbove } from "@/lib/stages";
@@ -24,6 +31,10 @@ import {
   computeAssemblyStatuses,
   type AssemblyInput,
 } from "../../convex/lib/assembly";
+import {
+  buildAssemblyTree,
+  type TreeNode,
+} from "../../convex/lib/assemblyTree";
 import { useProcessMap, useSubsystems } from "@/lib/tracker";
 import { useRosterMap } from "@/lib/users";
 import { cn } from "@/lib/utils";
@@ -38,9 +49,17 @@ export function SubsystemsPage() {
   const roster = useRosterMap();
   const processes = useProcessMap();
   const [filter, setFilter] = useState<RowFilter>("all");
-  const [editing, setEditing] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  // Held as an id, not a doc: the dialog has to show the move it just made.
+  const [openBoughtId, setOpenBoughtId] = useState<Id<"cotsItems"> | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
   const isLead = useIsLead();
   const actor = useActor();
+  const navigate = useNavigate();
+  const createAssembly = useMutation(api.subAssemblies.create);
 
   const selectedId = (params.get("s") ??
     subsystems?.[0]?._id ??
@@ -70,6 +89,10 @@ export function SubsystemsPage() {
   );
 
   const selected = subsystems?.find((s) => s._id === selectedId);
+  // Looked up rather than kept: the dialog takes a doc and can't refresh
+  // itself, so it has to come off the live query every render.
+  const openBought =
+    (cots ?? []).find((item) => item._id === openBoughtId) ?? null;
   const myProgress = progress?.find((p) => p.subsystemId === selectedId);
 
   const partById = useMemo(
@@ -79,6 +102,11 @@ export function SubsystemsPage() {
   const cotsById = useMemo(
     () => new Map((cots ?? []).map((c) => [c._id, c])),
     [cots],
+  );
+  // What the sub-assembly tree doesn't account for, by part or bought item.
+  const looseByRef = useMemo(
+    () => new Map((demand?.loose ?? []).map((l) => [l.refId, l])),
+    [demand],
   );
 
   if (subsystems !== undefined && subsystems.length === 0) {
@@ -132,6 +160,30 @@ export function SubsystemsPage() {
         </header>
       )}
 
+      {demand && demand.loose.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+          <h2 className="font-semibold">
+            Not in an assembly · {demand.loose.length}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            No sub-assembly has spoken for these, or not for all of them — so
+            nothing is waiting on them and they won't hold anything up.
+          </p>
+          <ul className="mt-3 space-y-1 text-sm">
+            {demand.loose.map((item) => (
+              <li key={item.refId} className="flex flex-wrap gap-x-2">
+                <span className="font-medium">{item.label}</span>
+                <span className="text-muted-foreground">
+                  {item.claimed === 0
+                    ? `none of ${item.planned} assigned`
+                    : `${item.planned - item.claimed} of ${item.planned} unassigned`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {demand && demand.underbuilt.length > 0 && (
         <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
           <h2 className="font-semibold">
@@ -183,22 +235,18 @@ export function SubsystemsPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setEditing((open) => !open)}
+              onClick={() => {
+                setNewName("");
+                setError(null);
+                setAdding(true);
+              }}
             >
-              {editing ? "Done editing" : "Edit sub-assemblies"}
+              Add sub-assembly
             </Button>
           )}
         </div>
 
-        {editing && selectedId ? (
-          <SubAssemblyEditor
-            subsystemId={selectedId}
-            rows={rows ?? []}
-            parts={parts ?? []}
-            cots={cots ?? []}
-            onDone={() => setEditing(false)}
-          />
-        ) : rows === undefined || rows.length === 0 ? (
+        {rows === undefined || rows.length === 0 ? (
           <p className="mt-2 text-sm text-muted-foreground">
             Nothing set up yet.
           </p>
@@ -236,6 +284,9 @@ export function SubsystemsPage() {
             );
             const statuses = computeAssemblyStatuses(inputs);
             const statusById = new Map(statuses.map((s) => [s.id, s]));
+            const rowById = new Map(
+              rows.map((r) => [r.assembly._id as string, r]),
+            );
 
             // Installing is the subsystem lead's or a mentor's call, the same
             // rule a single part follows going from stage 5 to 6.
@@ -244,72 +295,75 @@ export function SubsystemsPage() {
               (selectedId !== null &&
                 actor.ledSubsystemIds.includes(selectedId));
 
-            // Draw the tree from the default down; anything orphaned still
-            // shows rather than vanishing.
-            const childOf = new Set<string>();
-            for (const row of rows) {
-              for (const id of row.childIds) childOf.add(id);
-            }
-            const roots = rows.filter((r) => !childOf.has(r.assembly._id));
-            const byId = new Map(
-              rows.map((r) => [r.assembly._id as string, r]),
+            const tree = buildAssemblyTree(
+              rows.map((r) => ({
+                id: r.assembly._id as string,
+                isDefault: r.assembly.isDefault,
+                childIds: r.childIds as string[],
+                quantities: r.quantities,
+              })),
             );
 
-            const rendered: { row: (typeof rows)[number]; depth: number }[] =
-              [];
-            const walk = (
-              row: (typeof rows)[number],
-              depth: number,
-              seen: Set<string>,
-            ) => {
-              if (seen.has(row.assembly._id)) return;
-              seen.add(row.assembly._id);
-              rendered.push({ row, depth });
-              for (const childId of row.childIds) {
-                const child = byId.get(childId);
-                if (child) walk(child, depth + 1, seen);
-              }
-            };
-            const seen = new Set<string>();
-            for (const root of roots) walk(root, 0, seen);
-            for (const row of rows) walk(row, 0, seen);
-
-            return (
-              <div className="mt-3 space-y-2">
-                {rendered.map(({ row, depth }) => (
-                  <div
-                    key={row.assembly._id}
-                    // Indent stops at three levels; deeper nesting stays
-                    // readable on a phone rather than marching off the edge.
-                    style={{ marginLeft: `${Math.min(depth, 3) * 1.25}rem` }}
-                  >
-                    <SubAssemblyCard
-                      assembly={row.assembly}
-                      status={
-                        statusById.get(row.assembly._id) ?? {
-                          id: row.assembly._id,
-                          ready: false,
-                          done: false,
-                          blocking: [],
-                        }
-                      }
-                      claimantName={
-                        row.assembly.claimedByUserId
-                          ? roster[row.assembly.claimedByUserId]?.name
-                          : undefined
-                      }
-                      canComplete={canComplete}
-                      completeReason="The subsystem lead or a mentor marks it installed."
-                      isLead={isLead}
-                      units={
-                        demand?.units.find((u) => u.id === row.assembly._id)
-                          ?.units
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
+            const renderNodes = (nodes: TreeNode[]) => (
+              <ul className="space-y-2">
+                {nodes.map((node) => {
+                  const row = rowById.get(node.id);
+                  if (!row) return null;
+                  return (
+                    <li key={node.path}>
+                      <div className="flex items-start gap-2">
+                        {node.quantity !== undefined && node.quantity > 1 && (
+                          <span className="mt-3 shrink-0 font-mono text-xs text-muted-foreground">
+                            × {node.quantity}
+                          </span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <SubAssemblyCard
+                            assembly={row.assembly}
+                            to={`/assemblies/${row.assembly._id}`}
+                            status={
+                              statusById.get(row.assembly._id) ?? {
+                                id: row.assembly._id,
+                                ready: false,
+                                done: false,
+                                blocking: [],
+                              }
+                            }
+                            claimantName={
+                              row.assembly.claimedByUserId
+                                ? roster[row.assembly.claimedByUserId]?.name
+                                : undefined
+                            }
+                            canComplete={canComplete}
+                            completeReason="The subsystem lead or a mentor marks it installed."
+                            isLead={isLead}
+                            units={
+                              demand?.units.find(
+                                (u) => u.id === row.assembly._id,
+                              )?.units
+                            }
+                          />
+                          {node.orphan && (
+                            <p className="mt-1 text-xs text-warning">
+                              Not inside anything, so nothing is waiting on it.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      {node.children.length > 0 && (
+                        // The border is the tree: an indent on its own reads
+                        // as a slightly wonky list once you're a level deep.
+                        <div className="ml-3 mt-2 border-l pl-3 sm:ml-4 sm:pl-4">
+                          {renderNodes(node.children)}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
             );
+
+            return <div className="mt-3">{renderNodes(tree)}</div>;
           })()
         )}
       </section>
@@ -365,6 +419,7 @@ export function SubsystemsPage() {
                         <span className="block font-mono text-xs text-muted-foreground">
                           {part.partNumber}
                         </span>
+                        <LooseNote loose={looseByRef.get(part._id)} />
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         {part.qtyNeeded}
@@ -394,10 +449,17 @@ export function SubsystemsPage() {
                 .map((item) => (
                   <tr key={item._id}>
                     <td className="px-4 py-2.5">
-                      <span className="font-medium">{item.name}</span>
+                      <button
+                        type="button"
+                        className="font-medium hover:underline"
+                        onClick={() => setOpenBoughtId(item._id)}
+                      >
+                        {item.name}
+                      </button>
                       <span className="block text-xs text-muted-foreground">
                         Bought
                       </span>
+                      <LooseNote loose={looseByRef.get(item._id)} />
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       {item.qtyNeeded}
@@ -439,6 +501,7 @@ export function SubsystemsPage() {
                     {part.partNumber} · need {part.qtyNeeded} ·{" "}
                     {madeLabel(part)} made
                   </p>
+                  <LooseNote loose={looseByRef.get(part._id)} />
                 </Link>
               );
             })}
@@ -447,7 +510,12 @@ export function SubsystemsPage() {
               filter === "coming" ? c.status !== "arrived" : true,
             )
             .map((item) => (
-              <div key={item._id} className="px-4 py-3">
+              <button
+                key={item._id}
+                type="button"
+                className="block w-full px-4 py-3 text-left"
+                onClick={() => setOpenBoughtId(item._id)}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-medium">{item.name}</span>
                   <Chip className={cotsChipClass(item.status)}>
@@ -459,10 +527,82 @@ export function SubsystemsPage() {
                   {item.unit ? ` ${item.unit}` : ""}
                   {item.vendor ? ` · ${item.vendor}` : ""}
                 </p>
-              </div>
+                <LooseNote loose={looseByRef.get(item._id)} />
+              </button>
             ))}
         </div>
       </section>
+
+      <Dialog open={adding} onOpenChange={setAdding}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add a sub-assembly</DialogTitle>
+          </DialogHeader>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!selectedId || newName.trim().length === 0) return;
+              setError(null);
+              createAssembly({ subsystemId: selectedId, name: newName })
+                .then((made) => {
+                  setAdding(false);
+                  void navigate(`/assemblies/${made.id}`);
+                })
+                .catch((err: unknown) =>
+                  setError(
+                    err instanceof Error ? err.message : "That didn't work.",
+                  ),
+                );
+            }}
+          >
+            <Input
+              value={newName}
+              autoFocus
+              placeholder="Frame assembly"
+              aria-label="New sub-assembly"
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              It takes the next number in this subsystem. You'll land on its
+              page to say what it's made of.
+            </p>
+            {error && <p className="text-sm text-danger">{error}</p>}
+            <Button type="submit" disabled={newName.trim().length === 0}>
+              Add it
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {openBought && (
+        <BoughtItemDetail
+          item={openBought}
+          subsystemName={selected?.name}
+          open
+          onOpenChange={(next) => !next && setOpenBoughtId(null)}
+          canEdit={isLead}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * How much of something no sub-assembly has spoken for. Nothing at all is
+ * worth saying plainly; a part-covered one is the easier mistake to miss.
+ */
+function LooseNote({
+  loose,
+}: {
+  loose?: { planned: number; claimed: number };
+}) {
+  if (!loose) return null;
+  return (
+    <span className="mt-0.5 block text-xs text-warning">
+      {loose.claimed === 0
+        ? "Not in an assembly"
+        : `${loose.planned - loose.claimed} of ${loose.planned} unassigned`}
+    </span>
   );
 }

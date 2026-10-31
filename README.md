@@ -274,6 +274,7 @@ convex/
   subsystems.ts      subsystems, progress tiles, assembly steps
   shop.ts            machines, process types, roles
   seasons.ts         seasons: first-run setup, adding a year, switching year
+  subAssemblies.ts   sub-assemblies, their members, notes and history
   cots.ts            bought items
   intake.ts          the "New from Onshape" queue and the manual ways in
   settings.ts        app settings and the API budget meter
@@ -390,14 +391,16 @@ Sub-assemblies take their numbers from the **same per-subsystem counter as
 parts**, so a number identifies exactly one thing and a released assembly is
 matched the same way a released part is.
 
-A lead presses **Edit sub-assemblies** and works on one at a time: tick the
-parts and bought items it needs, and tick any sub-assemblies that go inside it.
+Each sub-assembly has **a page of its own**, reached by clicking its number or
+name on the Subsystems screen and laid out like a part's: what it is, whether
+it can go together yet, what it's made of, who has it, notes and history. A
+lead edits it there — the name, the drawing link, how many go on the robot,
+how many spares, and the parts, bought items and sub-assemblies it holds.
+**Add sub-assembly** on the Subsystems screen takes the next number and drops
+you on the new one's page.
 
-Three rules keep the picture honest:
+Two rules keep the picture honest:
 
-- **A part belongs to one sub-assembly**, and so does a sub-assembly — ticking
-  it somewhere else moves it. Anything another one holds is shown locked, with
-  where it went.
 - **Nothing can go inside itself**, directly or round a chain. Candidates that
   would loop are locked with "holds this one", and the server refuses it too.
 - **A sub-assembly inside another has to be _built_, not merely ready.** A pile
@@ -456,6 +459,27 @@ would be a lie of the kind that gets found at competition.
 Sequencing between siblings — "left plate, then right plate" inside one
 sub-assembly — isn't expressible. Containment orders children before their
 parent and nothing else. Nest them if the order matters.
+
+### Reading the tree
+
+"Can we build it yet?" draws the real shape: each sub-assembly sits inside the
+one that holds it, with a rule down the left rather than a bare indent, and the
+count on the edge where a parent takes more than one. A sub-assembly in two
+parents **appears under both** — the data says a roller is in the main assembly
+and the spare, and showing it once would disagree with the thing it describes.
+
+Two kinds of thing get called out, because neither holds anything up and so
+neither would otherwise be noticed:
+
+- **A sub-assembly nothing holds** is marked on its card. The subsystem's own
+  `{YY}-{SUB}-000` is excluded — it has no parent by right.
+- **A part or bought item the tree doesn't account for** is marked on its row
+  in the parts list, and collected into a **Not in an assembly** list with the
+  other warnings. It distinguishes "in nothing at all" from "three of five
+  unassigned", since a part half spoken for is the easier one to miss.
+
+Bought items in the parts list open the same dialog the Ordering board uses,
+so an order can be placed or marked as arrived without leaving the subsystem.
 
 ### What a sync can and can't do
 

@@ -302,6 +302,31 @@ export default defineSchema({
     .index("by_part", ["partId"])
     .index("by_child", ["childSubAssemblyId"]),
 
+  // Notes on a sub-assembly, the same shape as a part's. Assemblies get
+  // reopened and rebuilt, and "why" belongs somewhere other than someone's
+  // memory.
+  subAssemblyNotes: defineTable({
+    subAssemblyId: v.id("subAssemblies"),
+    userId: v.string(),
+    body: v.string(),
+  }).index("by_subAssembly", ["subAssemblyId"]),
+
+  // A sub-assembly has no stages, so there is no stageEvents equivalent to
+  // read its history from. These are the things that do happen to one: it got
+  // built, it got reopened, someone changed how many are built.
+  assemblyEvents: defineTable({
+    subAssemblyId: v.id("subAssemblies"),
+    kind: v.union(
+      v.literal("built"),
+      v.literal("reopened"),
+      v.literal("qty_built"),
+    ),
+    userId: v.string(),
+    // qty_built only: what it moved from and to.
+    from: v.optional(v.number()),
+    to: v.optional(v.number()),
+  }).index("by_subAssembly", ["subAssemblyId"]),
+
   // ---- Onshape intake ----
   // A release (or a manually entered / CSV-imported stand-in) waiting to be
   // turned into board changes. Received for free; reading it costs 1 API call.

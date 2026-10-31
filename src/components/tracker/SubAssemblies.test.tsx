@@ -3,20 +3,17 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useMutation, useQuery } from "convex/react";
 import { getFunctionName } from "convex/server";
-import { SubAssemblyEditor, type AssemblyRow } from "./SubAssemblies";
+import {
+  AssemblyMembers,
+  BuiltCounter,
+  type AssemblyRow,
+} from "./SubAssemblies";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("convex/react", () => ({ useMutation: vi.fn(), useQuery: vi.fn() }));
 
-const create = vi
-  .fn()
-  .mockResolvedValue({ id: "sa_new", partNumber: "27-INT-009" });
-const rename = vi.fn().mockResolvedValue(undefined);
-const remove = vi.fn().mockResolvedValue(undefined);
 const setMembers = vi.fn().mockResolvedValue(undefined);
-const setDrawing = vi.fn().mockResolvedValue(undefined);
-const setUnits = vi.fn().mockResolvedValue(undefined);
 const setQtyBuilt = vi.fn().mockResolvedValue(undefined);
 
 const SUBSYSTEM = "sub_int" as Id<"subsystems">;
@@ -68,67 +65,61 @@ const FRAME: AssemblyRow = {
   quantities: [],
 };
 
+const EMPTY_DEMAND = {
+  units: [],
+  shortfalls: [],
+  underbuilt: [],
+  allowance: [],
+  loose: [],
+};
+
 beforeEach(() => {
-  for (const fn of [
-    create,
-    rename,
-    remove,
-    setMembers,
-    setDrawing,
-    setUnits,
-    setQtyBuilt,
-  ]) {
-    fn.mockClear();
-  }
+  setMembers.mockClear();
+  setQtyBuilt.mockClear();
   vi.mocked(useQuery).mockImplementation(((
     ref: Parameters<typeof useQuery>[0],
   ) => {
     if (getFunctionName(ref) === getFunctionName(api.subAssemblies.demand)) {
-      return { units: [], shortfalls: [], underbuilt: [], allowance: [] };
+      return EMPTY_DEMAND;
     }
-    return { partIds: [], cotsItemIds: [] };
+    return undefined;
   }) as unknown as typeof useQuery);
   vi.mocked(useMutation).mockImplementation((ref) => {
     const name = getFunctionName(ref);
-    if (name === getFunctionName(api.subAssemblies.create))
-      return create as never;
-    if (name === getFunctionName(api.subAssemblies.rename))
-      return rename as never;
-    if (name === getFunctionName(api.subAssemblies.remove))
-      return remove as never;
     if (name === getFunctionName(api.subAssemblies.setMembers))
       return setMembers as never;
-    if (name === getFunctionName(api.subAssemblies.setDrawing))
-      return setDrawing as never;
-    if (name === getFunctionName(api.subAssemblies.setUnits))
-      return setUnits as never;
     if (name === getFunctionName(api.subAssemblies.setQtyBuilt))
       return setQtyBuilt as never;
     return vi.fn() as never;
   });
 });
 
-function renderEditor(rows: AssemblyRow[] = [ROOT, FRAME]) {
+/** Point the demand query at a specific set of per-member ceilings. */
+function withAllowance(allowance: { refId: string; max: number }[]) {
+  vi.mocked(useQuery).mockImplementation(((
+    ref: Parameters<typeof useQuery>[0],
+  ) => {
+    if (getFunctionName(ref) === getFunctionName(api.subAssemblies.demand)) {
+      return { ...EMPTY_DEMAND, allowance };
+    }
+    return undefined;
+  }) as unknown as typeof useQuery);
+}
+
+function renderMembers(rows: AssemblyRow[] = [ROOT, FRAME], selected = 0) {
   return render(
-    <SubAssemblyEditor
-      subsystemId={SUBSYSTEM}
+    <AssemblyMembers
+      selected={rows[selected]}
       rows={rows}
       parts={PARTS}
       cots={COTS}
-      onDone={vi.fn()}
     />,
   );
 }
 
-describe("the sub-assembly editor", () => {
-  it("edits one at a time, starting with the default", () => {
-    renderEditor();
-    expect(screen.getByLabelText("Sub-assembly name")).toHaveValue("Intake");
-    expect(screen.getByText("whole thing")).toBeInTheDocument();
-  });
-
+describe("what a sub-assembly is made of", () => {
   it("offers the subsystem's parts and bought items", () => {
-    renderEditor();
+    renderMembers();
     expect(screen.getByText("Side Plate")).toBeInTheDocument();
     expect(screen.getByText("Roller Shaft")).toBeInTheDocument();
     expect(screen.getByText("Compliant wheel")).toBeInTheDocument();
@@ -136,7 +127,7 @@ describe("the sub-assembly editor", () => {
 
   it("adds a part, keeping the children it already holds", async () => {
     const user = userEvent.setup();
-    renderEditor([
+    renderMembers([
       { ...ROOT, childIds: ["sa_frame"] as Id<"subAssemblies">[] },
       FRAME,
     ]);
@@ -154,7 +145,7 @@ describe("the sub-assembly editor", () => {
 
   it("puts one sub-assembly inside another", async () => {
     const user = userEvent.setup();
-    renderEditor();
+    renderMembers();
     // select-all, two parts, one bought item, then the children.
     await user.click(screen.getAllByRole("checkbox")[4]);
 
@@ -169,7 +160,7 @@ describe("the sub-assembly editor", () => {
 
   it("won't offer one that already holds this one", () => {
     // Frame holds the root, so the root can't also hold Frame.
-    renderEditor([
+    renderMembers([
       ROOT,
       { ...FRAME, childIds: ["sa_root"] as Id<"subAssemblies">[] },
     ]);
@@ -178,7 +169,7 @@ describe("the sub-assembly editor", () => {
 
   it("says where else a part is used, and still offers it", async () => {
     const user = userEvent.setup();
-    renderEditor([
+    renderMembers([
       { ...ROOT, partIds: [] },
       { ...FRAME, partIds: ["pt_1"] as Id<"parts">[] },
     ]);
@@ -197,7 +188,7 @@ describe("the sub-assembly editor", () => {
 
   it("select all takes everything, shared or not", async () => {
     const user = userEvent.setup();
-    renderEditor([
+    renderMembers([
       { ...ROOT, partIds: [] },
       { ...FRAME, partIds: ["pt_1"] as Id<"parts">[] },
     ]);
@@ -211,9 +202,69 @@ describe("the sub-assembly editor", () => {
     });
   });
 
+  it("select all leaves alone what the plan has none of left", async () => {
+    const user = userEvent.setup();
+    // Frame has taken the only Side Plate going; two Roller Shafts are free.
+    withAllowance([
+      { refId: "pt_1", max: 0 },
+      { refId: "pt_2", max: 2 },
+      { refId: "c_1", max: 1 },
+    ]);
+    renderMembers([
+      { ...ROOT, partIds: [] },
+      { ...FRAME, partIds: ["pt_1"] as Id<"parts">[] },
+    ]);
+
+    await user.click(screen.getByLabelText("Select every part"));
+
+    // pt_1 is absent entirely rather than quietly taken at one, which is how
+    // it used to end up promised twice.
+    expect(setMembers).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      partIds: ["pt_2"],
+      cotsItemIds: ["c_1"],
+      childIds: [],
+      quantities: [{ refId: "pt_2", quantity: 2 }],
+    });
+  });
+
+  it("counts select all against what's actually on offer", () => {
+    withAllowance([
+      { refId: "pt_1", max: 0 },
+      { refId: "pt_2", max: 1 },
+      { refId: "c_1", max: 1 },
+    ]);
+    renderMembers([{ ...ROOT, partIds: [] }, FRAME]);
+    // Two of the three, because one has nothing left.
+    expect(screen.getByText("0 of 2")).toBeInTheDocument();
+  });
+
+  it("says when there's none of something left, but still offers it", () => {
+    withAllowance([
+      { refId: "pt_1", max: 0 },
+      { refId: "pt_2", max: 1 },
+      { refId: "c_1", max: 1 },
+    ]);
+    renderMembers([
+      { ...ROOT, partIds: [] },
+      { ...FRAME, partIds: ["pt_1"] as Id<"parts">[] },
+    ]);
+    expect(screen.getByText(/none left/)).toBeInTheDocument();
+    // Sharing stays a thing you can choose; the shortfall list is what warns.
+    expect(screen.getAllByRole("checkbox")[1]).not.toBeDisabled();
+  });
+
+  it("waits for the ceilings before offering select all", () => {
+    vi.mocked(useQuery).mockImplementation(
+      (() => undefined) as unknown as typeof useQuery,
+    );
+    renderMembers();
+    expect(screen.getByLabelText("Select every part")).toBeDisabled();
+  });
+
   it("records how many of a part this assembly uses", async () => {
     const user = userEvent.setup();
-    renderEditor([{ ...ROOT, partIds: ["pt_1"] as Id<"parts">[] }]);
+    renderMembers([{ ...ROOT, partIds: ["pt_1"] as Id<"parts">[] }]);
 
     const box = screen.getByLabelText("How many 27-INT-001");
     await user.clear(box);
@@ -227,112 +278,72 @@ describe("the sub-assembly editor", () => {
     );
   });
 
-  it("the default has no remove control", () => {
-    renderEditor();
-    expect(screen.queryByLabelText("Remove Intake")).not.toBeInTheDocument();
+  it("says when nothing is waiting on part of the subsystem", () => {
+    vi.mocked(useQuery).mockImplementation(((
+      ref: Parameters<typeof useQuery>[0],
+    ) => {
+      if (getFunctionName(ref) === getFunctionName(api.subAssemblies.demand)) {
+        return {
+          ...EMPTY_DEMAND,
+          loose: [
+            {
+              refId: "pt_2",
+              kind: "part" as const,
+              label: "27-INT-002 Roller Shaft",
+              planned: 1,
+              claimed: 0,
+            },
+          ],
+        };
+      }
+      return undefined;
+    }) as unknown as typeof useQuery);
+
+    renderMembers();
+    expect(
+      screen.getByText(/isn't fully accounted for by any sub-assembly/),
+    ).toBeInTheDocument();
   });
 
-  it("adds a new sub-assembly", async () => {
-    const user = userEvent.setup();
-    renderEditor();
-    await user.type(screen.getByLabelText("New sub-assembly"), "Rollers");
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    expect(create).toHaveBeenCalledWith({
-      subsystemId: SUBSYSTEM,
-      name: "Rollers",
-    });
-  });
-
-  it("saves a drawing link when the field loses focus", async () => {
-    const user = userEvent.setup();
-    renderEditor();
-    const field = screen.getByLabelText("Assembly drawing link");
-    await user.type(field, "https://example.com/intake.pdf");
-    await user.tab();
-    expect(setDrawing).toHaveBeenCalledWith({
-      id: ROOT.assembly._id,
-      url: "https://example.com/intake.pdf",
-    });
-  });
-
-  it("says when there's no CAD linked yet", () => {
-    renderEditor();
-    expect(screen.getByText(/No CAD linked yet/)).toBeInTheDocument();
-  });
-
-  it("links the CAD once a sync has filled the ids in", () => {
-    renderEditor([
-      {
-        ...ROOT,
-        assembly: assembly("sa_root", "27-INT-000", "Intake", {
-          isDefault: true,
-          onshapeDocumentId: "doc1",
-          onshapeVersionId: "v1",
-          onshapeElementId: "el1",
-        }),
-      },
-    ]);
-    expect(screen.getByRole("link", { name: /Assembly CAD/ })).toHaveAttribute(
-      "href",
-      "https://cad.onshape.com/documents/doc1/v/v1/e/el1",
-    );
+  it("needs a second sub-assembly before one can go inside another", () => {
+    renderMembers([ROOT]);
+    expect(
+      screen.getByText("Add another sub-assembly to put one inside this."),
+    ).toBeInTheDocument();
   });
 });
 
 describe("how many of it get built", () => {
-  it("takes the number on the robot and the number of spares", async () => {
-    const user = userEvent.setup();
-    renderEditor();
-
-    const onRobot = screen.getByLabelText("How many go on the robot");
-    await user.clear(onRobot);
-    await user.type(onRobot, "2");
-    await user.tab();
-    expect(setUnits).toHaveBeenCalledWith({
-      id: ROOT.assembly._id,
-      qtyNeeded: 2,
-    });
-
-    const spares = screen.getByLabelText("Spare units to build");
-    await user.clear(spares);
-    await user.type(spares, "1");
-    await user.tab();
-    expect(setUnits).toHaveBeenCalledWith({
-      id: ROOT.assembly._id,
-      qtySpares: 1,
-    });
-  });
-
   it("counts them up the way a part counts what's been made", async () => {
     const user = userEvent.setup();
-    renderEditor([
-      {
-        ...ROOT,
-        assembly: {
-          ...ROOT.assembly,
+    const onChange = vi.fn();
+    render(
+      <BuiltCounter
+        assembly={assembly("sa_root", "27-INT-000", "Intake", {
           qtyNeeded: 2,
           qtySpares: 1,
           qtyBuilt: 1,
-        },
-      },
-    ]);
+        })}
+        onChange={onChange}
+      />,
+    );
 
     // One of three: neither done nor untouched.
     expect(screen.getByText("1/3")).toBeInTheDocument();
     await user.click(screen.getByLabelText("One more built"));
-    expect(setQtyBuilt).toHaveBeenCalledWith({
-      id: ROOT.assembly._id,
-      qtyBuilt: 2,
-    });
+    expect(onChange).toHaveBeenCalledWith(2);
   });
 
   it("won't count past what's being built", () => {
-    renderEditor([
-      {
-        ...ROOT,
-        assembly: { ...ROOT.assembly, qtyNeeded: 1, qtyBuilt: 1 },
-      },
-    ]);
+    render(
+      <BuiltCounter
+        assembly={assembly("sa_root", "27-INT-000", "Intake", {
+          qtyNeeded: 1,
+          qtyBuilt: 1,
+        })}
+        onChange={vi.fn()}
+      />,
+    );
     expect(screen.getByLabelText("One more built")).toBeDisabled();
   });
 });
