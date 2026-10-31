@@ -7,11 +7,7 @@ import { Chip } from "@/components/tracker/PartChips";
 import { SubAssemblyEditor } from "@/components/tracker/SubAssemblies";
 import { SubAssemblyCard } from "@/components/tracker/SubAssemblyCard";
 import { CLAIM_COPY } from "@/components/tracker/ClaimLine";
-import {
-  BoughtItemActions,
-  BoughtItemDialog,
-  BoughtItemStatus,
-} from "@/components/tracker/BoughtItem";
+import { cotsChipClass, cotsStatusLabel } from "@/lib/cots";
 import { Button } from "@/components/ui/button";
 import { useIsLead } from "@/lib/roles";
 import { useActor } from "@/lib/tracker";
@@ -43,7 +39,6 @@ export function SubsystemsPage() {
   const processes = useProcessMap();
   const [filter, setFilter] = useState<RowFilter>("all");
   const [editing, setEditing] = useState(false);
-  const [addingBought, setAddingBought] = useState(false);
   const isLead = useIsLead();
   const actor = useActor();
 
@@ -322,39 +317,24 @@ export function SubsystemsPage() {
       <section className="rounded-lg border bg-card shadow-sm">
         <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
           <h2 className="font-semibold">Parts list</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            {selectedId && (
-              <Button size="sm" onClick={() => setAddingBought(true)}>
-                Add a bought item
-              </Button>
-            )}
-            <div className="flex gap-1 rounded-md border p-1">
-              {(["all", "coming"] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setFilter(value)}
-                  className={cn(
-                    "rounded px-3 py-1 text-sm",
-                    filter === value
-                      ? "bg-foreground text-background"
-                      : "hover:bg-accent",
-                  )}
-                >
-                  {value === "all" ? "All parts" : "Still coming"}
-                </button>
-              ))}
-            </div>
+          <div className="flex gap-1 rounded-md border p-1">
+            {(["all", "coming"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setFilter(value)}
+                className={cn(
+                  "rounded px-3 py-1 text-sm",
+                  filter === value
+                    ? "bg-foreground text-background"
+                    : "hover:bg-accent",
+                )}
+              >
+                {value === "all" ? "All parts" : "Still coming"}
+              </button>
+            ))}
           </div>
         </header>
-
-        {selectedId && (
-          <BoughtItemDialog
-            open={addingBought}
-            onOpenChange={setAddingBought}
-            subsystemId={selectedId}
-          />
-        )}
 
         {/* A table on a laptop; stacked cards on a phone. */}
         <div className="hidden sm:block">
@@ -427,11 +407,11 @@ export function SubsystemsPage() {
                       {item.vendor ?? "Bought"}
                     </td>
                     <td className="px-4 py-2.5">
-                      <BoughtItemStatus item={item} />
+                      <Chip className={cotsChipClass(item.status)}>
+                        {cotsStatusLabel(item)}
+                      </Chip>
                     </td>
-                    <td className="px-4 py-2.5">
-                      <BoughtItemActions item={item} canRemove={isLead} />
-                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">—</td>
                   </tr>
                 ))}
             </tbody>
@@ -470,16 +450,15 @@ export function SubsystemsPage() {
               <div key={item._id} className="px-4 py-3">
                 <div className="flex items-start justify-between gap-2">
                   <span className="font-medium">{item.name}</span>
-                  <BoughtItemActions item={item} canRemove={isLead} />
+                  <Chip className={cotsChipClass(item.status)}>
+                    {cotsStatusLabel(item)}
+                  </Chip>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Bought · need {item.qtyNeeded}
                   {item.unit ? ` ${item.unit}` : ""}
                   {item.vendor ? ` · ${item.vendor}` : ""}
                 </p>
-                <div className="mt-2">
-                  <BoughtItemStatus item={item} />
-                </div>
               </div>
             ))}
         </div>

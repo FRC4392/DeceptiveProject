@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Pencil1Icon, TrashIcon } from "@radix-ui/react-icons";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -14,22 +14,15 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-
-type Status = Doc<"cotsItems">["status"];
-
-/** In the order the thing actually happens. */
-const STATUSES: { value: Status; label: string }[] = [
-  { value: "needed", label: "Needed" },
-  { value: "ordered", label: "Ordered" },
-  { value: "arrived", label: "Arrived" },
-];
-
-function statusChipClass(status: Status): string {
-  if (status === "arrived") return "bg-success/10 text-success";
-  if (status === "ordered") return "bg-info/10 text-info";
-  return "bg-muted text-muted-foreground";
-}
+import { COTS_STATUSES, cotsChipClass, type CotsStatus } from "@/lib/cots";
 
 /** Dates go in and out of the input as yyyy-mm-dd in local time. */
 function toDateInput(at?: number): string {
@@ -54,7 +47,7 @@ export function BoughtItemStatus({ item }: { item: Doc<"cotsItems"> }) {
   const setStatus = useMutation(api.cots.setStatus);
   const [error, setError] = useState<string | null>(null);
 
-  function move(status: Status) {
+  function move(status: CotsStatus) {
     setError(null);
     // Dropping back to needed means it isn't on its way any more, so the
     // arrival date goes with it rather than lingering as a date for nothing.
@@ -74,7 +67,7 @@ export function BoughtItemStatus({ item }: { item: Doc<"cotsItems"> }) {
         role="group"
         aria-label={`Where ${item.name} is up to`}
       >
-        {STATUSES.map(({ value, label }) => (
+        {COTS_STATUSES.map(({ value, label }) => (
           <button
             key={value}
             type="button"
@@ -83,7 +76,7 @@ export function BoughtItemStatus({ item }: { item: Doc<"cotsItems"> }) {
             className={cn(
               "min-h-9 px-2.5 text-xs font-medium transition-colors",
               item.status === value
-                ? statusChipClass(value)
+                ? cotsChipClass(value)
                 : "text-muted-foreground hover:bg-accent",
             )}
           >
@@ -173,12 +166,14 @@ export function BoughtItemDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  subsystemId: Id<"subsystems">;
+  /** Fixed when adding from one subsystem; absent means ask. */
+  subsystemId?: Id<"subsystems">;
   /** Editing an existing one, rather than adding. */
   item?: Doc<"cotsItems">;
 }) {
   const create = useMutation(api.cots.create);
   const update = useMutation(api.cots.update);
+  const subsystems = useQuery(api.subsystems.list, {});
 
   const [name, setName] = useState("");
   const [qtyNeeded, setQtyNeeded] = useState("1");
@@ -186,6 +181,7 @@ export function BoughtItemDialog({
   const [vendor, setVendor] = useState("");
   const [vendorPartNumber, setVendorPartNumber] = useState("");
   const [cost, setCost] = useState("");
+  const [subsystem, setSubsystem] = useState<string>("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -197,12 +193,15 @@ export function BoughtItemDialog({
     setVendor(item?.vendor ?? "");
     setVendorPartNumber(item?.vendorPartNumber ?? "");
     setCost(item?.cost === undefined ? "" : String(item.cost));
+    setSubsystem(item?.subsystemId ?? subsystemId ?? "");
     setError(null);
-  }, [open, item]);
+  }, [open, item, subsystemId]);
+
+  const target = (subsystemId ?? subsystem) as Id<"subsystems"> | "";
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || (!item && !target)) return;
     setSaving(true);
     setError(null);
     const fields = {
@@ -218,7 +217,7 @@ export function BoughtItemDialog({
         await update({ id: item._id, ...fields });
       } else {
         await create({
-          subsystemId,
+          subsystemId: target as Id<"subsystems">,
           name: fields.name,
           qtyNeeded: fields.qtyNeeded,
           unit: fields.unit ?? undefined,
@@ -250,6 +249,23 @@ export function BoughtItemDialog({
           </DialogHeader>
 
           <div className="space-y-3 py-4">
+            {!subsystemId && !item && (
+              <div className="space-y-1.5">
+                <Label>Subsystem</Label>
+                <Select value={subsystem} onValueChange={setSubsystem}>
+                  <SelectTrigger aria-label="Subsystem">
+                    <SelectValue placeholder="Which subsystem is it for?" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(subsystems ?? []).map((sub) => (
+                      <SelectItem key={sub._id} value={sub._id}>
+                        {sub.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="cots-name">What is it</Label>
               <Input
@@ -322,7 +338,10 @@ export function BoughtItemDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={saving || !name.trim()}>
+            <Button
+              type="submit"
+              disabled={saving || !name.trim() || (!item && !target)}
+            >
               {item ? "Save" : "Add it"}
             </Button>
           </DialogFooter>

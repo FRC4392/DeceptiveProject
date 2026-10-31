@@ -42,6 +42,7 @@ vi.mock("../../convex/_generated/api", () => ({
       unclaim: "github.unclaim",
       removeRepoMapping: "github.removeRepoMapping",
     },
+    cots: { list: "cots.list" },
     onshape: {
       mapDocument: "onshape.mapDocument",
       listDocuments: "onshape.listDocuments",
@@ -124,6 +125,7 @@ vi.mock("convex/react", () => ({
       case "github.list":
       case "github.listMine":
       case "github.listRepoMappings":
+      case "cots.list":
       case "onshape.listDocuments":
       case "users.list":
       case "intake.list":
@@ -169,6 +171,7 @@ vi.mock("convex/react", () => ({
           subAssemblies: { built: 1, total: 3, readyToBuild: 1 },
           todos: { done: 2, total: 4, unclaimed: 1 },
           issues: { open: 1, closed: 3, prs: 2, total: 4 },
+          bought: { toOrder: 3, ordered: 2, arrived: 7, total: 12 },
           nextCompetition: null,
         };
       case "github.config":
@@ -331,6 +334,7 @@ describe("app smoke routes", () => {
       "Parts Board",
       "My Parts",
       "Manufacturing",
+      "Ordering",
       "New from Onshape",
       "To-do List",
       "My To-dos",
@@ -353,6 +357,15 @@ describe("app smoke routes", () => {
 
     expect(heightOf(sidebarBar)).toBeDefined();
     expect(heightOf(headerBar)).toBe(heightOf(sidebarBar));
+  });
+
+  it("has an ordering board with a column per state", () => {
+    // "Ordering" is also the nav link, so match the heading itself.
+    renderAt("/ordering");
+    expect(
+      screen.getByRole("heading", { name: "Ordering" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Nothing bought yet.")).toBeInTheDocument();
   });
 
   it("has a My Issues page that says when you've picked nothing up", () => {

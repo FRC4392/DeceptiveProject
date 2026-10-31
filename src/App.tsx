@@ -23,6 +23,7 @@ import { MyPartsPage } from "@/routes/MyPartsPage";
 import { SubsystemsPage } from "@/routes/SubsystemsPage";
 import { IntakePage } from "@/routes/IntakePage";
 import { InventoryPage } from "@/routes/InventoryPage";
+import { OrderingPage } from "@/routes/OrderingPage";
 import { IssuesPage } from "@/routes/IssuesPage";
 import { MyIssuesPage } from "@/routes/MyIssuesPage";
 import { IssueDetailPage } from "@/routes/IssueDetailPage";
@@ -78,6 +79,7 @@ export default function App() {
           <Route path="/subsystems" element={<SubsystemsPage />} />
           <Route path="/my-parts" element={<MyPartsPage />} />
           <Route path="/manufacturing" element={<ShopPage />} />
+          <Route path="/ordering" element={<OrderingPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/my-issues" element={<MyIssuesPage />} />

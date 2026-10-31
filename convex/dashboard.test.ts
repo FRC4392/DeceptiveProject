@@ -132,3 +132,48 @@ describe("the dashboard summary", () => {
     expect(summary.nextCompetition).toBeNull();
   });
 });
+
+describe("what still has to be bought", () => {
+  test("splits what needs ordering from what's only waiting on the post", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+
+    const made = [];
+    for (const [name, status] of [
+      ["Wheels", "needed"],
+      ["Belt", "needed"],
+      ["Bearings", "ordered"],
+      ["Standoffs", "arrived"],
+    ] as const) {
+      made.push(
+        await mentor.mutation(api.cots.create, {
+          subsystemId: intake._id,
+          name,
+          qtyNeeded: 1,
+          status,
+        }),
+      );
+    }
+    expect(made).toHaveLength(4);
+
+    const summary = await mentor.query(api.dashboard.summary, {});
+    expect(summary.bought).toEqual({
+      toOrder: 2,
+      ordered: 1,
+      arrived: 1,
+      total: 4,
+    });
+  });
+
+  test("reads zero when nothing has been bought", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    const summary = await mentor.query(api.dashboard.summary, {});
+    expect(summary.bought).toEqual({
+      toOrder: 0,
+      ordered: 0,
+      arrived: 0,
+      total: 0,
+    });
+  });
+});

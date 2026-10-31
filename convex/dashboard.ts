@@ -45,6 +45,14 @@ export const summary = query({
       prs: v.number(),
       total: v.number(),
     }),
+    /** Things the team buys. Two numbers, because they're two jobs: one is
+     *  somebody's to order, the other is only waiting on the post. */
+    bought: v.object({
+      toOrder: v.number(),
+      ordered: v.number(),
+      arrived: v.number(),
+      total: v.number(),
+    }),
     nextCompetition: v.union(
       v.object({ name: v.string(), date: v.number() }),
       v.null(),
@@ -130,6 +138,13 @@ export const summary = query({
       (i) => me !== undefined && i.claimedByUserId === me,
     );
 
+    const bought = season
+      ? await ctx.db
+          .query("cotsItems")
+          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+          .take(SCAN_LIMIT)
+      : [];
+
     const upcoming = await ctx.db
       .query("competitions")
       .withIndex("by_date", (q) => q.gte("date", Date.now()))
@@ -177,6 +192,12 @@ export const summary = query({
         closed: issues.length - openIssues.length,
         prs: issues.filter((i) => i.isPullRequest).length,
         total: issues.length,
+      },
+      bought: {
+        toOrder: bought.filter((b) => b.status === "needed").length,
+        ordered: bought.filter((b) => b.status === "ordered").length,
+        arrived: bought.filter((b) => b.status === "arrived").length,
+        total: bought.length,
       },
       nextCompetition: upcoming[0]
         ? { name: upcoming[0].name, date: upcoming[0].date }

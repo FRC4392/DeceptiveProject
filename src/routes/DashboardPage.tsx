@@ -200,6 +200,25 @@ export function DashboardPage() {
             </>
           )}
         </Card>
+
+        <Card title="Ordering" to="/ordering" linkLabel="Open ordering →">
+          {summary && (
+            <>
+              {/* Two numbers, because they're two different jobs: one needs
+                  somebody to go and buy it, the other needs the post. */}
+              <div className="flex flex-wrap gap-6">
+                <Stat value={summary.bought.toOrder} caption="still to order" />
+                <Stat
+                  value={summary.bought.ordered}
+                  caption="ordered, not here"
+                />
+              </div>
+              <p className="mt-3 text-sm text-muted-foreground">
+                {summary.bought.arrived} of {summary.bought.total} arrived
+              </p>
+            </>
+          )}
+        </Card>
       </div>
     </div>
   );

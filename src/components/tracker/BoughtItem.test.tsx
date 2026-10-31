@@ -11,7 +11,13 @@ import {
   BoughtItemStatus,
 } from "./BoughtItem";
 
-vi.mock("convex/react", () => ({ useMutation: vi.fn() }));
+vi.mock("convex/react", () => ({
+  useMutation: vi.fn(),
+  // The dialog offers a subsystem picker when it isn't told which one.
+  useQuery: vi.fn(() => [
+    { _id: "sub_int", name: "Intake", code: "INT", order: 0 },
+  ]),
+}));
 
 const setStatus = vi.fn().mockResolvedValue(undefined);
 const create = vi.fn().mockResolvedValue("c_new");

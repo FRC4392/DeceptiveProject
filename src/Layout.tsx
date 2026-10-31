@@ -32,6 +32,7 @@ export function AppShell() {
         { to: "/parts", label: "Parts Board" },
         { to: "/my-parts", label: "My Parts" },
         { to: "/manufacturing", label: "Manufacturing" },
+        { to: "/ordering", label: "Ordering" },
         ...(isLead
           ? [
               {
