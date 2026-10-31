@@ -36,6 +36,10 @@ vi.mock("../../convex/_generated/api", () => ({
       listRepoMappings: "github.listRepoMappings",
       setRepoProject: "github.setRepoProject",
       stats: "github.stats",
+      list: "github.list",
+      listMine: "github.listMine",
+      claim: "github.claim",
+      unclaim: "github.unclaim",
       removeRepoMapping: "github.removeRepoMapping",
     },
     onshape: {
@@ -117,6 +121,8 @@ vi.mock("convex/react", () => ({
       case "todos.listMine":
       case "todos.listTags":
       case "competitions.list":
+      case "github.list":
+      case "github.listMine":
       case "github.listRepoMappings":
       case "onshape.listDocuments":
       case "users.list":
@@ -329,8 +335,15 @@ describe("app smoke routes", () => {
       "To-do List",
       "My To-dos",
       "Issues",
+      "My Issues",
       "Settings",
     ]);
+  });
+
+  it("has a My Issues page that says when you've picked nothing up", () => {
+    renderAt("/my-issues");
+    expect(screen.getByText("My issues")).toBeInTheDocument();
+    expect(screen.getByText("Nothing picked up yet.")).toBeInTheDocument();
   });
 
   it("gives the shop screen a part-number box instead of a scanner", () => {

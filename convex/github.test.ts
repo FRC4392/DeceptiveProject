@@ -336,3 +336,67 @@ describe("picking up an issue", () => {
     ).rejects.toThrow(/mentor/i);
   });
 });
+
+describe("my issues", () => {
+  test("lists what you picked up and nothing anyone else did", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const sam = await asUser(t, "sam");
+    const mine = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 1, title: "Mine" }),
+    );
+    const theirs = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 2, title: "Theirs" }),
+    );
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 3, title: "Nobody's" }),
+    );
+    await dana.mutation(api.github.claim, { id: mine });
+    await sam.mutation(api.github.claim, { id: theirs });
+
+    const listed = await dana.query(api.github.listMine, {});
+    expect(listed.map((i) => i.title)).toEqual(["Mine"]);
+  });
+
+  test("open ones come before ones you already closed", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const closed = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 1, title: "Already fixed", state: "closed" }),
+    );
+    const open = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 2, title: "Still broken" }),
+    );
+    // Claiming a closed issue is refused, so put the claim on directly — it's
+    // what an issue you fixed after claiming looks like.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(closed, { claimedByUserId: "dana" });
+    });
+    await dana.mutation(api.github.claim, { id: open });
+
+    const listed = await dana.query(api.github.listMine, {});
+    expect(listed.map((i) => i.title)).toEqual([
+      "Still broken",
+      "Already fixed",
+    ]);
+  });
+
+  test("putting one back takes it off your list", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+    await dana.mutation(api.github.claim, { id });
+    expect(await dana.query(api.github.listMine, {})).toHaveLength(1);
+
+    await dana.mutation(api.github.unclaim, { id });
+    expect(await dana.query(api.github.listMine, {})).toHaveLength(0);
+  });
+});

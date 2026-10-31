@@ -438,7 +438,8 @@ export default defineSchema({
     lastSyncedAt: v.optional(v.number()),
   })
     .index("by_repo_and_number", ["repo", "number"])
-    .index("by_state", ["state"]),
+    .index("by_state", ["state"])
+    .index("by_claimedBy", ["claimedByUserId"]),
 
   issueComments: defineTable({
     issueId: v.id("issues"),

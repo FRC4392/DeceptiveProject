@@ -24,6 +24,7 @@ import { SubsystemsPage } from "@/routes/SubsystemsPage";
 import { IntakePage } from "@/routes/IntakePage";
 import { InventoryPage } from "@/routes/InventoryPage";
 import { IssuesPage } from "@/routes/IssuesPage";
+import { MyIssuesPage } from "@/routes/MyIssuesPage";
 import { IssueDetailPage } from "@/routes/IssueDetailPage";
 import { LoginPage } from "@/routes/LoginPage";
 
@@ -79,6 +80,7 @@ export default function App() {
           <Route path="/manufacturing" element={<ShopPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/issues" element={<IssuesPage />} />
+          <Route path="/my-issues" element={<MyIssuesPage />} />
           <Route path="/issues/:issueId" element={<IssueDetailPage />} />
           <Route path="/admin" element={<SettingsPage />} />
           <Route path="/admin/onshape" element={<OnshapeAdminPage />} />

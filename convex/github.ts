@@ -268,6 +268,26 @@ export const remove = mutation({
   },
 });
 
+/** The issues this person picked up — the twin of My Parts and My To-dos. */
+export const listMine = query({
+  args: {},
+  returns: v.array(vIssue),
+  handler: async (ctx) => {
+    const userId = await requireUserId(ctx);
+    const mine = await ctx.db
+      .query("issues")
+      .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
+      .take(200);
+    // Open ones first — a closed issue you fixed is history, not a job.
+    return mine.sort((a, b) => {
+      const aClosed = a.state === "closed";
+      const bClosed = b.state === "closed";
+      if (aClosed !== bClosed) return aClosed ? 1 : -1;
+      return b._creationTime - a._creationTime;
+    });
+  },
+});
+
 // ---- Claiming ----
 //
 // Same three rules as parts, sub-assemblies and to-dos: anyone can pick up

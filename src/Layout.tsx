@@ -50,7 +50,10 @@ export function AppShell() {
     },
     {
       label: "Software",
-      items: [{ to: "/issues", label: "Issues" }],
+      items: [
+        { to: "/issues", label: "Issues" },
+        { to: "/my-issues", label: "My Issues" },
+      ],
     },
     {
       label: "Settings",

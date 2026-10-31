@@ -123,6 +123,12 @@ export const summary = query({
     const mineTodos = outstandingTodos.filter(
       (t) => me !== undefined && t.claimedByUserId === me,
     );
+    // Issues used to be left out of "on you" because GitHub assignees are
+    // GitHub logins rather than people on the team. They can be claimed here
+    // now, so they count like everything else.
+    const mineIssues = openIssues.filter(
+      (i) => me !== undefined && i.claimedByUserId === me,
+    );
 
     const upcoming = await ctx.db
       .query("competitions")
@@ -145,8 +151,12 @@ export const summary = query({
         parts: mineParts.length,
         subAssemblies: mineAssemblies.length,
         todos: mineTodos.length,
-        issues: 0,
-        total: mineParts.length + mineAssemblies.length + mineTodos.length,
+        issues: mineIssues.length,
+        total:
+          mineParts.length +
+          mineAssemblies.length +
+          mineTodos.length +
+          mineIssues.length,
       },
       parts: {
         ready: parts.filter((p) => p.stage >= READY_STAGE).length,
