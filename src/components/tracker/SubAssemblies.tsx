@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Cross2Icon, ExternalLinkIcon } from "@radix-ui/react-icons";
+import {
+  Cross2Icon,
+  ExternalLinkIcon,
+  MinusIcon,
+  PlusIcon,
+} from "@radix-ui/react-icons";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -42,7 +47,8 @@ export function SubAssemblyEditor({
   const rename = useMutation(api.subAssemblies.rename);
   const remove = useMutation(api.subAssemblies.remove);
   const setMembers = useMutation(api.subAssemblies.setMembers);
-  const setSpares = useMutation(api.subAssemblies.setSpares);
+  const setUnits = useMutation(api.subAssemblies.setUnits);
+  const setQtyBuilt = useMutation(api.subAssemblies.setQtyBuilt);
   const setDrawing = useMutation(api.subAssemblies.setDrawing);
   const unassigned = useQuery(api.subAssemblies.unassigned, { subsystemId });
 
@@ -51,6 +57,10 @@ export function SubAssemblyEditor({
   );
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const allowance = useQuery(
+    api.subAssemblies.demand,
+    selectedId ? { subsystemId, forAssemblyId: selectedId } : "skip",
+  );
 
   const selected = rows.find((r) => r.assembly._id === selectedId) ?? rows[0];
 
@@ -85,6 +95,40 @@ export function SubAssemblyEditor({
   }
 
   /** How many of a member this assembly uses. */
+  /**
+   * Take everything going, as much of each as the plan allows. Selecting all
+   * and then setting twenty quantities by hand was the actual job, so this
+   * does the part people were going to do anyway.
+   */
+  function takeAll() {
+    const refs = [
+      ...availableParts.map((p) => p._id as string),
+      ...availableCots.map((c) => c._id as string),
+    ];
+    const quantities = refs.flatMap((refId) => {
+      const most = maxOf(refId);
+      return Number.isFinite(most) && most > 1
+        ? [{ refId, quantity: most }]
+        : [];
+    });
+    save({
+      partIds: availableParts.map((p) => p._id),
+      cotsItemIds: availableCots.map((c) => c._id),
+      quantities,
+    });
+  }
+
+  function clearAll() {
+    save({ partIds: [], cotsItemIds: [], quantities: [] });
+  }
+
+  /** The most of one member a single unit of this assembly may take. */
+  function maxOf(memberId: string): number {
+    return (
+      allowance?.allowance.find((a) => a.refId === memberId)?.max ?? Infinity
+    );
+  }
+
   function qtyOf(memberId: string): number {
     return (
       selected?.quantities.find((q) => q.refId === memberId)?.quantity ?? 1
@@ -241,31 +285,64 @@ export function SubAssemblyEditor({
             />
           </label>
 
-          <label className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-            <span className="w-28 shrink-0 text-muted-foreground">Spares</span>
-            <Input
-              type="number"
-              min={0}
-              defaultValue={selected.assembly.qtySpares ?? 0}
-              aria-label="Spare units to build"
-              className="h-9 w-20"
-              onBlur={(e) => {
-                const next = Math.max(0, Math.round(Number(e.target.value)));
-                if (
-                  Number.isFinite(next) &&
-                  next !== (selected.assembly.qtySpares ?? 0)
-                ) {
-                  run(
-                    setSpares({ id: selected.assembly._id, qtySpares: next }),
-                  );
-                }
-              }}
+          <div className="mt-3 flex flex-wrap items-end gap-4 text-sm">
+            <label className="space-y-1">
+              <span className="block text-muted-foreground">On the robot</span>
+              <Input
+                type="number"
+                min={1}
+                key={`needed-${selected.assembly._id}`}
+                defaultValue={selected.assembly.qtyNeeded ?? 1}
+                aria-label="How many go on the robot"
+                className="h-9 w-20"
+                onBlur={(e) => {
+                  const next = Math.max(1, Math.round(Number(e.target.value)));
+                  if (
+                    Number.isFinite(next) &&
+                    next !== (selected.assembly.qtyNeeded ?? 1)
+                  ) {
+                    run(
+                      setUnits({
+                        id: selected.assembly._id,
+                        qtyNeeded: next,
+                      }),
+                    );
+                  }
+                }}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="block text-muted-foreground">Spares</span>
+              <Input
+                type="number"
+                min={0}
+                key={`spares-${selected.assembly._id}`}
+                defaultValue={selected.assembly.qtySpares ?? 0}
+                aria-label="Spare units to build"
+                className="h-9 w-20"
+                onBlur={(e) => {
+                  const next = Math.max(0, Math.round(Number(e.target.value)));
+                  if (
+                    Number.isFinite(next) &&
+                    next !== (selected.assembly.qtySpares ?? 0)
+                  ) {
+                    run(
+                      setUnits({
+                        id: selected.assembly._id,
+                        qtySpares: next,
+                      }),
+                    );
+                  }
+                }}
+              />
+            </label>
+            <BuiltCounter
+              assembly={selected.assembly}
+              onChange={(qtyBuilt) =>
+                run(setQtyBuilt({ id: selected.assembly._id, qtyBuilt }))
+              }
             />
-            <span className="text-xs text-muted-foreground">
-              Whole extra ones to build. How many the robot needs comes from
-              where this is placed.
-            </span>
-          </label>
+          </div>
 
           <p className="mt-2 text-sm text-muted-foreground">
             {onshapeElementUrl(selected.assembly) ? (
@@ -288,12 +365,7 @@ export function SubAssemblyEditor({
               checked={allChosen}
               disabled={totalPickable === 0}
               aria-label="Select every part"
-              onCheckedChange={() =>
-                save({
-                  partIds: allChosen ? [] : availableParts.map((p) => p._id),
-                  cotsItemIds: allChosen ? [] : availableCots.map((c) => c._id),
-                })
-              }
+              onCheckedChange={() => (allChosen ? clearAll() : takeAll())}
             />
             <span className="font-medium">Select all</span>
             <span className="text-xs text-muted-foreground">
@@ -323,6 +395,7 @@ export function SubAssemblyEditor({
                   {chosen && (
                     <QtyBox
                       value={qtyOf(part._id)}
+                      max={maxOf(part._id)}
                       onChange={(n) => setQty(part._id, n)}
                       label={`How many ${part.partNumber}`}
                     />
@@ -355,6 +428,7 @@ export function SubAssemblyEditor({
                   {selected.cotsItemIds.includes(item._id) && (
                     <QtyBox
                       value={qtyOf(item._id)}
+                      max={maxOf(item._id)}
                       onChange={(n) => setQty(item._id, n)}
                       label={`How many ${item.name}`}
                     />
@@ -459,10 +533,13 @@ export function SubAssemblyEditor({
  */
 function QtyBox({
   value,
+  max,
   onChange,
   label,
 }: {
   value: number;
+  /** The most the plan leaves for this assembly. */
+  max?: number;
   onChange: (value: number) => void;
   label: string;
 }) {
@@ -471,6 +548,9 @@ function QtyBox({
   // you get 12 — which is exactly the sort of thing nobody reports.
   const [draft, setDraft] = useState(String(value));
   const [editing, setEditing] = useState(false);
+  // Never offer more than the plan leaves, and never less than what's set —
+  // an already-saved quantity shouldn't become unenterable.
+  const ceiling = Math.max(value, max ?? Infinity);
 
   return (
     <span className="ml-auto flex shrink-0 items-center gap-1">
@@ -478,6 +558,7 @@ function QtyBox({
       <Input
         type="number"
         min={1}
+        max={Number.isFinite(ceiling) ? ceiling : undefined}
         value={editing ? draft : String(value)}
         aria-label={label}
         className="h-7 w-14 px-2 py-0 text-xs"
@@ -491,10 +572,61 @@ function QtyBox({
           setDraft(e.target.value);
           const next = Number(e.target.value);
           if (e.target.value !== "" && Number.isFinite(next) && next >= 1) {
-            onChange(Math.round(next));
+            onChange(Math.min(ceiling, Math.round(next)));
           }
         }}
       />
+      {Number.isFinite(ceiling) && (
+        <span className="text-[11px] text-muted-foreground">/{ceiling}</span>
+      )}
     </span>
+  );
+}
+
+/**
+ * How many are built so far, the way a part counts what's been made. Reads
+ * "2/3" rather than done-or-not, because a sub-assembly needed twice with
+ * one built is neither.
+ */
+function BuiltCounter({
+  assembly,
+  onChange,
+}: {
+  assembly: Doc<"subAssemblies">;
+  onChange: (qtyBuilt: number) => void;
+}) {
+  const target = (assembly.qtyNeeded ?? 1) + (assembly.qtySpares ?? 0);
+  const built = assembly.qtyBuilt ?? 0;
+  return (
+    <div className="space-y-1">
+      <span className="block text-muted-foreground">Built</span>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-9 w-9"
+          disabled={built <= 0}
+          onClick={() => onChange(built - 1)}
+          aria-label="One fewer built"
+        >
+          <MinusIcon className="h-4 w-4" />
+        </Button>
+        <span className="min-w-12 text-center font-mono text-sm font-semibold">
+          {built}/{target}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-9 w-9"
+          disabled={built >= target}
+          onClick={() => onChange(built + 1)}
+          aria-label="One more built"
+        >
+          <PlusIcon className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
   );
 }

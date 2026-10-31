@@ -131,6 +131,28 @@ export function SubsystemsPage() {
         </header>
       )}
 
+      {demand && demand.underbuilt.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+          <h2 className="font-semibold">
+            Not building enough · {demand.underbuilt.length}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            These are placed more often than they're set to be built. Raise "on
+            the robot" on each, or place fewer of them.
+          </p>
+          <ul className="mt-3 space-y-1 text-sm">
+            {demand.underbuilt.map((under) => (
+              <li key={under.id} className="flex flex-wrap gap-x-2">
+                <span className="font-medium">{under.label}</span>
+                <span className="text-muted-foreground">
+                  placed {under.placed}, building {under.building}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {demand && demand.shortfalls.length > 0 && (
         <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
           <h2 className="font-semibold">

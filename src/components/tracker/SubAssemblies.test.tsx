@@ -16,6 +16,8 @@ const rename = vi.fn().mockResolvedValue(undefined);
 const remove = vi.fn().mockResolvedValue(undefined);
 const setMembers = vi.fn().mockResolvedValue(undefined);
 const setDrawing = vi.fn().mockResolvedValue(undefined);
+const setUnits = vi.fn().mockResolvedValue(undefined);
+const setQtyBuilt = vi.fn().mockResolvedValue(undefined);
 
 const SUBSYSTEM = "sub_int" as Id<"subsystems">;
 
@@ -67,10 +69,25 @@ const FRAME: AssemblyRow = {
 };
 
 beforeEach(() => {
-  for (const fn of [create, rename, remove, setMembers, setDrawing]) {
+  for (const fn of [
+    create,
+    rename,
+    remove,
+    setMembers,
+    setDrawing,
+    setUnits,
+    setQtyBuilt,
+  ]) {
     fn.mockClear();
   }
-  vi.mocked(useQuery).mockReturnValue({ partIds: [], cotsItemIds: [] });
+  vi.mocked(useQuery).mockImplementation(((
+    ref: Parameters<typeof useQuery>[0],
+  ) => {
+    if (getFunctionName(ref) === getFunctionName(api.subAssemblies.demand)) {
+      return { units: [], shortfalls: [], underbuilt: [], allowance: [] };
+    }
+    return { partIds: [], cotsItemIds: [] };
+  }) as unknown as typeof useQuery);
   vi.mocked(useMutation).mockImplementation((ref) => {
     const name = getFunctionName(ref);
     if (name === getFunctionName(api.subAssemblies.create))
@@ -83,6 +100,10 @@ beforeEach(() => {
       return setMembers as never;
     if (name === getFunctionName(api.subAssemblies.setDrawing))
       return setDrawing as never;
+    if (name === getFunctionName(api.subAssemblies.setUnits))
+      return setUnits as never;
+    if (name === getFunctionName(api.subAssemblies.setQtyBuilt))
+      return setQtyBuilt as never;
     return vi.fn() as never;
   });
 });
@@ -255,5 +276,63 @@ describe("the sub-assembly editor", () => {
       "href",
       "https://cad.onshape.com/documents/doc1/v/v1/e/el1",
     );
+  });
+});
+
+describe("how many of it get built", () => {
+  it("takes the number on the robot and the number of spares", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    const onRobot = screen.getByLabelText("How many go on the robot");
+    await user.clear(onRobot);
+    await user.type(onRobot, "2");
+    await user.tab();
+    expect(setUnits).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      qtyNeeded: 2,
+    });
+
+    const spares = screen.getByLabelText("Spare units to build");
+    await user.clear(spares);
+    await user.type(spares, "1");
+    await user.tab();
+    expect(setUnits).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      qtySpares: 1,
+    });
+  });
+
+  it("counts them up the way a part counts what's been made", async () => {
+    const user = userEvent.setup();
+    renderEditor([
+      {
+        ...ROOT,
+        assembly: {
+          ...ROOT.assembly,
+          qtyNeeded: 2,
+          qtySpares: 1,
+          qtyBuilt: 1,
+        },
+      },
+    ]);
+
+    // One of three: neither done nor untouched.
+    expect(screen.getByText("1/3")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("One more built"));
+    expect(setQtyBuilt).toHaveBeenCalledWith({
+      id: ROOT.assembly._id,
+      qtyBuilt: 2,
+    });
+  });
+
+  it("won't count past what's being built", () => {
+    renderEditor([
+      {
+        ...ROOT,
+        assembly: { ...ROOT.assembly, qtyNeeded: 1, qtyBuilt: 1 },
+      },
+    ]);
+    expect(screen.getByLabelText("One more built")).toBeDisabled();
   });
 });

@@ -370,17 +370,28 @@ A part can be in more than one sub-assembly. Two roller assemblies using the
 same end cap is how robots are built, so membership is shared rather than
 exclusive, and each placement says how many it uses.
 
-How many of a sub-assembly the robot needs is **not** typed in: it comes from
-where the assembly is placed, because the CAD already says how many and a
-second place to state it is a second place to be wrong. `rollUpDemand` in
-`convex/lib/assembly.ts` multiplies that out — two end caps in a roller, two
-rollers on the robot, four end caps — and the Subsystems page says so out loud
-when a part is set to make fewer than the tree needs. That number is the point
-of the whole thing: nobody works it out by eye past the second level, and the
-alternative is finding out in the pit.
+A sub-assembly carries the same three numbers a part does — how many go on
+the robot, how many spares, how many are built so far — set on the subsystem
+page with the same counter the shop uses for parts. A sub-assembly needed
+twice with one built reads as `1/2` rather than as done or untouched.
 
-`qtySpares` is the one hand-entered figure, because no model knows you want a
-roller assembly on the shelf.
+`rollUpDemand` in `convex/lib/assembly.ts` multiplies that out: two end caps
+in a roller, two rollers being built, four end caps. The Subsystems page says
+so out loud when a part is set to make fewer than the tree needs. That number
+is the point of the whole thing — nobody works it out by eye past the second
+level, and the alternative is finding out in the pit.
+
+Because the build count is typed in rather than derived from placements, the
+two can disagree. **Not building enough** catches that: an assembly placed
+twice but set to build once is listed until someone fixes one side.
+
+How many of a part one sub-assembly may take is capped by what the plan
+leaves — the part's `qtyNeeded` minus what every other assembly has spoken
+for, divided by how many of this assembly get built. The editor shows the
+ceiling next to each box (`2/5`), and `setMembers` enforces it, because a
+stale page or a second person editing alongside you would walk straight past
+a client-side limit. **Select all** takes the most of everything going, since
+picking twenty parts and then typing twenty quantities was the actual job.
 
 A shared part only reaches **Assembled** once _every_ sub-assembly using it has
 been built. Saying it's on the robot while another assembly still wants one

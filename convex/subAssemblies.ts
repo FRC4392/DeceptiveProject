@@ -25,7 +25,10 @@ import {
   blockingSummary,
   computeAssemblyStatuses,
   findShortfalls,
+  findUnderbuilt,
   isSafeDrawingUrl,
+  remainingFor,
+  unitsOf,
   rollUpDemand,
   wouldCycle,
   type AssemblyInput,
@@ -59,6 +62,7 @@ const vSubAssembly = v.object({
   lastSyncedAt: v.optional(v.number()),
   drawingUrl: v.optional(v.string()),
   claimedByUserId: v.optional(v.string()),
+  qtyNeeded: v.optional(v.number()),
   qtySpares: v.optional(v.number()),
   qtyBuilt: v.optional(v.number()),
   completedAt: v.optional(v.number()),
@@ -491,6 +495,30 @@ export const setMembers = mutation({
         Math.max(1, Math.round(q.quantity)),
       ]),
     );
+
+    // You can't take more of a part than the plan leaves. The editor caps the
+    // input, but the rule belongs here: a stale page or a second person
+    // editing alongside you would otherwise walk straight past it.
+    const rolled = rollUpDemand(
+      (await subsystemPlacements(ctx, assembly.subsystemId)).map((a) =>
+        // This assembly's own placements are being replaced, so leave them
+        // out of what counts as already taken.
+        a.id === id ? { ...a, placements: [] } : a,
+      ),
+    );
+    for (const [refId, wanted] of counts) {
+      const target =
+        (await ctx.db.get(refId as Id<"parts">))?.qtyNeeded ??
+        (await ctx.db.get(refId as Id<"cotsItems">))?.qtyNeeded;
+      if (target === undefined) continue; // a child assembly, not a part
+      const most = remainingFor(rolled, refId, id, target);
+      if (wanted > most) {
+        throw new Error(
+          `Only ${most} of that left — the rest are spoken for by other sub-assemblies.`,
+        );
+      }
+    }
+
     const qty = (refId: string) => counts.get(refId);
 
     for (const partId of partIds) {
@@ -527,7 +555,11 @@ export const setMembers = mutation({
  * out by eye, and the alternative is finding out in the pit.
  */
 export const demand = query({
-  args: { subsystemId: v.id("subsystems") },
+  args: {
+    subsystemId: v.id("subsystems"),
+    /** The one being edited, for the per-member allowance. */
+    forAssemblyId: v.optional(v.id("subAssemblies")),
+  },
   returns: v.object({
     units: v.array(
       v.object({
@@ -545,8 +577,23 @@ export const demand = query({
         planned: v.number(),
       }),
     ),
+    /** Sub-assemblies placed more often than they're set to be built. */
+    underbuilt: v.array(
+      v.object({
+        id: v.id("subAssemblies"),
+        label: v.string(),
+        placed: v.number(),
+        building: v.number(),
+      }),
+    ),
+    /**
+     * The most of each part or bought item one unit of the given assembly may
+     * take, after what everything else has spoken for. Only present when the
+     * caller named an assembly.
+     */
+    allowance: v.array(v.object({ refId: v.string(), max: v.number() })),
   }),
-  handler: async (ctx, { subsystemId }) => {
+  handler: async (ctx, { subsystemId, forAssemblyId }) => {
     const placements = await subsystemPlacements(ctx, subsystemId);
     const rolled = rollUpDemand(placements);
 
@@ -555,33 +602,59 @@ export const demand = query({
       .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
       .collect();
 
-    // What each referenced part or bought item is set to produce, and what to
-    // call it when it turns out to be short.
+    // What each part or bought item in this subsystem is set to produce, and
+    // what to call it when it turns out to be short. Everything in the
+    // subsystem, not just what's already placed — the editor needs an
+    // allowance for the ones nobody has picked yet too.
     const planned = new Map<string, number>();
     const labels = new Map<string, { kind: "part" | "cots"; label: string }>();
-    for (const refId of rolled.perRef.keys()) {
-      const part = await ctx.db.get(refId as Id<"parts">);
-      if (part && "partNumber" in part) {
-        planned.set(refId, part.qtyNeeded);
-        labels.set(refId, {
-          kind: "part",
-          label: `${part.partNumber} ${part.name}`,
-        });
-        continue;
-      }
-      const item = await ctx.db.get(refId as Id<"cotsItems">);
-      if (item && "status" in item) {
-        planned.set(refId, item.qtyNeeded);
-        labels.set(refId, { kind: "cots", label: item.name });
-      }
+    const parts = await ctx.db
+      .query("parts")
+      .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
+      .take(2000);
+    for (const part of parts) {
+      if (part.isArchived) continue;
+      planned.set(part._id, part.qtyNeeded);
+      labels.set(part._id, {
+        kind: "part",
+        label: `${part.partNumber} ${part.name}`,
+      });
+    }
+    const items = await ctx.db
+      .query("cotsItems")
+      .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
+      .take(2000);
+    for (const item of items) {
+      planned.set(item._id, item.qtyNeeded);
+      labels.set(item._id, { kind: "cots", label: item.name });
     }
 
+    const byId = new Map(assemblies.map((a) => [a._id as string, a]));
     return {
       units: assemblies.map((a) => ({
         id: a._id,
         units: Math.max(1, rolled.units.get(a._id) ?? 1),
         built: a.qtyBuilt ?? 0,
       })),
+      underbuilt: findUnderbuilt(placements).flatMap((under) => {
+        const assembly = byId.get(under.assemblyId);
+        return assembly
+          ? [
+              {
+                id: assembly._id,
+                label: `${assembly.partNumber} ${assembly.name}`,
+                placed: under.placed,
+                building: under.building,
+              },
+            ]
+          : [];
+      }),
+      allowance: forAssemblyId
+        ? Array.from(planned, ([refId, count]) => ({
+            refId,
+            max: remainingFor(rolled, refId, forAssemblyId, count),
+          }))
+        : [],
       shortfalls: findShortfalls(rolled, planned).flatMap((short) => {
         const named = labels.get(short.refId);
         return named
@@ -599,16 +672,50 @@ export const demand = query({
   },
 });
 
-/** Extra whole units to build beyond what the robot needs. */
-export const setSpares = mutation({
-  args: { id: v.id("subAssemblies"), qtySpares: v.number() },
+/** How many go on the robot, and how many extra to build. */
+export const setUnits = mutation({
+  args: {
+    id: v.id("subAssemblies"),
+    qtyNeeded: v.optional(v.number()),
+    qtySpares: v.optional(v.number()),
+  },
   returns: v.null(),
-  handler: async (ctx, { id, qtySpares }) => {
+  handler: async (ctx, { id, qtyNeeded, qtySpares }) => {
     await requireLead(ctx);
     const assembly = await ctx.db.get(id);
     if (!assembly) throw new Error("That sub-assembly is gone.");
     await ctx.db.patch(id, {
-      qtySpares: Math.max(0, Math.round(qtySpares)) || undefined,
+      ...(qtyNeeded === undefined
+        ? {}
+        : { qtyNeeded: Math.max(1, Math.round(qtyNeeded)) }),
+      ...(qtySpares === undefined
+        ? {}
+        : { qtySpares: Math.max(0, Math.round(qtySpares)) || undefined }),
+    });
+    return null;
+  },
+});
+
+/**
+ * How many are actually built. The twin of a part's "made so far", and the
+ * reason a sub-assembly built twice out of three doesn't have to read as
+ * either done or untouched.
+ */
+export const setQtyBuilt = mutation({
+  args: { id: v.id("subAssemblies"), qtyBuilt: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { id, qtyBuilt }) => {
+    await requireUserId(ctx);
+    const assembly = await ctx.db.get(id);
+    if (!assembly) throw new Error("That sub-assembly is gone.");
+    const target = unitsOf({
+      id,
+      needed: assembly.qtyNeeded,
+      spares: assembly.qtySpares,
+      placements: [],
+    });
+    await ctx.db.patch(id, {
+      qtyBuilt: Math.min(target, Math.max(0, Math.round(qtyBuilt))),
     });
     return null;
   },
@@ -800,6 +907,7 @@ async function subsystemPlacements(
       .collect();
     out.push({
       id: assembly._id,
+      needed: assembly.qtyNeeded,
       spares: assembly.qtySpares,
       placements: members.map((m) => ({
         refId: (m.partId ?? m.cotsItemId ?? m.childSubAssemblyId) as string,

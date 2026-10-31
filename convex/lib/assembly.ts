@@ -180,7 +180,9 @@ export type Placement = {
 
 export type DemandAssembly = {
   id: string;
-  /** Whole extra units to build beyond what the robot needs. */
+  /** How many go on the robot. Missing means one. */
+  needed?: number;
+  /** Whole extra units to build beyond that. */
   spares?: number;
   placements: Placement[];
 };
@@ -190,74 +192,109 @@ export type Demand = {
   units: Map<string, number>;
   /** Parts and bought items, summed over everything that uses them. */
   perRef: Map<string, number>;
+  /** The same sum, split by which assembly asked for it. */
+  perRefByAssembly: Map<string, Map<string, number>>;
 };
+
+/** How many whole units of one sub-assembly get built. */
+export function unitsOf(assembly: DemandAssembly): number {
+  return (
+    Math.max(1, Math.round(assembly.needed ?? 1)) +
+    Math.max(0, Math.round(assembly.spares ?? 0))
+  );
+}
 
 /**
  * Multiply the tree out.
  *
- * Two end caps in a roller assembly, two roller assemblies on the robot, and
- * the robot needs four end caps. Nobody can hold that in their head past the
- * second level, which is the whole reason for computing it.
+ * Two end caps in a roller, two rollers to build, and that's four end caps.
+ * Nobody holds that in their head past the second level, which is the whole
+ * reason for computing it.
  *
- * A sub-assembly's unit count comes from where it is placed, not from a
- * number typed on it — the CAD already says how many, and a second place to
- * state it is a second place to be wrong. Spares are the one hand-entered
- * part, because no model knows you want a roller on the shelf.
+ * How many of a sub-assembly get built is stated on the assembly rather than
+ * inferred from where it sits. Inferring it read well until an assembly was
+ * placed somewhere its count shouldn't follow from — and a number the team
+ * can't type is a number they can't correct. `findUnderbuilt` is the safety
+ * net that catches the two disagreeing.
  */
 export function rollUpDemand(assemblies: DemandAssembly[]): Demand {
-  const byId = new Map(assemblies.map((a) => [a.id, a]));
-
-  // Who places each sub-assembly, and how many times.
-  const parents = new Map<string, { parentId: string; quantity: number }[]>();
-  for (const assembly of assemblies) {
-    for (const placement of assembly.placements) {
-      if (placement.kind !== "child") continue;
-      const list = parents.get(placement.refId) ?? [];
-      list.push({
-        parentId: assembly.id,
-        quantity: Math.max(1, placement.quantity ?? 1),
-      });
-      parents.set(placement.refId, list);
-    }
-  }
-
   const units = new Map<string, number>();
-  function unitsOf(id: string, seen: Set<string>): number {
-    const already = units.get(id);
-    if (already !== undefined) return already;
-    // The write path makes loops unreachable; this keeps a bad row from
-    // hanging the readout rather than trusting that forever.
-    if (seen.has(id)) return 0;
-    const assembly = byId.get(id);
-    if (!assembly) return 0;
-
-    const placedIn = parents.get(id) ?? [];
-    const fromParents = placedIn.reduce(
-      (sum, p) => sum + p.quantity * unitsOf(p.parentId, new Set(seen).add(id)),
-      0,
-    );
-    // Nothing places it, so it is a top-level assembly: the robot needs one.
-    const total =
-      (placedIn.length === 0 ? 1 : fromParents) +
-      Math.max(0, assembly.spares ?? 0);
-    units.set(id, total);
-    return total;
+  for (const assembly of assemblies) {
+    units.set(assembly.id, unitsOf(assembly));
   }
-  for (const assembly of assemblies) unitsOf(assembly.id, new Set());
 
   const perRef = new Map<string, number>();
+  const perRefByAssembly = new Map<string, Map<string, number>>();
   for (const assembly of assemblies) {
-    const made = units.get(assembly.id) ?? 0;
+    const made = units.get(assembly.id) ?? 1;
     for (const placement of assembly.placements) {
       if (placement.kind === "child") continue;
-      const each = Math.max(1, placement.quantity ?? 1);
-      perRef.set(
+      const total = Math.max(1, placement.quantity ?? 1) * made;
+      perRef.set(placement.refId, (perRef.get(placement.refId) ?? 0) + total);
+      const byAssembly =
+        perRefByAssembly.get(placement.refId) ?? new Map<string, number>();
+      byAssembly.set(assembly.id, (byAssembly.get(assembly.id) ?? 0) + total);
+      perRefByAssembly.set(placement.refId, byAssembly);
+    }
+  }
+  return { units, perRef, perRefByAssembly };
+}
+
+/**
+ * How many of `refId` this assembly may take, given what everything else has
+ * already spoken for. The cap is per placement, not per unit — the editor
+ * asks "how many does one of these use", so the allowance has to be divided
+ * back down by how many of this assembly get built.
+ */
+export function remainingFor(
+  demand: Demand,
+  refId: string,
+  assemblyId: string,
+  planned: number,
+): number {
+  const byAssembly = demand.perRefByAssembly.get(refId);
+  const usedElsewhere = Array.from(byAssembly ?? []).reduce(
+    (sum, [id, qty]) => (id === assemblyId ? sum : sum + qty),
+    0,
+  );
+  const units = Math.max(1, demand.units.get(assemblyId) ?? 1);
+  return Math.max(0, Math.floor((planned - usedElsewhere) / units));
+}
+
+export type Underbuilt = {
+  assemblyId: string;
+  /** Times it is placed inside others, multiplied out. */
+  placed: number;
+  /** Units it is set to build. */
+  building: number;
+};
+
+/**
+ * Sub-assemblies that other assemblies ask for more of than are being built.
+ * Since the build count is typed in rather than derived, this is what stops
+ * the two quietly disagreeing.
+ */
+export function findUnderbuilt(assemblies: DemandAssembly[]): Underbuilt[] {
+  const units = new Map(assemblies.map((a) => [a.id, unitsOf(a)]));
+  const placed = new Map<string, number>();
+  for (const assembly of assemblies) {
+    const made = units.get(assembly.id) ?? 1;
+    for (const placement of assembly.placements) {
+      if (placement.kind !== "child") continue;
+      placed.set(
         placement.refId,
-        (perRef.get(placement.refId) ?? 0) + each * made,
+        (placed.get(placement.refId) ?? 0) +
+          Math.max(1, placement.quantity ?? 1) * made,
       );
     }
   }
-  return { units, perRef };
+  const out: Underbuilt[] = [];
+  for (const [assemblyId, wanted] of placed) {
+    const building = units.get(assemblyId);
+    if (building === undefined || building >= wanted) continue;
+    out.push({ assemblyId, placed: wanted, building });
+  }
+  return out.sort((a, b) => b.placed - b.building - (a.placed - a.building));
 }
 
 export type Shortfall = {

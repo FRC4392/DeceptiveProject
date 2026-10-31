@@ -254,9 +254,10 @@ export default defineSchema({
     // CAD link is derived from the ids above and never stored.
     drawingUrl: v.optional(v.string()),
     claimedByUserId: v.optional(v.string()),
-    // Whole extra units to build beyond what the robot needs. How many the
-    // robot needs isn't stored: it comes from where the assembly is placed,
-    // and a second place to say it is a second place to be wrong.
+    // How many go on the robot, how many extra to build, and how many are
+    // built so far — the same three numbers a part carries, because the job
+    // is the same job. Missing qtyNeeded means one.
+    qtyNeeded: v.optional(v.number()),
     qtySpares: v.optional(v.number()),
     qtyBuilt: v.optional(v.number()),
     completedAt: v.optional(v.number()),

@@ -9,6 +9,8 @@ import {
   rollUpDemand,
   findShortfalls,
   type DemandAssembly,
+  remainingFor,
+  findUnderbuilt,
 } from "./assembly";
 
 function part(label: string, ready: boolean): AssemblyMember {
@@ -220,29 +222,27 @@ describe("drawing links", () => {
 });
 
 describe("multiplying the tree out", () => {
-  // The robot: two roller assemblies, each two end caps and one shaft.
+  // Two roller assemblies get built, each using two end caps and one shaft.
   const robot: DemandAssembly = {
     id: "robot",
     placements: [{ refId: "roller", kind: "child", quantity: 2 }],
   };
   const roller: DemandAssembly = {
     id: "roller",
+    needed: 2,
     placements: [
       { refId: "endcap", kind: "part", quantity: 2 },
       { refId: "shaft", kind: "part" },
     ],
   };
 
-  test("a top-level assembly is needed once", () => {
-    expect(rollUpDemand([robot, roller]).units.get("robot")).toBe(1);
+  test("an assembly builds as many as it says it does", () => {
+    const { units } = rollUpDemand([robot, roller]);
+    expect(units.get("robot")).toBe(1);
+    expect(units.get("roller")).toBe(2);
   });
 
-  test("a sub-assembly is needed as many times as it is placed", () => {
-    expect(rollUpDemand([robot, roller]).units.get("roller")).toBe(2);
-  });
-
-  test("parts multiply through both levels", () => {
-    // Two per roller, two rollers: four.
+  test("parts multiply by how many of their assembly get built", () => {
     const { perRef } = rollUpDemand([robot, roller]);
     expect(perRef.get("endcap")).toBe(4);
     expect(perRef.get("shaft")).toBe(2);
@@ -258,53 +258,140 @@ describe("multiplying the tree out", () => {
       id: "right",
       placements: [{ refId: "endcap", kind: "part", quantity: 2 }],
     };
-    const top: DemandAssembly = {
-      id: "top",
-      placements: [
-        { refId: "left", kind: "child" },
-        { refId: "right", kind: "child" },
-      ],
-    };
-    expect(rollUpDemand([top, left, right]).perRef.get("endcap")).toBe(4);
+    expect(rollUpDemand([left, right]).perRef.get("endcap")).toBe(4);
   });
 
   test("spares are whole extra units, and their parts come with them", () => {
-    const { units, perRef } = rollUpDemand([robot, { ...roller, spares: 1 }]);
+    const { units, perRef } = rollUpDemand([
+      robot,
+      { ...roller, needed: 2, spares: 1 },
+    ]);
     expect(units.get("roller")).toBe(3);
     expect(perRef.get("endcap")).toBe(6);
   });
 
-  test("a missing quantity means one", () => {
-    const { perRef } = rollUpDemand([
+  test("a missing quantity means one, and a missing count means one unit", () => {
+    const { units, perRef } = rollUpDemand([
       { id: "a", placements: [{ refId: "bolt", kind: "part" }] },
     ]);
+    expect(units.get("a")).toBe(1);
     expect(perRef.get("bolt")).toBe(1);
   });
 
   test("bought items are counted the same as parts", () => {
     const { perRef } = rollUpDemand([
-      robot,
       {
-        ...roller,
+        id: "roller",
+        needed: 2,
         placements: [{ refId: "bearing", kind: "cots", quantity: 4 }],
       },
     ]);
     expect(perRef.get("bearing")).toBe(8);
   });
 
-  test("a loop doesn't hang the readout", () => {
-    const a: DemandAssembly = {
-      id: "a",
-      placements: [{ refId: "b", kind: "child" }],
-    };
-    const b: DemandAssembly = {
-      id: "b",
-      placements: [
-        { refId: "a", kind: "child" },
-        { refId: "bolt", kind: "part" },
-      ],
-    };
-    expect(() => rollUpDemand([a, b])).not.toThrow();
+  test("it remembers which assembly asked for what", () => {
+    const { perRefByAssembly } = rollUpDemand([
+      {
+        id: "left",
+        placements: [{ refId: "endcap", kind: "part", quantity: 2 }],
+      },
+      { id: "right", placements: [{ refId: "endcap", kind: "part" }] },
+    ]);
+    const byAssembly = perRefByAssembly.get("endcap")!;
+    expect(byAssembly.get("left")).toBe(2);
+    expect(byAssembly.get("right")).toBe(1);
+  });
+});
+
+describe("what's left of a part to go round", () => {
+  const assemblies: DemandAssembly[] = [
+    {
+      id: "left",
+      placements: [{ refId: "endcap", kind: "part", quantity: 2 }],
+    },
+    {
+      id: "right",
+      placements: [{ refId: "endcap", kind: "part", quantity: 1 }],
+    },
+  ];
+
+  test("leaves room for what everything else already took", () => {
+    // Six planned, the right roller has one: five left for the left roller.
+    const demand = rollUpDemand(assemblies);
+    expect(remainingFor(demand, "endcap", "left", 6)).toBe(5);
+  });
+
+  test("divides the allowance by how many of this one get built", () => {
+    // Two of this assembly get built, so each may use two of the six.
+    const demand = rollUpDemand([
+      {
+        id: "left",
+        needed: 2,
+        placements: [{ refId: "endcap", kind: "part" }],
+      },
+    ]);
+    expect(remainingFor(demand, "endcap", "left", 6)).toBe(3);
+  });
+
+  test("never goes negative when the plan is already oversubscribed", () => {
+    const demand = rollUpDemand(assemblies);
+    expect(remainingFor(demand, "endcap", "left", 0)).toBe(0);
+  });
+
+  test("a part nothing else uses is limited only by the plan", () => {
+    const demand = rollUpDemand(assemblies);
+    expect(remainingFor(demand, "bolt", "left", 4)).toBe(4);
+  });
+});
+
+describe("an assembly nobody is building enough of", () => {
+  test("spots the count and the placements disagreeing", () => {
+    // The robot wants two rollers; the roller is set to build one.
+    const under = findUnderbuilt([
+      {
+        id: "robot",
+        placements: [{ refId: "roller", kind: "child", quantity: 2 }],
+      },
+      { id: "roller", needed: 1, placements: [] },
+    ]);
+    expect(under).toEqual([{ assemblyId: "roller", placed: 2, building: 1 }]);
+  });
+
+  test("stays quiet when the count covers the placements", () => {
+    expect(
+      findUnderbuilt([
+        {
+          id: "robot",
+          placements: [{ refId: "roller", kind: "child", quantity: 2 }],
+        },
+        { id: "roller", needed: 2, placements: [] },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("counts a child placed in an assembly that is itself built twice", () => {
+    // Two arms, one roller in each: two rollers.
+    const under = findUnderbuilt([
+      {
+        id: "arm",
+        needed: 2,
+        placements: [{ refId: "roller", kind: "child" }],
+      },
+      { id: "roller", needed: 1, placements: [] },
+    ]);
+    expect(under[0]).toMatchObject({ placed: 2, building: 1 });
+  });
+
+  test("spares count towards covering the placements", () => {
+    expect(
+      findUnderbuilt([
+        {
+          id: "robot",
+          placements: [{ refId: "roller", kind: "child", quantity: 2 }],
+        },
+        { id: "roller", needed: 1, spares: 1, placements: [] },
+      ]),
+    ).toEqual([]);
   });
 });
 
@@ -316,6 +403,7 @@ describe("spotting a shortfall", () => {
     },
     {
       id: "roller",
+      needed: 2,
       placements: [{ refId: "endcap", kind: "part", quantity: 2 }],
     },
   ]);

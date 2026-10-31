@@ -238,6 +238,10 @@ describe("what a sub-assembly is made of", () => {
       subsystemId: intake._id,
       name: "Roller",
     });
+    // Two of it per roller, so the plan has to allow at least two.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 2 });
+    });
     await mentor.mutation(api.subAssemblies.setMembers, {
       id: roller.id,
       partIds: [parts[0], parts[1]],
@@ -753,12 +757,20 @@ describe("how many the robot needs", () => {
       childIds: [roller.id],
       quantities: [{ refId: roller.id, quantity: 2 }],
     });
+    // Four will be wanted (two rollers × two each); only two are planned.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 4 });
+    });
     await mentor.mutation(api.subAssemblies.setMembers, {
       id: roller.id,
       partIds: [parts[0]],
       cotsItemIds: [],
       childIds: [],
       quantities: [{ refId: parts[0], quantity: 2 }],
+    });
+    await mentor.mutation(api.subAssemblies.setUnits, {
+      id: roller.id,
+      qtyNeeded: 2,
     });
     await t.run(async (ctx) => {
       await ctx.db.patch(parts[0], { qtyNeeded: 2 });
@@ -792,8 +804,9 @@ describe("how many the robot needs", () => {
       childIds: [roller.id],
       quantities: [{ refId: roller.id, quantity: 2 }],
     });
-    await mentor.mutation(api.subAssemblies.setSpares, {
+    await mentor.mutation(api.subAssemblies.setUnits, {
       id: roller.id,
+      qtyNeeded: 2,
       qtySpares: 1,
     });
 
@@ -817,5 +830,157 @@ describe("how many the robot needs", () => {
       subsystemId: intake._id,
     });
     expect(demand.shortfalls).toEqual([]);
+  });
+});
+
+describe("how many of a part one assembly may take", () => {
+  test("refuses more than the plan leaves after the others", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 3 });
+    });
+    const left = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Left",
+    });
+    const right = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Right",
+    });
+
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: left.id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+      quantities: [{ refId: parts[0], quantity: 2 }],
+    });
+
+    // Three planned, two taken: one left.
+    await expect(
+      mentor.mutation(api.subAssemblies.setMembers, {
+        id: right.id,
+        partIds: [parts[0]],
+        cotsItemIds: [],
+        childIds: [],
+        quantities: [{ refId: parts[0], quantity: 2 }],
+      }),
+    ).rejects.toThrow(/Only 1 of that left/);
+
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: right.id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+      quantities: [{ refId: parts[0], quantity: 1 }],
+    });
+  });
+
+  test("editing one doesn't count its own old rows against it", async () => {
+    // Otherwise saving the same thing twice would refuse the second time.
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 2 });
+    });
+    const roller = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+    const args = {
+      id: roller.id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+      quantities: [{ refId: parts[0], quantity: 2 }],
+    };
+    await mentor.mutation(api.subAssemblies.setMembers, args);
+    await mentor.mutation(api.subAssemblies.setMembers, args);
+  });
+
+  test("the allowance divides by how many of the assembly get built", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 6 });
+    });
+    const roller = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+    await mentor.mutation(api.subAssemblies.setUnits, {
+      id: roller.id,
+      qtyNeeded: 2,
+    });
+
+    const demand = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+      forAssemblyId: roller.id,
+    });
+    // Six planned, two of this assembly: three each.
+    expect(demand.allowance.find((a) => a.refId === parts[0])?.max).toBe(3);
+  });
+});
+
+describe("building them one at a time", () => {
+  test("counts up to needed plus spares and no further", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const roller = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+    await mentor.mutation(api.subAssemblies.setUnits, {
+      id: roller.id,
+      qtyNeeded: 2,
+      qtySpares: 1,
+    });
+
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, {
+      id: roller.id,
+      qtyBuilt: 99,
+    });
+    expect((await t.run((ctx) => ctx.db.get(roller.id)))?.qtyBuilt).toBe(3);
+
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, {
+      id: roller.id,
+      qtyBuilt: -5,
+    });
+    expect((await t.run((ctx) => ctx.db.get(roller.id)))?.qtyBuilt).toBe(0);
+  });
+});
+
+describe("an assembly placed more often than it's built", () => {
+  test("says so, since the count is typed in rather than derived", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    const roller = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: rows[0].assembly._id,
+      partIds: [],
+      cotsItemIds: [],
+      childIds: [roller.id],
+      quantities: [{ refId: roller.id, quantity: 2 }],
+    });
+
+    const demand = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+    expect(demand.underbuilt).toHaveLength(1);
+    expect(demand.underbuilt[0]).toMatchObject({ placed: 2, building: 1 });
+
+    await mentor.mutation(api.subAssemblies.setUnits, {
+      id: roller.id,
+      qtyNeeded: 2,
+    });
+    const after = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+    expect(after.underbuilt).toEqual([]);
   });
 });
