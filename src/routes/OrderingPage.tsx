@@ -174,8 +174,8 @@ export function OrderingPage() {
                         {item.unit ? ` ${item.unit}` : ""}
                         {item.vendor ? ` · ${item.vendor}` : ""}
                       </span>
-                      {item.status === "ordered" && item.eta && (
-                        <span className="mt-1 block text-xs text-info">
+                      {item.status !== "needed" && (
+                        <span className="mt-1 block text-xs text-muted-foreground">
                           {cotsStatusLabel(item)}
                         </span>
                       )}

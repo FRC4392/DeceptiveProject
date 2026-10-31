@@ -107,7 +107,9 @@ function DateField({
       <span className="block text-xs text-muted-foreground">{label}</span>
       <Input
         type="date"
-        defaultValue={toDateInput(value)}
+        // Controlled, not defaultValue: the move writes the date, and an
+        // uncontrolled input would keep showing the blank it mounted with.
+        value={toDateInput(value)}
         aria-label={name}
         className="h-9 w-40"
         onChange={(e) => onChange(e.target.value)}

@@ -15,16 +15,33 @@ export function cotsChipClass(status: CotsStatus): string {
   return "bg-muted text-muted-foreground";
 }
 
-/** "Ordered · 3 Mar" once there's a date to say. */
+function shortDate(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/**
+ * The state with the date that matters for it, which is never the same date
+ * twice: what you want to know about something on order is when it's coming,
+ * and about something here is when it landed.
+ *
+ * Every date here is one the app knows without being told — the move stamps
+ * it — so this reads as a fact rather than as an empty field.
+ */
 export function cotsStatusLabel(item: Doc<"cotsItems">): string {
-  if (item.status === "arrived") return "Arrived";
+  if (item.status === "arrived") {
+    return item.arrivedAt
+      ? `Arrived · ${shortDate(item.arrivedAt)}`
+      : "Arrived";
+  }
   if (item.status === "ordered") {
-    return item.eta
-      ? `Ordered · ${new Date(item.eta).toLocaleDateString(undefined, {
-          month: "short",
-          day: "numeric",
-        })}`
-      : "Ordered";
+    // An expected date beats the order date: it's the one that says whether
+    // to start chasing it.
+    if (item.eta) return `Expected · ${shortDate(item.eta)}`;
+    if (item.orderedAt) return `Ordered · ${shortDate(item.orderedAt)}`;
+    return "Ordered";
   }
   return "Needed";
 }
