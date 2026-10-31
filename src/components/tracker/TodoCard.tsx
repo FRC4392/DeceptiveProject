@@ -3,7 +3,9 @@ import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Chip, PersonChip } from "@/components/tracker/PartChips";
+import { Chip } from "@/components/tracker/PartChips";
+import { ClaimLine } from "@/components/tracker/ClaimLine";
+import { useCurrentUserId } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 
 const PRIORITY: Record<Doc<"todos">["priority"], string> = {
@@ -22,7 +24,10 @@ export function TodoCard({
   tags: Doc<"todoTags">[];
   claimantName?: string;
 }) {
+  const currentUserId = useCurrentUserId();
   const setDone = useMutation(api.todos.setDone);
+  const claim = useMutation(api.todos.claim);
+  const unclaim = useMutation(api.todos.unclaim);
   const done = todo.doneAt !== undefined;
   const tagNames = todo.tagIds
     .map((id) => tags.find((t) => t._id === id)?.name)
@@ -70,12 +75,15 @@ export function TodoCard({
         </div>
       </div>
 
-      <div className="mt-3 border-t pt-2">
-        <PersonChip
-          name={claimantName}
-          emptyLabel={done ? null : "Nobody on it"}
-        />
-      </div>
+      <ClaimLine
+        claimantName={
+          todo.claimedByUserId ? (claimantName ?? "Someone") : undefined
+        }
+        mine={todo.claimedByUserId === currentUserId}
+        closed={done}
+        onClaim={() => claim({ id: todo._id })}
+        onRelease={() => unclaim({ id: todo._id })}
+      />
     </div>
   );
 }

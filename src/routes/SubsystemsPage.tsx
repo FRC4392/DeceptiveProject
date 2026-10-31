@@ -6,6 +6,7 @@ import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { Chip } from "@/components/tracker/PartChips";
 import { SubAssemblyEditor } from "@/components/tracker/SubAssemblies";
 import { SubAssemblyCard } from "@/components/tracker/SubAssemblyCard";
+import { CLAIM_COPY } from "@/components/tracker/ClaimLine";
 import { Button } from "@/components/ui/button";
 import { useIsLead } from "@/lib/roles";
 import { useActor } from "@/lib/tracker";
@@ -251,7 +252,6 @@ export function SubsystemsPage() {
                       canComplete={canComplete}
                       completeReason="The subsystem lead or a mentor marks it installed."
                       isLead={isLead}
-                      currentUserId={actor.userId}
                     />
                   </div>
                 ))}
@@ -328,7 +328,7 @@ export function SubsystemsPage() {
                         {part.claimedByUserId
                           ? (roster[part.claimedByUserId]?.name ?? "—")
                           : isClaimableStage(stage)
-                            ? "Up for grabs"
+                            ? CLAIM_COPY.nobody
                             : "—"}
                       </td>
                     </tr>

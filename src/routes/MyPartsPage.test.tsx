@@ -7,7 +7,10 @@ import { MyPartsPage } from "./MyPartsPage";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 
-vi.mock("convex/react", () => ({ useQuery: vi.fn() }));
+vi.mock("convex/react", () => ({
+  useQuery: vi.fn(),
+  useMutation: vi.fn(() => vi.fn()),
+}));
 
 const MINE = [
   {
@@ -61,6 +64,15 @@ beforeEach(() => {
     if (name === getFunctionName(api.users.list)) return ROSTER;
     if (name === getFunctionName(api.shop.listProcessTypes)) {
       return [{ _id: "p_router", name: "CNC router", order: 0 }];
+    }
+    // The signed-in person, which the cards read to tell "mine" from theirs.
+    if (name === getFunctionName(api.auth.currentUser)) {
+      return {
+        id: "user_1",
+        email: "dana@example.com",
+        name: "Dana Lopez",
+        role: "student",
+      };
     }
     return [];
   }) as unknown as typeof useQuery);

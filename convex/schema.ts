@@ -431,6 +431,10 @@ export default defineSchema({
     priorityOverride: v.optional(
       v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
     ),
+    // Who on the team picked it up. GitHub has assignees of its own, but
+    // those are GitHub logins; this is a tracker user, the same as a part's
+    // or a to-do's claimant, and the GitHub re-sync leaves it alone.
+    claimedByUserId: v.optional(v.string()),
     lastSyncedAt: v.optional(v.number()),
   })
     .index("by_repo_and_number", ["repo", "number"])

@@ -7,6 +7,7 @@ import { IssueCard } from "@/components/tracker/IssueCard";
 import { FilterChip, FilterDivider } from "@/components/tracker/FilterChip";
 import { IssueFormDialog } from "@/components/pm/IssueFormDialog";
 import { type IssueState } from "@/lib/github";
+import { useRosterMap } from "@/lib/users";
 
 type StateFilter = "all" | IssueState;
 type KindFilter = "all" | "issues" | "prs";
@@ -16,6 +17,7 @@ export function IssuesPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>("open");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [newOpen, setNewOpen] = useState(false);
+  const roster = useRosterMap();
   const issues = useQuery(api.github.list, {
     state: stateFilter === "all" ? undefined : stateFilter,
   });
@@ -98,7 +100,15 @@ export function IssuesPage() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {shown.map((issue) => (
-            <IssueCard key={issue._id} issue={issue} />
+            <IssueCard
+              key={issue._id}
+              issue={issue}
+              claimantName={
+                issue.claimedByUserId
+                  ? roster[issue.claimedByUserId]?.name
+                  : undefined
+              }
+            />
           ))}
         </div>
       )}

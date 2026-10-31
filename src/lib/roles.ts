@@ -8,6 +8,14 @@ export function useCurrentUser() {
   return useQuery(api.auth.currentUser);
 }
 
+/**
+ * The signed-in person's id, or null. Cards use it to tell whether the work is
+ * theirs; Convex dedupes the underlying query, so asking per card is free.
+ */
+export function useCurrentUserId(): string | null {
+  return useCurrentUser()?.id ?? null;
+}
+
 /** Role of the current user, defaulting to "student" while loading/unknown. */
 export function useRole(): Role {
   const user = useCurrentUser();

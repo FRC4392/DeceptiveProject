@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { IssueCard } from "./IssueCard";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
+
+vi.mock("convex/react", () => ({
+  // Cards claim work themselves, so they need a client. Nothing here talks to
+  // one: the current user is nobody, and the mutations are never pressed
+  // except where a test presses them.
+  useQuery: vi.fn(() => undefined),
+  useMutation: vi.fn(() => vi.fn()),
+}));
 
 function issue(overrides: Partial<Doc<"issues">> = {}) {
   return {

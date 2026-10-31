@@ -242,3 +242,97 @@ describe("priority override", () => {
     expect(issue?.priority).toBe("high");
   });
 });
+
+describe("picking up an issue", () => {
+  test("anyone can take one nobody has", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+
+    await dana.mutation(api.github.claim, { id });
+    expect((await t.run((ctx) => ctx.db.get(id)))?.claimedByUserId).toBe(
+      "dana",
+    );
+  });
+
+  test("but not one someone else already has", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const sam = await asUser(t, "sam");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+
+    await dana.mutation(api.github.claim, { id });
+    await expect(sam.mutation(api.github.claim, { id })).rejects.toThrow(
+      /already picked this one up/i,
+    );
+  });
+
+  test("a closed issue isn't work to pick up", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ state: "closed" }),
+    );
+    await expect(dana.mutation(api.github.claim, { id })).rejects.toThrow(
+      /closed/i,
+    );
+  });
+
+  test("only the person holding it can put it back", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const sam = await asUser(t, "sam");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+    await dana.mutation(api.github.claim, { id });
+
+    await expect(sam.mutation(api.github.unclaim, { id })).rejects.toThrow(
+      /only the person/i,
+    );
+    await dana.mutation(api.github.unclaim, { id });
+    expect(
+      (await t.run((ctx) => ctx.db.get(id)))?.claimedByUserId,
+    ).toBeUndefined();
+  });
+
+  test("a GitHub re-sync leaves the claim alone", async () => {
+    // The whole point of a separate field: GitHub owns assignees, the tracker
+    // owns who on the team picked it up, and a webhook must not wipe it.
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+    await dana.mutation(api.github.claim, { id });
+
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ title: "Retitled upstream", labels: ["bug"] }),
+    );
+    const issue = await t.run((ctx) => ctx.db.get(id));
+    expect(issue?.title).toBe("Retitled upstream");
+    expect(issue?.claimedByUserId).toBe("dana");
+  });
+
+  test("a student can't put someone else on one", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+    await expect(
+      dana.mutation(api.github.assign, { id, userId: "sam" }),
+    ).rejects.toThrow(/mentor/i);
+  });
+});

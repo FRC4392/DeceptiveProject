@@ -9,7 +9,8 @@ import {
   type AssemblyStatus,
 } from "../../../convex/lib/assembly";
 import { onshapeElementUrl } from "../../../convex/lib/onshapeLinks";
-import { initials } from "@/lib/stages";
+import { ClaimLine } from "@/components/tracker/ClaimLine";
+import { useCurrentUserId } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,7 +24,6 @@ export function SubAssemblyCard({
   canComplete,
   completeReason,
   isLead,
-  currentUserId,
 }: {
   assembly: Doc<"subAssemblies">;
   status: AssemblyStatus;
@@ -32,8 +32,8 @@ export function SubAssemblyCard({
   canComplete: boolean;
   completeReason?: string;
   isLead: boolean;
-  currentUserId: string | null;
 }) {
+  const currentUserId = useCurrentUserId();
   const claim = useMutation(api.subAssemblies.claim);
   const unclaim = useMutation(api.subAssemblies.unclaim);
   const complete = useMutation(api.subAssemblies.complete);
@@ -106,62 +106,38 @@ export function SubAssemblyCard({
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-2">
-        {assembly.claimedByUserId ? (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-foreground text-[9px] font-semibold text-background">
-              {initials(claimantName)}
-            </span>
-            {status.done ? "built it" : "on it"}
-          </span>
-        ) : (
-          !status.done && (
-            <span className="text-xs font-semibold text-primary">
-              Nobody on it
-            </span>
-          )
+      <ClaimLine
+        claimantName={
+          assembly.claimedByUserId ? (claimantName ?? "Someone") : undefined
+        }
+        mine={mine}
+        closed={status.done}
+        claimedVerb={
+          status.done ? `${claimantName ?? "Someone"} built it` : undefined
+        }
+        onClaim={() => claim({ id: assembly._id })}
+        onRelease={() => unclaim({ id: assembly._id })}
+      >
+        {!status.done && status.ready && (
+          <Button
+            size="sm"
+            disabled={!canComplete}
+            title={canComplete ? undefined : completeReason}
+            onClick={() => run(complete({ id: assembly._id }))}
+          >
+            Done — it's on the robot
+          </Button>
         )}
-
-        <span className="ml-auto flex gap-1.5">
-          {!status.done && !assembly.claimedByUserId && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => run(claim({ id: assembly._id }))}
-            >
-              I'll do it
-            </Button>
-          )}
-          {!status.done && mine && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => run(unclaim({ id: assembly._id }))}
-            >
-              Put back
-            </Button>
-          )}
-          {!status.done && status.ready && (
-            <Button
-              size="sm"
-              disabled={!canComplete}
-              title={canComplete ? undefined : completeReason}
-              onClick={() => run(complete({ id: assembly._id }))}
-            >
-              Done — it's on the robot
-            </Button>
-          )}
-          {status.done && isLead && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => run(reopen({ id: assembly._id }))}
-            >
-              Reopen
-            </Button>
-          )}
-        </span>
-      </div>
+        {status.done && isLead && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => run(reopen({ id: assembly._id }))}
+          >
+            Reopen
+          </Button>
+        )}
+      </ClaimLine>
 
       {!canComplete && status.ready && !status.done && completeReason && (
         <p className="mt-2 text-xs text-muted-foreground">{completeReason}</p>

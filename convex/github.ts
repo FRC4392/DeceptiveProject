@@ -9,7 +9,13 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { requireUserId, requireMentor, getCurrentUser } from "./lib/auth";
+import {
+  requireUserId,
+  requireMentor,
+  getCurrentUser,
+  getActor,
+} from "./lib/auth";
+import { isLeadOrAbove } from "./lib/stages";
 import {
   derivePriority,
   normalizeIssueNode,
@@ -46,6 +52,7 @@ const vIssue = v.object({
   isPullRequest: v.boolean(),
   priority: priorityValidator,
   priorityOverride: v.optional(priorityValidator),
+  claimedByUserId: v.optional(v.string()),
   lastSyncedAt: v.optional(v.number()),
 });
 
@@ -257,6 +264,66 @@ export const remove = mutation({
       .collect();
     for (const c of comments) await ctx.db.delete(c._id);
     await ctx.db.delete(id);
+    return null;
+  },
+});
+
+// ---- Claiming ----
+//
+// Same three rules as parts, sub-assemblies and to-dos: anyone can pick up
+// what nobody has, only the person holding it (or a lead) can put it back,
+// and mentors can put someone else on it. A bug nobody has claimed should
+// read the same as a part nobody has claimed.
+
+export const claim = mutation({
+  args: { id: v.id("issues") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const userId = await requireUserId(ctx);
+    const issue = await ctx.db.get(id);
+    if (!issue) throw new Error("That issue is gone.");
+    if (issue.state === "closed") {
+      throw new Error("That one's closed.");
+    }
+    if (issue.claimedByUserId && issue.claimedByUserId !== userId) {
+      throw new Error("Someone else already picked this one up.");
+    }
+    await ctx.db.patch(id, { claimedByUserId: userId });
+    return null;
+  },
+});
+
+export const unclaim = mutation({
+  args: { id: v.id("issues") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const actor = await getActor(ctx);
+    const issue = await ctx.db.get(id);
+    if (!issue) throw new Error("That issue is gone.");
+    if (issue.claimedByUserId !== actor.userId && !isLeadOrAbove(actor.role)) {
+      throw new Error("Only the person who picked it up can put it back.");
+    }
+    await ctx.db.patch(id, { claimedByUserId: undefined });
+    return null;
+  },
+});
+
+/** Put someone else on an issue. Mentors only, same as parts and to-dos. */
+export const assign = mutation({
+  args: { id: v.id("issues"), userId: v.union(v.string(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, { id, userId }) => {
+    await requireMentor(ctx);
+    const issue = await ctx.db.get(id);
+    if (!issue) throw new Error("That issue is gone.");
+    if (userId !== null) {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("authId", (q) => q.eq("authId", userId))
+        .unique();
+      if (!user) throw new Error("That person hasn't signed in yet.");
+    }
+    await ctx.db.patch(id, { claimedByUserId: userId ?? undefined });
     return null;
   },
 });
