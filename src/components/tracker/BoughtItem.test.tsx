@@ -5,11 +5,7 @@ import { useMutation } from "convex/react";
 import { getFunctionName } from "convex/server";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import {
-  BoughtItemActions,
-  BoughtItemDialog,
-  BoughtItemStatus,
-} from "./BoughtItem";
+import { BoughtItemDetail, BoughtItemDialog } from "./BoughtItem";
 
 vi.mock("convex/react", () => ({
   useMutation: vi.fn(),
@@ -51,42 +47,61 @@ beforeEach(() => {
   }) as unknown as typeof useMutation);
 });
 
-describe("where a bought item is up to", () => {
-  it("shows the three states with the current one pressed", () => {
-    render(<BoughtItemStatus item={item({ status: "ordered" })} />);
-    expect(screen.getByRole("button", { name: "Ordered" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Needed" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
-  });
+function openDetail(item: Doc<"cotsItems">, canEdit = true) {
+  return render(
+    <BoughtItemDetail
+      item={item}
+      subsystemName="Intake"
+      open
+      onOpenChange={() => {}}
+      canEdit={canEdit}
+    />,
+  );
+}
 
-  it("marks one ordered in a single press", async () => {
+describe("opening a bought item", () => {
+  it("moves it on with one button, worded like a part's", async () => {
     const user = userEvent.setup();
-    render(<BoughtItemStatus item={item()} />);
-    await user.click(screen.getByRole("button", { name: "Ordered" }));
+    openDetail(item());
+    await user.click(
+      screen.getByRole("button", { name: "Placed the order → Ordered" }),
+    );
     expect(setStatus).toHaveBeenCalledWith({ id: "c_1", status: "ordered" });
   });
 
-  it("marks one arrived, which is what makes it ready to assemble", async () => {
+  it("the next press is the one that makes it ready to assemble", async () => {
     const user = userEvent.setup();
-    render(<BoughtItemStatus item={item({ status: "ordered" })} />);
-    await user.click(screen.getByRole("button", { name: "Arrived" }));
+    openDetail(item({ status: "ordered" }));
+    await user.click(
+      screen.getByRole("button", { name: "It turned up → Arrived" }),
+    );
     expect(setStatus).toHaveBeenCalledWith({ id: "c_1", status: "arrived" });
   });
 
-  it("clears the due date when it goes back to needed", async () => {
-    // It isn't on its way any more, so a date for its arrival is a lie.
-    const user = userEvent.setup();
-    render(
-      <BoughtItemStatus
-        item={item({ status: "ordered", eta: 1800000000000 })}
-      />,
+  it("offers nothing to press once it's here", () => {
+    openDetail(item({ status: "arrived" }));
+    expect(
+      screen.getByText("In the shop, and ready to go on."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /turned up|Placed the order/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows what was bought and what it cost", () => {
+    openDetail(
+      item({ vendor: "AndyMark", vendorPartNumber: "am-1234", cost: 4.5 }),
     );
-    await user.click(screen.getByRole("button", { name: "Needed" }));
+    expect(screen.getByText("AndyMark")).toBeInTheDocument();
+    expect(screen.getByText("am-1234")).toBeInTheDocument();
+    // Twelve at 4.50 — the number somebody has to justify.
+    expect(screen.getByText("4.50 each · 54.00 total")).toBeInTheDocument();
+  });
+
+  it("lets a lead move it back, and clears the date on the way", async () => {
+    const user = userEvent.setup();
+    openDetail(item({ status: "ordered", eta: 1800000000000 }));
+    await user.click(screen.getByRole("button", { name: "Move it back" }));
     expect(setStatus).toHaveBeenCalledWith({
       id: "c_1",
       status: "needed",
@@ -94,23 +109,44 @@ describe("where a bought item is up to", () => {
     });
   });
 
+  it("doesn't offer moving back or deleting to anyone else", () => {
+    openDetail(item({ status: "ordered" }), false);
+    expect(
+      screen.queryByRole("button", { name: "Move it back" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delete" }),
+    ).not.toBeInTheDocument();
+    // Editing is still there — anyone can correct a quantity.
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("deletes when a lead says so", async () => {
+    const user = userEvent.setup();
+    openDetail(item());
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(remove).toHaveBeenCalledWith({ id: "c_1" });
+  });
+
   it("only asks when it's due once something is ordered", () => {
-    const { rerender } = render(<BoughtItemStatus item={item()} />);
+    openDetail(item());
     expect(
       screen.queryByLabelText('When Compliant wheel, 2" is due'),
     ).not.toBeInTheDocument();
 
-    rerender(<BoughtItemStatus item={item({ status: "ordered" })} />);
+    openDetail(item({ status: "ordered" }));
     expect(
       screen.getByLabelText('When Compliant wheel, 2" is due'),
     ).toBeInTheDocument();
   });
 
-  it("says so when the change is refused", async () => {
+  it("says so when the move is refused", async () => {
     const user = userEvent.setup();
     setStatus.mockRejectedValueOnce(new Error("Nope."));
-    render(<BoughtItemStatus item={item()} />);
-    await user.click(screen.getByRole("button", { name: "Ordered" }));
+    openDetail(item());
+    await user.click(
+      screen.getByRole("button", { name: "Placed the order → Ordered" }),
+    );
     expect(await screen.findByText("Nope.")).toBeInTheDocument();
   });
 });
@@ -175,25 +211,5 @@ describe("adding one", () => {
       expect.objectContaining({ id: "c_1", qtyNeeded: 12 }),
     );
     expect(create).not.toHaveBeenCalled();
-  });
-});
-
-describe("removing one", () => {
-  it("is offered to a lead", async () => {
-    const user = userEvent.setup();
-    render(<BoughtItemActions item={item()} canRemove />);
-    await user.click(screen.getByLabelText('Remove Compliant wheel, 2"'));
-    expect(remove).toHaveBeenCalledWith({ id: "c_1" });
-  });
-
-  it("isn't offered to anyone else", () => {
-    render(<BoughtItemActions item={item()} canRemove={false} />);
-    expect(
-      screen.queryByLabelText('Remove Compliant wheel, 2"'),
-    ).not.toBeInTheDocument();
-    // Editing still is — anyone can correct a quantity or a vendor.
-    expect(
-      screen.getByLabelText('Edit Compliant wheel, 2"'),
-    ).toBeInTheDocument();
   });
 });

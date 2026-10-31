@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Pencil1Icon, TrashIcon } from "@radix-ui/react-icons";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { COTS_STATUSES, cotsChipClass, type CotsStatus } from "@/lib/cots";
+import {
+  cotsAdvanceLabel,
+  cotsChipClass,
+  cotsStatusLabel,
+  cotsTask,
+  nextCotsStatus,
+  previousCotsStatus,
+  type CotsStatus,
+} from "@/lib/cots";
 
 /** Dates go in and out of the input as yyyy-mm-dd in local time. */
 function toDateInput(at?: number): string {
@@ -38,22 +45,67 @@ function fromDateInput(value: string): number | null {
   return Number.isFinite(at) ? at : null;
 }
 
-/**
- * Where a bought item is up to: needed, ordered, arrived. Three buttons
- * rather than a menu, because the whole point is that someone standing at the
- * bench can say "that turned up" in one press.
- */
-export function BoughtItemStatus({ item }: { item: Doc<"cotsItems"> }) {
+/** When it's expected. Only worth asking once something is actually ordered. */
+function EtaField({ item }: { item: Doc<"cotsItems"> }) {
   const setStatus = useMutation(api.cots.setStatus);
+  return (
+    <label className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="text-muted-foreground">Due</span>
+      <Input
+        type="date"
+        defaultValue={toDateInput(item.eta)}
+        aria-label={`When ${item.name} is due`}
+        className="h-9 w-40"
+        onChange={(e) =>
+          void setStatus({
+            id: item._id,
+            status: "ordered",
+            eta: fromDateInput(e.target.value),
+          })
+        }
+      />
+    </label>
+  );
+}
+
+/**
+ * One bought item, opened from the ordering board. The same shape as a part's
+ * page: what it is, where it's up to, and one big button that moves it on.
+ *
+ * It replaced three buttons sitting on the card. Those were quicker, but they
+ * were a control that appeared nowhere else in the app, and quicker isn't
+ * worth a second thing to learn.
+ */
+export function BoughtItemDetail({
+  item,
+  subsystemName,
+  open,
+  onOpenChange,
+  canEdit,
+}: {
+  item: Doc<"cotsItems">;
+  subsystemName?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Leads can move one back and delete it. */
+  canEdit: boolean;
+}) {
+  const setStatus = useMutation(api.cots.setStatus);
+  const remove = useMutation(api.cots.remove);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const next = nextCotsStatus(item.status);
+  const back = previousCotsStatus(item.status);
+  const advance = cotsAdvanceLabel(item.status);
 
   function move(status: CotsStatus) {
     setError(null);
-    // Dropping back to needed means it isn't on its way any more, so the
-    // arrival date goes with it rather than lingering as a date for nothing.
     void setStatus({
       id: item._id,
       status,
+      // Back to needed means it isn't on its way, so a date for its arrival
+      // would be a date for nothing.
       ...(status === "needed" ? { eta: null } : {}),
     }).catch((err: unknown) =>
       setError(err instanceof Error ? err.message : "That didn't work."),
@@ -61,95 +113,109 @@ export function BoughtItemStatus({ item }: { item: Doc<"cotsItems"> }) {
   }
 
   return (
-    <div className="space-y-1">
-      <div
-        className="inline-flex overflow-hidden rounded-md border"
-        role="group"
-        aria-label={`Where ${item.name} is up to`}
-      >
-        {COTS_STATUSES.map(({ value, label }) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={item.status === value}
-            onClick={() => move(value)}
-            className={cn(
-              "min-h-9 px-2.5 text-xs font-medium transition-colors",
-              item.status === value
-                ? cotsChipClass(value)
-                : "text-muted-foreground hover:bg-accent",
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{item.name}</DialogTitle>
+          <DialogDescription>{cotsTask(item.status)}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium",
+                cotsChipClass(item.status),
+              )}
+            >
+              {cotsStatusLabel(item)}
+            </span>
+            {subsystemName && (
+              <span className="text-xs text-muted-foreground">
+                {subsystemName}
+              </span>
             )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {item.status === "ordered" && <EtaField item={item} />}
-      {error && <p className="text-xs text-danger">{error}</p>}
-    </div>
+          </div>
+
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+            <Detail label="How many">
+              {item.qtyNeeded}
+              {item.unit ? ` ${item.unit}` : ""}
+            </Detail>
+            <Detail label="Vendor">{item.vendor ?? "—"}</Detail>
+            <Detail label="Their part number">
+              {item.vendorPartNumber ? (
+                <span className="font-mono text-xs">
+                  {item.vendorPartNumber}
+                </span>
+              ) : (
+                "—"
+              )}
+            </Detail>
+            <Detail label="Cost">
+              {item.cost === undefined
+                ? "—"
+                : `${item.cost.toFixed(2)} each · ${(
+                    item.cost * item.qtyNeeded
+                  ).toFixed(2)} total`}
+            </Detail>
+          </dl>
+
+          {item.status === "ordered" && <EtaField item={item} />}
+          {error && <p className="text-sm text-danger">{error}</p>}
+        </div>
+
+        <DialogFooter className="flex-wrap gap-2 sm:justify-start">
+          {advance && next && (
+            <Button size="lg" onClick={() => move(next)}>
+              {advance}
+            </Button>
+          )}
+          <Button variant="outline" onClick={() => setEditing(true)}>
+            Edit
+          </Button>
+          {canEdit && back && (
+            <Button variant="ghost" onClick={() => move(back)}>
+              Move it back
+            </Button>
+          )}
+          {canEdit && (
+            <Button
+              variant="ghost"
+              className="text-danger"
+              onClick={() => {
+                void remove({ id: item._id });
+                onOpenChange(false);
+              }}
+            >
+              Delete
+            </Button>
+          )}
+        </DialogFooter>
+
+        <BoughtItemDialog
+          open={editing}
+          onOpenChange={setEditing}
+          subsystemId={item.subsystemId}
+          item={item}
+        />
+      </DialogContent>
+    </Dialog>
   );
 }
 
-/** When it's expected. Only worth asking once something is actually ordered. */
-function EtaField({ item }: { item: Doc<"cotsItems"> }) {
-  const setStatus = useMutation(api.cots.setStatus);
-  return (
-    <Input
-      type="date"
-      defaultValue={toDateInput(item.eta)}
-      aria-label={`When ${item.name} is due`}
-      className="h-8 w-36 text-xs"
-      onChange={(e) =>
-        void setStatus({
-          id: item._id,
-          status: "ordered",
-          eta: fromDateInput(e.target.value),
-        })
-      }
-    />
-  );
-}
-
-/** Edit and, for a lead, delete. */
-export function BoughtItemActions({
-  item,
-  canRemove,
+function Detail({
+  label,
+  children,
 }: {
-  item: Doc<"cotsItems">;
-  canRemove: boolean;
+  label: string;
+  children: React.ReactNode;
 }) {
-  const remove = useMutation(api.cots.remove);
-  const [editing, setEditing] = useState(false);
-
   return (
-    <span className="flex items-center gap-1">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8"
-        aria-label={`Edit ${item.name}`}
-        onClick={() => setEditing(true)}
-      >
-        <Pencil1Icon className="h-4 w-4" />
-      </Button>
-      {canRemove && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          aria-label={`Remove ${item.name}`}
-          onClick={() => void remove({ id: item._id })}
-        >
-          <TrashIcon className="h-4 w-4" />
-        </Button>
-      )}
-      <BoughtItemDialog
-        open={editing}
-        onOpenChange={setEditing}
-        subsystemId={item.subsystemId}
-        item={item}
-      />
-    </span>
+    <div>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd>{children}</dd>
+    </div>
   );
 }
 

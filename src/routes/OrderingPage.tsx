@@ -5,11 +5,10 @@ import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { FilterChip, FilterDivider } from "@/components/tracker/FilterChip";
 import {
-  BoughtItemActions,
+  BoughtItemDetail,
   BoughtItemDialog,
-  BoughtItemStatus,
 } from "@/components/tracker/BoughtItem";
-import { COTS_STATUSES, type CotsStatus } from "@/lib/cots";
+import { COTS_STATUSES, cotsStatusLabel, type CotsStatus } from "@/lib/cots";
 import { useIsLead } from "@/lib/roles";
 import { useSubsystems } from "@/lib/tracker";
 import { cn } from "@/lib/utils";
@@ -32,6 +31,7 @@ export function OrderingPage() {
   const isLead = useIsLead();
   const [subsystemId, setSubsystemId] = useState<Id<"subsystems"> | null>(null);
   const [adding, setAdding] = useState(false);
+  const [openId, setOpenId] = useState<Id<"cotsItems"> | null>(null);
   const [mobileStatus, setMobileStatus] = useState<CotsStatus>("needed");
 
   const subsystemName = useMemo(
@@ -45,6 +45,9 @@ export function OrderingPage() {
   const byStatus = new Map<CotsStatus, Doc<"cotsItems">[]>();
   for (const { value } of COTS_STATUSES) byStatus.set(value, []);
   for (const item of shown) byStatus.get(item.status)?.push(item);
+
+  // Looked up rather than kept: the modal has to show the move it just made.
+  const open = (items ?? []).find((item) => item._id === openId) ?? null;
 
   const outstanding =
     (byStatus.get("needed")?.length ?? 0) +
@@ -156,31 +159,27 @@ export function OrderingPage() {
 
                 <div className="mt-3 space-y-2">
                   {column.map((item) => (
-                    <article
+                    <button
                       key={item._id}
-                      className="rounded-lg border bg-card p-3 shadow-sm"
+                      type="button"
+                      onClick={() => setOpenId(item._id)}
+                      className="block w-full rounded-lg border bg-card p-3 text-left shadow-sm transition-colors hover:border-primary/50 hover:bg-accent/40"
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="font-medium leading-snug">
-                          {item.name}
-                        </span>
-                        <BoughtItemActions item={item} canRemove={isLead} />
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground">
+                      <span className="block font-medium leading-snug">
+                        {item.name}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
                         {subsystemName.get(item.subsystemId) ?? "—"} · need{" "}
                         {item.qtyNeeded}
                         {item.unit ? ` ${item.unit}` : ""}
                         {item.vendor ? ` · ${item.vendor}` : ""}
-                      </p>
-                      {item.vendorPartNumber && (
-                        <p className="font-mono text-xs text-muted-foreground">
-                          {item.vendorPartNumber}
-                        </p>
+                      </span>
+                      {item.status === "ordered" && item.eta && (
+                        <span className="mt-1 block text-xs text-info">
+                          {cotsStatusLabel(item)}
+                        </span>
                       )}
-                      <div className="mt-2">
-                        <BoughtItemStatus item={item} />
-                      </div>
-                    </article>
+                    </button>
                   ))}
                   {column.length === 0 && (
                     <p className="py-6 text-center text-xs text-muted-foreground">
@@ -199,6 +198,16 @@ export function OrderingPage() {
         onOpenChange={setAdding}
         subsystemId={subsystemId ?? undefined}
       />
+
+      {open && (
+        <BoughtItemDetail
+          item={open}
+          subsystemName={subsystemName.get(open.subsystemId)}
+          open
+          onOpenChange={(next) => !next && setOpenId(null)}
+          canEdit={isLead}
+        />
+      )}
     </div>
   );
 }

@@ -157,8 +157,10 @@ subsystem as _Needed → Ordered → Arrived_, and _Arrived_ counts as ready to
 assemble. They live on their own **Ordering** board, laid out like the parts
 board with a column per state — ordering is one person's job for an afternoon,
 and doing it from five subsystem pages meant opening five subsystem pages. The
-three states are three buttons, so saying "that turned up" is one press at the
-bench; ordering one asks when it's due. Anyone can add one or correct a
+card opens the item, the way a part card opens a part, with one big button
+that moves it on — "Placed the order → Ordered", then "It turned up →
+Arrived", worded the way a part's advance button is. Ordering one asks when
+it's due, and a lead can move one back. Anyone can add one or correct a
 vendor, and a lead can delete one. The subsystem's own parts list still shows
 where each item is up to, read-only. A sub-assembly won't complete while a
 bought item it needs is still on order.
