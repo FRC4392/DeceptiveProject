@@ -364,6 +364,28 @@ Each one also carries:
   the same rule a single part follows going from stage 5 to 6. A lead can
   _Reopen_ one marked done too early; the parts stay where they are.
 
+### Sharing, quantities and spares
+
+A part can be in more than one sub-assembly. Two roller assemblies using the
+same end cap is how robots are built, so membership is shared rather than
+exclusive, and each placement says how many it uses.
+
+How many of a sub-assembly the robot needs is **not** typed in: it comes from
+where the assembly is placed, because the CAD already says how many and a
+second place to state it is a second place to be wrong. `rollUpDemand` in
+`convex/lib/assembly.ts` multiplies that out — two end caps in a roller, two
+rollers on the robot, four end caps — and the Subsystems page says so out loud
+when a part is set to make fewer than the tree needs. That number is the point
+of the whole thing: nobody works it out by eye past the second level, and the
+alternative is finding out in the pit.
+
+`qtySpares` is the one hand-entered figure, because no model knows you want a
+roller assembly on the shelf.
+
+A shared part only reaches **Assembled** once _every_ sub-assembly using it has
+been built. Saying it's on the robot while another assembly still wants one
+would be a lie of the kind that gets found at competition.
+
 Sequencing between siblings — "left plate, then right plate" inside one
 sub-assembly — isn't expressible. Containment orders children before their
 parent and nothing else. Nest them if the order matters.

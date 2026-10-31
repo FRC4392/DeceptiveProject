@@ -59,6 +59,10 @@ export function SubsystemsPage() {
     api.cots.list,
     selectedId ? { subsystemId: selectedId } : "skip",
   );
+  const demand = useQuery(
+    api.subAssemblies.demand,
+    selectedId ? { subsystemId: selectedId } : "skip",
+  );
   const rows = useQuery(
     api.subAssemblies.list,
     selectedId ? { subsystemId: selectedId } : "skip",
@@ -125,6 +129,28 @@ export function SubsystemsPage() {
               : ""}
           </p>
         </header>
+      )}
+
+      {demand && demand.shortfalls.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+          <h2 className="font-semibold">
+            Not enough planned · {demand.shortfalls.length}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Once the tree is multiplied out, the robot needs more of these than
+            anyone has set out to make.
+          </p>
+          <ul className="mt-3 space-y-1 text-sm">
+            {demand.shortfalls.map((short) => (
+              <li key={short.label} className="flex flex-wrap gap-x-2">
+                <span className="font-medium">{short.label}</span>
+                <span className="text-muted-foreground">
+                  needs {short.needed}, set to {short.planned}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <section className="rounded-lg border bg-card p-4 shadow-sm">
@@ -252,6 +278,10 @@ export function SubsystemsPage() {
                       canComplete={canComplete}
                       completeReason="The subsystem lead or a mentor marks it installed."
                       isLead={isLead}
+                      units={
+                        demand?.units.find((u) => u.id === row.assembly._id)
+                          ?.units
+                      }
                     />
                   </div>
                 ))}

@@ -254,6 +254,11 @@ export default defineSchema({
     // CAD link is derived from the ids above and never stored.
     drawingUrl: v.optional(v.string()),
     claimedByUserId: v.optional(v.string()),
+    // Whole extra units to build beyond what the robot needs. How many the
+    // robot needs isn't stored: it comes from where the assembly is placed,
+    // and a second place to say it is a second place to be wrong.
+    qtySpares: v.optional(v.number()),
+    qtyBuilt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
     completedByUserId: v.optional(v.string()),
   })
@@ -266,12 +271,17 @@ export default defineSchema({
   // What a sub-assembly is made of. Exactly one of the three ids is set on any
   // row — that invariant is enforced in subAssemblies.setMembers, which is the
   // only thing allowed to write this table.
+  //
+  // The same part may appear under several sub-assemblies: two roller
+  // assemblies sharing an end cap is ordinary, not a mistake. What that costs
+  // is worked out in lib/assembly.ts::rollUpDemand rather than by pretending
+  // each part has one home.
   subAssemblyMembers: defineTable({
     subAssemblyId: v.id("subAssemblies"),
     partId: v.optional(v.id("parts")),
     cotsItemId: v.optional(v.id("cotsItems")),
     childSubAssemblyId: v.optional(v.id("subAssemblies")),
-    // Placement count, when the row came from a CAD sync.
+    /** How many of it this assembly uses. Missing means one. */
     quantity: v.optional(v.number()),
   })
     .index("by_parent", ["subAssemblyId"])

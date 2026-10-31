@@ -160,3 +160,128 @@ export function wouldCycle(
   }
   return false;
 }
+
+// ---- How many of everything the robot actually needs ----
+
+/**
+ * One thing placed inside a sub-assembly, and how many of it.
+ *
+ * `refId` is a part, a bought item or another sub-assembly. The same ref can
+ * appear in several assemblies — two roller assemblies sharing an end cap is
+ * the ordinary case, not a mistake — which is why demand has to be added up
+ * rather than read off any one of them.
+ */
+export type Placement = {
+  refId: string;
+  kind: "part" | "cots" | "child";
+  /** Placements in this assembly. Missing means one. */
+  quantity?: number;
+};
+
+export type DemandAssembly = {
+  id: string;
+  /** Whole extra units to build beyond what the robot needs. */
+  spares?: number;
+  placements: Placement[];
+};
+
+export type Demand = {
+  /** Whole units of each sub-assembly to build, spares included. */
+  units: Map<string, number>;
+  /** Parts and bought items, summed over everything that uses them. */
+  perRef: Map<string, number>;
+};
+
+/**
+ * Multiply the tree out.
+ *
+ * Two end caps in a roller assembly, two roller assemblies on the robot, and
+ * the robot needs four end caps. Nobody can hold that in their head past the
+ * second level, which is the whole reason for computing it.
+ *
+ * A sub-assembly's unit count comes from where it is placed, not from a
+ * number typed on it — the CAD already says how many, and a second place to
+ * state it is a second place to be wrong. Spares are the one hand-entered
+ * part, because no model knows you want a roller on the shelf.
+ */
+export function rollUpDemand(assemblies: DemandAssembly[]): Demand {
+  const byId = new Map(assemblies.map((a) => [a.id, a]));
+
+  // Who places each sub-assembly, and how many times.
+  const parents = new Map<string, { parentId: string; quantity: number }[]>();
+  for (const assembly of assemblies) {
+    for (const placement of assembly.placements) {
+      if (placement.kind !== "child") continue;
+      const list = parents.get(placement.refId) ?? [];
+      list.push({
+        parentId: assembly.id,
+        quantity: Math.max(1, placement.quantity ?? 1),
+      });
+      parents.set(placement.refId, list);
+    }
+  }
+
+  const units = new Map<string, number>();
+  function unitsOf(id: string, seen: Set<string>): number {
+    const already = units.get(id);
+    if (already !== undefined) return already;
+    // The write path makes loops unreachable; this keeps a bad row from
+    // hanging the readout rather than trusting that forever.
+    if (seen.has(id)) return 0;
+    const assembly = byId.get(id);
+    if (!assembly) return 0;
+
+    const placedIn = parents.get(id) ?? [];
+    const fromParents = placedIn.reduce(
+      (sum, p) => sum + p.quantity * unitsOf(p.parentId, new Set(seen).add(id)),
+      0,
+    );
+    // Nothing places it, so it is a top-level assembly: the robot needs one.
+    const total =
+      (placedIn.length === 0 ? 1 : fromParents) +
+      Math.max(0, assembly.spares ?? 0);
+    units.set(id, total);
+    return total;
+  }
+  for (const assembly of assemblies) unitsOf(assembly.id, new Set());
+
+  const perRef = new Map<string, number>();
+  for (const assembly of assemblies) {
+    const made = units.get(assembly.id) ?? 0;
+    for (const placement of assembly.placements) {
+      if (placement.kind === "child") continue;
+      const each = Math.max(1, placement.quantity ?? 1);
+      perRef.set(
+        placement.refId,
+        (perRef.get(placement.refId) ?? 0) + each * made,
+      );
+    }
+  }
+  return { units, perRef };
+}
+
+export type Shortfall = {
+  refId: string;
+  /** What the tree adds up to. */
+  needed: number;
+  /** What the part or bought item is set to produce. */
+  planned: number;
+};
+
+/**
+ * Where the plan doesn't cover the robot. This is the number worth showing a
+ * lead: a part set to 4 that four assemblies each want two of is a problem
+ * three weeks before anyone would otherwise notice.
+ */
+export function findShortfalls(
+  demand: Demand,
+  planned: Map<string, number>,
+): Shortfall[] {
+  const out: Shortfall[] = [];
+  for (const [refId, needed] of demand.perRef) {
+    const have = planned.get(refId);
+    if (have === undefined || have >= needed) continue;
+    out.push({ refId, needed, planned: have });
+  }
+  return out.sort((a, b) => b.needed - b.planned - (a.needed - a.planned));
+}

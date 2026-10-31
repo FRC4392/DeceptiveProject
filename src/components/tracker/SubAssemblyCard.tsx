@@ -24,6 +24,7 @@ export function SubAssemblyCard({
   canComplete,
   completeReason,
   isLead,
+  units,
 }: {
   assembly: Doc<"subAssemblies">;
   status: AssemblyStatus;
@@ -32,6 +33,8 @@ export function SubAssemblyCard({
   canComplete: boolean;
   completeReason?: string;
   isLead: boolean;
+  /** Whole units the robot needs, once placements are multiplied out. */
+  units?: number;
 }) {
   const currentUserId = useCurrentUserId();
   const claim = useMutation(api.subAssemblies.claim);
@@ -74,7 +77,17 @@ export function SubAssemblyCard({
           {status.done ? "Done" : status.ready ? "Go" : "Waiting"}
         </span>
       </div>
-      <p className="mt-1 font-medium">{assembly.name}</p>
+      <p className="mt-1 font-medium">
+        {assembly.name}
+        {units !== undefined && units > 1 && (
+          // Two rollers on the robot is not the same job as one, and the
+          // number comes from the CAD rather than from anyone's memory.
+          <span className="ml-1.5 text-xs font-semibold text-primary">
+            build {units}
+            {(assembly.qtySpares ?? 0) > 0 && ` (${assembly.qtySpares} spare)`}
+          </span>
+        )}
+      </p>
       <p className="mt-1 text-xs text-muted-foreground">
         {blockingSummary(status)}
       </p>

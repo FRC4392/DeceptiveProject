@@ -15,6 +15,8 @@ export type AssemblyRow = {
   partIds: Id<"parts">[];
   cotsItemIds: Id<"cotsItems">[];
   childIds: Id<"subAssemblies">[];
+  /** How many of each member, for anything used more than once. */
+  quantities: { refId: string; quantity: number }[];
 };
 
 /**
@@ -40,6 +42,7 @@ export function SubAssemblyEditor({
   const rename = useMutation(api.subAssemblies.rename);
   const remove = useMutation(api.subAssemblies.remove);
   const setMembers = useMutation(api.subAssemblies.setMembers);
+  const setSpares = useMutation(api.subAssemblies.setSpares);
   const setDrawing = useMutation(api.subAssemblies.setDrawing);
   const unassigned = useQuery(api.subAssemblies.unassigned, { subsystemId });
 
@@ -58,25 +61,41 @@ export function SubAssemblyEditor({
     );
   }
 
-  // Where everything currently sits, so nothing is offered in two places.
-  const ownerOf = new Map<string, AssemblyRow>();
+  // Who else uses each thing. Shown, not enforced: two roller assemblies
+  // sharing an end cap is how robots are built, and the tracker's job is to
+  // add that up rather than make someone pick one.
+  const usersOf = new Map<string, AssemblyRow[]>();
   for (const row of rows) {
-    for (const id of row.partIds) ownerOf.set(id, row);
-    for (const id of row.cotsItemIds) ownerOf.set(id, row);
-    for (const id of row.childIds) ownerOf.set(id, row);
+    for (const id of [...row.partIds, ...row.cotsItemIds, ...row.childIds]) {
+      usersOf.set(id, [...(usersOf.get(id) ?? []), row]);
+    }
   }
   const edges = new Map<string, string[]>(
     rows.map((r) => [r.assembly._id as string, r.childIds as string[]]),
   );
 
-  function heldElsewhere(memberId: string): AssemblyRow | undefined {
-    const owner = ownerOf.get(memberId);
-    return owner && owner.assembly._id !== selected?.assembly._id
-      ? owner
-      : undefined;
+  function alsoIn(memberId: string): string | undefined {
+    const others = (usersOf.get(memberId) ?? []).filter(
+      (row) => row.assembly._id !== selected?.assembly._id,
+    );
+    if (others.length === 0) return undefined;
+    return others.length === 1
+      ? `also in ${others[0].assembly.name}`
+      : `also in ${others.length} others`;
   }
 
-  function save(next: Partial<Omit<AssemblyRow, "assembly">>) {
+  /** How many of a member this assembly uses. */
+  function qtyOf(memberId: string): number {
+    return (
+      selected?.quantities.find((q) => q.refId === memberId)?.quantity ?? 1
+    );
+  }
+
+  function save(
+    next: Partial<Omit<AssemblyRow, "assembly">> & {
+      quantities?: { refId: string; quantity: number }[];
+    },
+  ) {
     if (!selected) return;
     run(
       setMembers({
@@ -84,16 +103,27 @@ export function SubAssemblyEditor({
         partIds: next.partIds ?? selected.partIds,
         cotsItemIds: next.cotsItemIds ?? selected.cotsItemIds,
         childIds: next.childIds ?? selected.childIds,
+        quantities: next.quantities ?? selected.quantities,
       }),
     );
+  }
+
+  function setQty(memberId: string, quantity: number) {
+    const rest = (selected?.quantities ?? []).filter(
+      (q) => q.refId !== memberId,
+    );
+    save({
+      quantities:
+        quantity > 1 ? [...rest, { refId: memberId, quantity }] : rest,
+    });
   }
 
   function toggle<T extends string>(list: T[], id: T): T[] {
     return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
   }
 
-  const availableParts = parts.filter((p) => !heldElsewhere(p._id));
-  const availableCots = cots.filter((c) => !heldElsewhere(c._id));
+  const availableParts = parts;
+  const availableCots = cots;
   const totalPickable = availableParts.length + availableCots.length;
   const chosen =
     (selected?.partIds.length ?? 0) + (selected?.cotsItemIds.length ?? 0);
@@ -211,6 +241,32 @@ export function SubAssemblyEditor({
             />
           </label>
 
+          <label className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span className="w-28 shrink-0 text-muted-foreground">Spares</span>
+            <Input
+              type="number"
+              min={0}
+              defaultValue={selected.assembly.qtySpares ?? 0}
+              aria-label="Spare units to build"
+              className="h-9 w-20"
+              onBlur={(e) => {
+                const next = Math.max(0, Math.round(Number(e.target.value)));
+                if (
+                  Number.isFinite(next) &&
+                  next !== (selected.assembly.qtySpares ?? 0)
+                ) {
+                  run(
+                    setSpares({ id: selected.assembly._id, qtySpares: next }),
+                  );
+                }
+              }}
+            />
+            <span className="text-xs text-muted-foreground">
+              Whole extra ones to build. How many the robot needs comes from
+              where this is placed.
+            </span>
+          </label>
+
           <p className="mt-2 text-sm text-muted-foreground">
             {onshapeElementUrl(selected.assembly) ? (
               <a
@@ -247,18 +303,15 @@ export function SubAssemblyEditor({
 
           <div className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
             {parts.map((part) => {
-              const owner = heldElsewhere(part._id);
+              const elsewhere = alsoIn(part._id);
+              const chosen = selected.partIds.includes(part._id);
               return (
                 <label
                   key={part._id}
-                  className={cn(
-                    "flex min-h-9 items-center gap-2 text-sm",
-                    owner && "text-muted-foreground",
-                  )}
+                  className="flex min-h-9 items-center gap-2 text-sm"
                 >
                   <Checkbox
-                    checked={selected.partIds.includes(part._id)}
-                    disabled={owner !== undefined}
+                    checked={chosen}
                     onCheckedChange={() =>
                       save({ partIds: toggle(selected.partIds, part._id) })
                     }
@@ -267,27 +320,30 @@ export function SubAssemblyEditor({
                     {part.partNumber}
                   </span>
                   <span className="truncate">{part.name}</span>
-                  {owner && (
-                    <span className="shrink-0 text-xs">
-                      in {owner.assembly.name}
+                  {chosen && (
+                    <QtyBox
+                      value={qtyOf(part._id)}
+                      onChange={(n) => setQty(part._id, n)}
+                      label={`How many ${part.partNumber}`}
+                    />
+                  )}
+                  {elsewhere && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {elsewhere}
                     </span>
                   )}
                 </label>
               );
             })}
             {cots.map((item) => {
-              const owner = heldElsewhere(item._id);
+              const elsewhere = alsoIn(item._id);
               return (
                 <label
                   key={item._id}
-                  className={cn(
-                    "flex min-h-9 items-center gap-2 text-sm",
-                    owner && "text-muted-foreground",
-                  )}
+                  className="flex min-h-9 items-center gap-2 text-sm"
                 >
                   <Checkbox
                     checked={selected.cotsItemIds.includes(item._id)}
-                    disabled={owner !== undefined}
                     onCheckedChange={() =>
                       save({
                         cotsItemIds: toggle(selected.cotsItemIds, item._id),
@@ -296,9 +352,16 @@ export function SubAssemblyEditor({
                   />
                   <span className="text-xs text-muted-foreground">bought</span>
                   <span className="truncate">{item.name}</span>
-                  {owner && (
-                    <span className="shrink-0 text-xs">
-                      in {owner.assembly.name}
+                  {selected.cotsItemIds.includes(item._id) && (
+                    <QtyBox
+                      value={qtyOf(item._id)}
+                      onChange={(n) => setQty(item._id, n)}
+                      label={`How many ${item.name}`}
+                    />
+                  )}
+                  {elsewhere && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {elsewhere}
                     </span>
                   )}
                 </label>
@@ -314,24 +377,24 @@ export function SubAssemblyEditor({
             {rows
               .filter((row) => row.assembly._id !== selected.assembly._id)
               .map((row) => {
-                const owner = heldElsewhere(row.assembly._id);
+                const elsewhere = alsoIn(row.assembly._id);
                 const loops = wouldCycle(
                   selected.assembly._id,
                   row.assembly._id,
                   edges,
                 );
-                const locked = owner !== undefined || loops;
+                const chosen = selected.childIds.includes(row.assembly._id);
                 return (
                   <label
                     key={row.assembly._id}
                     className={cn(
                       "flex min-h-9 items-center gap-2 text-sm",
-                      locked && "text-muted-foreground",
+                      loops && "text-muted-foreground",
                     )}
                   >
                     <Checkbox
-                      checked={selected.childIds.includes(row.assembly._id)}
-                      disabled={locked}
+                      checked={chosen}
+                      disabled={loops}
                       onCheckedChange={() =>
                         save({
                           childIds: toggle(selected.childIds, row.assembly._id),
@@ -342,13 +405,21 @@ export function SubAssemblyEditor({
                       {row.assembly.partNumber}
                     </span>
                     <span className="truncate">{row.assembly.name}</span>
-                    {owner && (
-                      <span className="shrink-0 text-xs">
-                        in {owner.assembly.name}
-                      </span>
+                    {chosen && (
+                      <QtyBox
+                        value={qtyOf(row.assembly._id)}
+                        onChange={(n) => setQty(row.assembly._id, n)}
+                        label={`How many ${row.assembly.name}`}
+                      />
                     )}
-                    {!owner && loops && (
+                    {loops ? (
                       <span className="shrink-0 text-xs">holds this one</span>
+                    ) : (
+                      elsewhere && (
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {elsewhere}
+                        </span>
+                      )
                     )}
                   </label>
                 );
@@ -379,5 +450,51 @@ export function SubAssemblyEditor({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * How many of one member an assembly uses. Hidden until it's picked, because
+ * the answer is one almost every time and a column of 1s is noise.
+ */
+function QtyBox({
+  value,
+  onChange,
+  label,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  label: string;
+}) {
+  // Held as text while it's being typed. A controlled number that refuses
+  // anything below 1 can't be cleared, so "2" lands after the old digit and
+  // you get 12 — which is exactly the sort of thing nobody reports.
+  const [draft, setDraft] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1">
+      <span className="text-xs text-muted-foreground">×</span>
+      <Input
+        type="number"
+        min={1}
+        value={editing ? draft : String(value)}
+        aria-label={label}
+        className="h-7 w-14 px-2 py-0 text-xs"
+        onClick={(e) => e.preventDefault()}
+        onFocus={() => {
+          setDraft(String(value));
+          setEditing(true);
+        }}
+        onBlur={() => setEditing(false)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          const next = Number(e.target.value);
+          if (e.target.value !== "" && Number.isFinite(next) && next >= 1) {
+            onChange(Math.round(next));
+          }
+        }}
+      />
+    </span>
   );
 }

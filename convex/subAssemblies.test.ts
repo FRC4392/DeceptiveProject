@@ -157,42 +157,45 @@ describe("numbering", () => {
 });
 
 describe("what a sub-assembly is made of", () => {
-  test("a part belongs to one — adding it elsewhere moves it", async () => {
+  test("two sub-assemblies can share the same part", async () => {
+    // Two roller assemblies using the same end cap is ordinary, not a
+    // mistake. Membership used to be exclusive and this is what changed.
     const t = convexTest(schema, modules);
     const { mentor, intake, parts } = await setup(t);
-    const frame = await mentor.mutation(api.subAssemblies.create, {
+    const left = await mentor.mutation(api.subAssemblies.create, {
       subsystemId: intake._id,
-      name: "Frame",
+      name: "Left roller",
     });
-    const rollers = await mentor.mutation(api.subAssemblies.create, {
+    const right = await mentor.mutation(api.subAssemblies.create, {
       subsystemId: intake._id,
-      name: "Rollers",
+      name: "Right roller",
     });
 
     await mentor.mutation(api.subAssemblies.setMembers, {
-      id: frame.id,
+      id: left.id,
       partIds: [parts[0], parts[1]],
       cotsItemIds: [],
       childIds: [],
     });
     await mentor.mutation(api.subAssemblies.setMembers, {
-      id: rollers.id,
-      partIds: [parts[1], parts[2]],
+      id: right.id,
+      partIds: [parts[0]],
       cotsItemIds: [],
       childIds: [],
     });
 
     const rows = await listFor(mentor, intake._id);
-    expect(rows.find((r) => r.assembly._id === frame.id)!.partIds).toEqual([
+    // Still in the first one — claiming it elsewhere no longer takes it away.
+    expect(rows.find((r) => r.assembly._id === left.id)!.partIds).toEqual([
       parts[0],
-    ]);
-    expect(rows.find((r) => r.assembly._id === rollers.id)!.partIds).toEqual([
       parts[1],
-      parts[2],
+    ]);
+    expect(rows.find((r) => r.assembly._id === right.id)!.partIds).toEqual([
+      parts[0],
     ]);
   });
 
-  test("so does a sub-assembly — it has at most one parent", async () => {
+  test("the same sub-assembly can be placed in two parents", async () => {
     const t = convexTest(schema, modules);
     const { mentor, intake } = await setup(t);
     const rows = await listFor(mentor, intake._id);
@@ -220,10 +223,33 @@ describe("what a sub-assembly is made of", () => {
     });
 
     const after = await listFor(mentor, intake._id);
-    expect(after.find((r) => r.assembly._id === root)!.childIds).toEqual([]);
+    expect(after.find((r) => r.assembly._id === root)!.childIds).toEqual([
+      frame.id,
+    ]);
     expect(after.find((r) => r.assembly._id === other.id)!.childIds).toEqual([
       frame.id,
     ]);
+  });
+
+  test("how many of each is remembered", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    const roller = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: roller.id,
+      partIds: [parts[0], parts[1]],
+      cotsItemIds: [],
+      childIds: [],
+      quantities: [{ refId: parts[0], quantity: 2 }],
+    });
+
+    const rows = await listFor(mentor, intake._id);
+    const row = rows.find((r) => r.assembly._id === roller.id)!;
+    // Only the ones used more than once are worth saying out loud.
+    expect(row.quantities).toEqual([{ refId: parts[0], quantity: 2 }]);
   });
 
   test("nothing can go inside itself", async () => {
@@ -624,5 +650,172 @@ describe("the assembly drawing link", () => {
         url: "javascript:alert(1)",
       }),
     ).rejects.toThrow(/http/i);
+  });
+});
+
+describe("a part two assemblies both want", () => {
+  async function sharedSetup(t: ReturnType<typeof convexTest>) {
+    const { mentor, intake, parts } = await setup(t);
+    const left = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Left roller",
+    });
+    const right = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Right roller",
+    });
+    const shared = parts[0];
+    for (const id of [left.id, right.id]) {
+      await mentor.mutation(api.subAssemblies.setMembers, {
+        id,
+        partIds: [shared],
+        cotsItemIds: [],
+        childIds: [],
+      });
+    }
+    // In the bin, ready to go on.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(shared, { stage: 5, qtyMade: 2 });
+    });
+    return { mentor, intake, left, right, shared };
+  }
+
+  test("stays in the bin while the other one still needs it", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, left, shared } = await sharedSetup(t);
+
+    const result = await mentor.mutation(api.subAssemblies.complete, {
+      id: left.id,
+    });
+
+    expect(result.moved).toBe(0);
+    const part = await t.run((ctx) => ctx.db.get(shared));
+    // Saying it's on the robot while the right roller still wants one is the
+    // kind of lie that gets found at competition.
+    expect(part?.stage).toBe(5);
+  });
+
+  test("goes on the robot once the last one is built", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, left, right, shared } = await sharedSetup(t);
+
+    await mentor.mutation(api.subAssemblies.complete, { id: left.id });
+    const result = await mentor.mutation(api.subAssemblies.complete, {
+      id: right.id,
+    });
+
+    expect(result.moved).toBe(1);
+    const part = await t.run((ctx) => ctx.db.get(shared));
+    expect(part?.stage).toBe(6);
+  });
+
+  test("a part only one assembly wants still moves straight away", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    const solo = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Solo",
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: solo.id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { stage: 5, qtyMade: 1 });
+    });
+
+    const result = await mentor.mutation(api.subAssemblies.complete, {
+      id: solo.id,
+    });
+    expect(result.moved).toBe(1);
+    expect((await t.run((ctx) => ctx.db.get(parts[0])))?.stage).toBe(6);
+  });
+});
+
+describe("how many the robot needs", () => {
+  test("multiplies placements down the tree and flags a shortfall", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    const root = rows[0].assembly._id;
+    const roller = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+
+    // Two rollers on the robot, two of this part in each roller: four.
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: root,
+      partIds: [],
+      cotsItemIds: [],
+      childIds: [roller.id],
+      quantities: [{ refId: roller.id, quantity: 2 }],
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: roller.id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+      quantities: [{ refId: parts[0], quantity: 2 }],
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(parts[0], { qtyNeeded: 2 });
+    });
+
+    const demand = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+
+    expect(demand.units.find((u) => u.id === roller.id)?.units).toBe(2);
+    expect(demand.shortfalls).toHaveLength(1);
+    expect(demand.shortfalls[0]).toMatchObject({
+      kind: "part",
+      needed: 4,
+      planned: 2,
+    });
+  });
+
+  test("spares are whole extra units", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    const roller = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: rows[0].assembly._id,
+      partIds: [],
+      cotsItemIds: [],
+      childIds: [roller.id],
+      quantities: [{ refId: roller.id, quantity: 2 }],
+    });
+    await mentor.mutation(api.subAssemblies.setSpares, {
+      id: roller.id,
+      qtySpares: 1,
+    });
+
+    const demand = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+    expect(demand.units.find((u) => u.id === roller.id)?.units).toBe(3);
+  });
+
+  test("says nothing when the plan covers the robot", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, parts } = await setup(t);
+    const rows = await listFor(mentor, intake._id);
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: rows[0].assembly._id,
+      partIds: [parts[0]],
+      cotsItemIds: [],
+      childIds: [],
+    });
+    const demand = await mentor.query(api.subAssemblies.demand, {
+      subsystemId: intake._id,
+    });
+    expect(demand.shortfalls).toEqual([]);
   });
 });

@@ -24,9 +24,12 @@ import {
   READY_STAGE,
   blockingSummary,
   computeAssemblyStatuses,
+  findShortfalls,
   isSafeDrawingUrl,
+  rollUpDemand,
   wouldCycle,
   type AssemblyInput,
+  type DemandAssembly,
 } from "./lib/assembly";
 import {
   asStage,
@@ -56,6 +59,8 @@ const vSubAssembly = v.object({
   lastSyncedAt: v.optional(v.number()),
   drawingUrl: v.optional(v.string()),
   claimedByUserId: v.optional(v.string()),
+  qtySpares: v.optional(v.number()),
+  qtyBuilt: v.optional(v.number()),
   completedAt: v.optional(v.number()),
   completedByUserId: v.optional(v.string()),
 });
@@ -157,6 +162,10 @@ export const list = query({
       partIds: v.array(v.id("parts")),
       cotsItemIds: v.array(v.id("cotsItems")),
       childIds: v.array(v.id("subAssemblies")),
+      /** How many of each member, for anything used more than once. */
+      quantities: v.array(
+        v.object({ refId: v.string(), quantity: v.number() }),
+      ),
     }),
   ),
   handler: async (ctx, { subsystemId }) => {
@@ -183,6 +192,12 @@ export const list = query({
         childIds: members
           .map((m) => m.childSubAssemblyId)
           .filter((id): id is Id<"subAssemblies"> => id !== undefined),
+        quantities: members
+          .filter((m) => (m.quantity ?? 1) > 1)
+          .map((m) => ({
+            refId: (m.partId ?? m.cotsItemId ?? m.childSubAssemblyId) as string,
+            quantity: m.quantity ?? 1,
+          })),
       });
     }
     return out;
@@ -398,12 +413,16 @@ export const setDrawing = mutation({
 });
 
 /**
- * Set what a sub-assembly is made of.
+ * Set what a sub-assembly is made of, and how many of each.
  *
- * Three rules, all enforced here because this is the only thing that writes
- * membership: a part or bought item belongs to exactly one sub-assembly, so
- * putting it here takes it off whatever had it; a child must come from the
- * same subsystem; and nothing may end up inside itself.
+ * Two rules, both enforced here because this is the only thing that writes
+ * membership: a child must come from the same subsystem, and nothing may end
+ * up inside itself.
+ *
+ * Membership used to be exclusive — putting a part here took it off whatever
+ * else had it. That was wrong about how robots are built: two roller
+ * assemblies share an end cap, and the tracker's job is to add that up, not
+ * to make the team pick one. What it costs is `rollUpDemand`'s problem.
  */
 export const setMembers = mutation({
   args: {
@@ -411,9 +430,13 @@ export const setMembers = mutation({
     partIds: v.array(v.id("parts")),
     cotsItemIds: v.array(v.id("cotsItems")),
     childIds: v.array(v.id("subAssemblies")),
+    /** How many of a given member, where it isn't one. */
+    quantities: v.optional(
+      v.array(v.object({ refId: v.string(), quantity: v.number() })),
+    ),
   },
   returns: v.null(),
-  handler: async (ctx, { id, partIds, cotsItemIds, childIds }) => {
+  handler: async (ctx, { id, partIds, cotsItemIds, childIds, quantities }) => {
     await requireLead(ctx);
     const assembly = await ctx.db.get(id);
     if (!assembly) throw new Error("That sub-assembly is gone.");
@@ -462,38 +485,131 @@ export const setMembers = mutation({
       .collect();
     for (const member of existing) await ctx.db.delete(member._id);
 
-    // Anything claimed here comes off whatever else was holding it.
-    const wanted = new Set<string>([...partIds, ...cotsItemIds, ...childIds]);
-    for (const sibling of siblings) {
-      if (sibling._id === id) continue;
-      const members = await ctx.db
-        .query("subAssemblyMembers")
-        .withIndex("by_parent", (q) => q.eq("subAssemblyId", sibling._id))
-        .collect();
-      for (const member of members) {
-        const claimed =
-          (member.partId && wanted.has(member.partId)) ||
-          (member.cotsItemId && wanted.has(member.cotsItemId)) ||
-          (member.childSubAssemblyId && wanted.has(member.childSubAssemblyId));
-        if (claimed) await ctx.db.delete(member._id);
-      }
-    }
+    const counts = new Map(
+      (quantities ?? []).map((q) => [
+        q.refId,
+        Math.max(1, Math.round(q.quantity)),
+      ]),
+    );
+    const qty = (refId: string) => counts.get(refId);
 
     for (const partId of partIds) {
-      await ctx.db.insert("subAssemblyMembers", { subAssemblyId: id, partId });
+      await ctx.db.insert("subAssemblyMembers", {
+        subAssemblyId: id,
+        partId,
+        quantity: qty(partId),
+      });
     }
     for (const cotsItemId of cotsItemIds) {
       await ctx.db.insert("subAssemblyMembers", {
         subAssemblyId: id,
         cotsItemId,
+        quantity: qty(cotsItemId),
       });
     }
     for (const childSubAssemblyId of childIds) {
       await ctx.db.insert("subAssemblyMembers", {
         subAssemblyId: id,
         childSubAssemblyId,
+        quantity: qty(childSubAssemblyId),
       });
     }
+    return null;
+  },
+});
+
+/**
+ * How many of everything this subsystem actually needs, once the tree is
+ * multiplied out — and where the plan doesn't cover it.
+ *
+ * The shortfall list is the point. Two end caps in a roller, two rollers on
+ * the robot, and a part set to make four is short by four; nobody works that
+ * out by eye, and the alternative is finding out in the pit.
+ */
+export const demand = query({
+  args: { subsystemId: v.id("subsystems") },
+  returns: v.object({
+    units: v.array(
+      v.object({
+        id: v.id("subAssemblies"),
+        /** Whole units to build, spares included. */
+        units: v.number(),
+        built: v.number(),
+      }),
+    ),
+    shortfalls: v.array(
+      v.object({
+        kind: v.union(v.literal("part"), v.literal("cots")),
+        label: v.string(),
+        needed: v.number(),
+        planned: v.number(),
+      }),
+    ),
+  }),
+  handler: async (ctx, { subsystemId }) => {
+    const placements = await subsystemPlacements(ctx, subsystemId);
+    const rolled = rollUpDemand(placements);
+
+    const assemblies = await ctx.db
+      .query("subAssemblies")
+      .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
+      .collect();
+
+    // What each referenced part or bought item is set to produce, and what to
+    // call it when it turns out to be short.
+    const planned = new Map<string, number>();
+    const labels = new Map<string, { kind: "part" | "cots"; label: string }>();
+    for (const refId of rolled.perRef.keys()) {
+      const part = await ctx.db.get(refId as Id<"parts">);
+      if (part && "partNumber" in part) {
+        planned.set(refId, part.qtyNeeded);
+        labels.set(refId, {
+          kind: "part",
+          label: `${part.partNumber} ${part.name}`,
+        });
+        continue;
+      }
+      const item = await ctx.db.get(refId as Id<"cotsItems">);
+      if (item && "status" in item) {
+        planned.set(refId, item.qtyNeeded);
+        labels.set(refId, { kind: "cots", label: item.name });
+      }
+    }
+
+    return {
+      units: assemblies.map((a) => ({
+        id: a._id,
+        units: Math.max(1, rolled.units.get(a._id) ?? 1),
+        built: a.qtyBuilt ?? 0,
+      })),
+      shortfalls: findShortfalls(rolled, planned).flatMap((short) => {
+        const named = labels.get(short.refId);
+        return named
+          ? [
+              {
+                kind: named.kind,
+                label: named.label,
+                needed: short.needed,
+                planned: short.planned,
+              },
+            ]
+          : [];
+      }),
+    };
+  },
+});
+
+/** Extra whole units to build beyond what the robot needs. */
+export const setSpares = mutation({
+  args: { id: v.id("subAssemblies"), qtySpares: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { id, qtySpares }) => {
+    await requireLead(ctx);
+    const assembly = await ctx.db.get(id);
+    if (!assembly) throw new Error("That sub-assembly is gone.");
+    await ctx.db.patch(id, {
+      qtySpares: Math.max(0, Math.round(qtySpares)) || undefined,
+    });
     return null;
   },
 });
@@ -607,6 +723,11 @@ export const complete = mutation({
     let moved = 0;
     for (const part of parts) {
       if (part.stage >= ASSEMBLED_STAGE) continue;
+      // A part can sit in more than one sub-assembly. Saying it's on the
+      // robot while another assembly still needs one would be a lie, and the
+      // lie is the kind that gets found at competition — so it waits until
+      // every assembly using it is built.
+      if (await stillWantedElsewhere(ctx, part._id, id)) continue;
       const process = await ctx.db.get(part.processTypeId);
       const shape = {
         needsDrawing: process?.needsDrawing ?? true,
@@ -644,10 +765,137 @@ export const complete = mutation({
     await ctx.db.patch(id, {
       completedAt: now,
       completedByUserId: actor.userId,
+      // Marking it built means all of them, which for the ordinary
+      // single-unit assembly is exactly what pressing the button meant.
+      qtyBuilt: Math.max(
+        assembly.qtyBuilt ?? 0,
+        await unitsNeeded(ctx, assembly),
+      ),
     });
+
+    // Building this one may have been the last thing a shared part was
+    // waiting on, so sweep the assemblies it also belongs to.
+    moved += await releaseSharedParts(ctx, id, actor, now);
     return { moved };
   },
 });
+
+/**
+ * The placements of every sub-assembly in a subsystem, as the demand rollup
+ * wants them. One read of the membership table rather than one per assembly.
+ */
+async function subsystemPlacements(
+  ctx: QueryCtx,
+  subsystemId: Id<"subsystems">,
+): Promise<DemandAssembly[]> {
+  const assemblies = await ctx.db
+    .query("subAssemblies")
+    .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
+    .collect();
+  const out: DemandAssembly[] = [];
+  for (const assembly of assemblies) {
+    const members = await ctx.db
+      .query("subAssemblyMembers")
+      .withIndex("by_parent", (q) => q.eq("subAssemblyId", assembly._id))
+      .collect();
+    out.push({
+      id: assembly._id,
+      spares: assembly.qtySpares,
+      placements: members.map((m) => ({
+        refId: (m.partId ?? m.cotsItemId ?? m.childSubAssemblyId) as string,
+        kind: m.partId ? "part" : m.cotsItemId ? "cots" : "child",
+        quantity: m.quantity,
+      })),
+    });
+  }
+  return out;
+}
+
+/** How many whole units of this sub-assembly the robot needs, spares and all. */
+async function unitsNeeded(
+  ctx: QueryCtx,
+  assembly: Doc<"subAssemblies">,
+): Promise<number> {
+  const demand = rollUpDemand(
+    await subsystemPlacements(ctx, assembly.subsystemId),
+  );
+  return Math.max(1, demand.units.get(assembly._id) ?? 1);
+}
+
+/**
+ * Is this part still listed by a sub-assembly that hasn't been built?
+ * `exclude` is the one being completed right now, whose row hasn't been
+ * written yet when this is asked.
+ */
+async function stillWantedElsewhere(
+  ctx: MutationCtx,
+  partId: Id<"parts">,
+  exclude: Id<"subAssemblies">,
+): Promise<boolean> {
+  const holders = await ctx.db
+    .query("subAssemblyMembers")
+    .withIndex("by_part", (q) => q.eq("partId", partId))
+    .collect();
+  for (const holder of holders) {
+    if (holder.subAssemblyId === exclude) continue;
+    const other = await ctx.db.get(holder.subAssemblyId);
+    if (other && other.completedAt === undefined) return true;
+  }
+  return false;
+}
+
+/**
+ * Parts held back earlier because something else still wanted them. Building
+ * the last holdout is what finally puts them on the robot, and nothing else
+ * would notice that moment.
+ */
+async function releaseSharedParts(
+  ctx: MutationCtx,
+  justBuilt: Id<"subAssemblies">,
+  actor: Awaited<ReturnType<typeof getActor>>,
+  now: number,
+): Promise<number> {
+  const members = await ctx.db
+    .query("subAssemblyMembers")
+    .withIndex("by_parent", (q) => q.eq("subAssemblyId", justBuilt))
+    .collect();
+
+  let moved = 0;
+  for (const member of members) {
+    if (!member.partId) continue;
+    // Every other assembly holding this part, to see if they're all done.
+    const holders = await ctx.db
+      .query("subAssemblyMembers")
+      .withIndex("by_part", (q) => q.eq("partId", member.partId))
+      .collect();
+    let outstanding = false;
+    for (const holder of holders) {
+      const other = await ctx.db.get(holder.subAssemblyId);
+      if (other && other.completedAt === undefined) outstanding = true;
+    }
+    if (outstanding) continue;
+
+    const part = await ctx.db.get(member.partId);
+    if (!part || part.isArchived || part.stage >= ASSEMBLED_STAGE) continue;
+    if (part.stage < READY_STAGE) continue;
+
+    await ctx.db.patch(part._id, {
+      stage: ASSEMBLED_STAGE,
+      stageSince: now,
+      claimedByUserId: undefined,
+      assemblerUserId: actor.userId,
+    });
+    await ctx.db.insert("stageEvents", {
+      partId: part._id,
+      fromStage: part.stage,
+      toStage: ASSEMBLED_STAGE,
+      userId: actor.userId,
+      note: "every sub-assembly using it is built",
+    });
+    moved++;
+  }
+  return moved;
+}
 
 /** Reopen one marked built too early. Leaves its parts on the robot. */
 export const reopen = mutation({

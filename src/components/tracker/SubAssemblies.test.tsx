@@ -56,12 +56,14 @@ const ROOT: AssemblyRow = {
   partIds: ["pt_1"] as Id<"parts">[],
   cotsItemIds: [],
   childIds: [],
+  quantities: [],
 };
 const FRAME: AssemblyRow = {
   assembly: assembly("sa_frame", "27-INT-004", "Frame", { order: 1 }),
   partIds: [],
   cotsItemIds: [],
   childIds: [],
+  quantities: [],
 };
 
 beforeEach(() => {
@@ -125,6 +127,7 @@ describe("the sub-assembly editor", () => {
       partIds: ["pt_1", "pt_2"],
       cotsItemIds: [],
       childIds: ["sa_frame"],
+      quantities: [],
     });
   });
 
@@ -139,6 +142,7 @@ describe("the sub-assembly editor", () => {
       partIds: ["pt_1"],
       cotsItemIds: [],
       childIds: ["sa_frame"],
+      quantities: [],
     });
   });
 
@@ -151,24 +155,26 @@ describe("the sub-assembly editor", () => {
     expect(screen.getByText("holds this one")).toBeInTheDocument();
   });
 
-  it("shows a part another sub-assembly holds rather than offering it twice", async () => {
+  it("says where else a part is used, and still offers it", async () => {
     const user = userEvent.setup();
     renderEditor([
       { ...ROOT, partIds: [] },
       { ...FRAME, partIds: ["pt_1"] as Id<"parts">[] },
     ]);
-    // Editing the root: Frame has pt_1, so it's locked here.
-    expect(screen.getByText("in Frame")).toBeInTheDocument();
-    await user.click(screen.getAllByRole("checkbox")[2]);
+    // Frame uses pt_1. That's worth knowing, not worth forbidding.
+    expect(screen.getByText("also in Frame")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("checkbox")[1]);
     expect(setMembers).toHaveBeenCalledWith({
       id: ROOT.assembly._id,
-      partIds: ["pt_2"],
+      partIds: ["pt_1"],
       cotsItemIds: [],
       childIds: [],
+      quantities: [],
     });
   });
 
-  it("select all takes only what nothing else holds", async () => {
+  it("select all takes everything, shared or not", async () => {
     const user = userEvent.setup();
     renderEditor([
       { ...ROOT, partIds: [] },
@@ -177,10 +183,27 @@ describe("the sub-assembly editor", () => {
     await user.click(screen.getByLabelText("Select every part"));
     expect(setMembers).toHaveBeenCalledWith({
       id: ROOT.assembly._id,
-      partIds: ["pt_2"],
+      partIds: ["pt_1", "pt_2"],
       cotsItemIds: ["c_1"],
       childIds: [],
+      quantities: [],
     });
+  });
+
+  it("records how many of a part this assembly uses", async () => {
+    const user = userEvent.setup();
+    renderEditor([{ ...ROOT, partIds: ["pt_1"] as Id<"parts">[] }]);
+
+    const box = screen.getByLabelText("How many 27-INT-001");
+    await user.clear(box);
+    await user.type(box, "2");
+
+    expect(setMembers).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: ROOT.assembly._id,
+        quantities: [{ refId: "pt_1", quantity: 2 }],
+      }),
+    );
   });
 
   it("the default has no remove control", () => {

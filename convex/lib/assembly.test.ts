@@ -6,6 +6,9 @@ import {
   wouldCycle,
   type AssemblyInput,
   type AssemblyMember,
+  rollUpDemand,
+  findShortfalls,
+  type DemandAssembly,
 } from "./assembly";
 
 function part(label: string, ready: boolean): AssemblyMember {
@@ -213,5 +216,142 @@ describe("drawing links", () => {
     ]) {
       expect(isSafeDrawingUrl(url)).toBe(false);
     }
+  });
+});
+
+describe("multiplying the tree out", () => {
+  // The robot: two roller assemblies, each two end caps and one shaft.
+  const robot: DemandAssembly = {
+    id: "robot",
+    placements: [{ refId: "roller", kind: "child", quantity: 2 }],
+  };
+  const roller: DemandAssembly = {
+    id: "roller",
+    placements: [
+      { refId: "endcap", kind: "part", quantity: 2 },
+      { refId: "shaft", kind: "part" },
+    ],
+  };
+
+  test("a top-level assembly is needed once", () => {
+    expect(rollUpDemand([robot, roller]).units.get("robot")).toBe(1);
+  });
+
+  test("a sub-assembly is needed as many times as it is placed", () => {
+    expect(rollUpDemand([robot, roller]).units.get("roller")).toBe(2);
+  });
+
+  test("parts multiply through both levels", () => {
+    // Two per roller, two rollers: four.
+    const { perRef } = rollUpDemand([robot, roller]);
+    expect(perRef.get("endcap")).toBe(4);
+    expect(perRef.get("shaft")).toBe(2);
+  });
+
+  test("a part shared by two assemblies adds up across both", () => {
+    // The ordinary case this exists for: both rollers use the same end cap.
+    const left: DemandAssembly = {
+      id: "left",
+      placements: [{ refId: "endcap", kind: "part", quantity: 2 }],
+    };
+    const right: DemandAssembly = {
+      id: "right",
+      placements: [{ refId: "endcap", kind: "part", quantity: 2 }],
+    };
+    const top: DemandAssembly = {
+      id: "top",
+      placements: [
+        { refId: "left", kind: "child" },
+        { refId: "right", kind: "child" },
+      ],
+    };
+    expect(rollUpDemand([top, left, right]).perRef.get("endcap")).toBe(4);
+  });
+
+  test("spares are whole extra units, and their parts come with them", () => {
+    const { units, perRef } = rollUpDemand([robot, { ...roller, spares: 1 }]);
+    expect(units.get("roller")).toBe(3);
+    expect(perRef.get("endcap")).toBe(6);
+  });
+
+  test("a missing quantity means one", () => {
+    const { perRef } = rollUpDemand([
+      { id: "a", placements: [{ refId: "bolt", kind: "part" }] },
+    ]);
+    expect(perRef.get("bolt")).toBe(1);
+  });
+
+  test("bought items are counted the same as parts", () => {
+    const { perRef } = rollUpDemand([
+      robot,
+      {
+        ...roller,
+        placements: [{ refId: "bearing", kind: "cots", quantity: 4 }],
+      },
+    ]);
+    expect(perRef.get("bearing")).toBe(8);
+  });
+
+  test("a loop doesn't hang the readout", () => {
+    const a: DemandAssembly = {
+      id: "a",
+      placements: [{ refId: "b", kind: "child" }],
+    };
+    const b: DemandAssembly = {
+      id: "b",
+      placements: [
+        { refId: "a", kind: "child" },
+        { refId: "bolt", kind: "part" },
+      ],
+    };
+    expect(() => rollUpDemand([a, b])).not.toThrow();
+  });
+});
+
+describe("spotting a shortfall", () => {
+  const demand = rollUpDemand([
+    {
+      id: "robot",
+      placements: [{ refId: "roller", kind: "child", quantity: 2 }],
+    },
+    {
+      id: "roller",
+      placements: [{ refId: "endcap", kind: "part", quantity: 2 }],
+    },
+  ]);
+
+  test("says so when the plan doesn't cover the robot", () => {
+    const short = findShortfalls(demand, new Map([["endcap", 2]]));
+    expect(short).toEqual([{ refId: "endcap", needed: 4, planned: 2 }]);
+  });
+
+  test("stays quiet when there are enough", () => {
+    expect(findShortfalls(demand, new Map([["endcap", 4]]))).toEqual([]);
+    expect(findShortfalls(demand, new Map([["endcap", 10]]))).toEqual([]);
+  });
+
+  test("ignores anything the tree doesn't know about", () => {
+    // A part nobody has put in an assembly yet isn't short, it's unplaced.
+    expect(findShortfalls(demand, new Map([["spare-bolt", 0]]))).toEqual([]);
+  });
+
+  test("worst gap first, so the lead reads the real problem", () => {
+    const wide = rollUpDemand([
+      {
+        id: "robot",
+        placements: [
+          { refId: "a", kind: "part", quantity: 10 },
+          { refId: "b", kind: "part", quantity: 3 },
+        ],
+      },
+    ]);
+    const short = findShortfalls(
+      wide,
+      new Map([
+        ["a", 9],
+        ["b", 0],
+      ]),
+    );
+    expect(short.map((s) => s.refId)).toEqual(["b", "a"]);
   });
 });
