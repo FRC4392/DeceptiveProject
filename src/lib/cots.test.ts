@@ -21,12 +21,20 @@ describe("what a bought item's chip says", () => {
     );
   });
 
-  test("an expected date wins, since that's the one worth chasing", () => {
+  test("says both when both are known", () => {
+    // How long it's been on order is what tells you to chase it, and the
+    // expected date alone doesn't answer that.
     expect(
       cotsStatusLabel(
         item({ status: "ordered", orderedAt: MARCH, eta: APRIL }),
       ),
-    ).toBe("Expected · Apr 9");
+    ).toBe("Ordered · Mar 3 · expected Apr 9");
+  });
+
+  test("an expected date with no order date still reads", () => {
+    expect(cotsStatusLabel(item({ status: "ordered", eta: APRIL }))).toBe(
+      "Ordered · expected Apr 9",
+    );
   });
 
   test("once here it says when it landed", () => {

@@ -37,11 +37,13 @@ export function cotsStatusLabel(item: Doc<"cotsItems">): string {
       : "Arrived";
   }
   if (item.status === "ordered") {
-    // An expected date beats the order date: it's the one that says whether
-    // to start chasing it.
-    if (item.eta) return `Expected · ${shortDate(item.eta)}`;
-    if (item.orderedAt) return `Ordered · ${shortDate(item.orderedAt)}`;
-    return "Ordered";
+    // Both, when both are known. How long it has been on order is the thing
+    // that tells you to start chasing it, and an expected date only answers
+    // that if you also remember when it was placed.
+    const ordered = item.orderedAt
+      ? `Ordered · ${shortDate(item.orderedAt)}`
+      : "Ordered";
+    return item.eta ? `${ordered} · expected ${shortDate(item.eta)}` : ordered;
   }
   return "Needed";
 }
