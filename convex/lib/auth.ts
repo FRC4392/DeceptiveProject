@@ -6,6 +6,7 @@ import {
   type Actor,
   type Role,
 } from "./stages";
+import { activeSeason } from "./season";
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -63,9 +64,17 @@ export async function getActor(ctx: Ctx): Promise<Actor & { userId: string }> {
     .withIndex("authId", (q) => q.eq("authId", userId))
     .unique();
 
-  // Subsystems are a small, mentor-managed set, so a scan is cheaper than an
-  // index that exists only for this lookup.
-  const subsystems = await ctx.db.query("subsystems").collect();
+  // Scoped to the active season on purpose: it keeps this list in step with
+  // the frontend's useActor, which builds it from the season-scoped
+  // subsystems.list, and it stops subsystems retired with an old season from
+  // lingering in it once a team has a few years of history.
+  const season = await activeSeason(ctx);
+  const subsystems = season
+    ? await ctx.db
+        .query("subsystems")
+        .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+        .collect()
+    : [];
 
   return {
     userId,

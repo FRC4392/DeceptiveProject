@@ -273,7 +273,7 @@ convex/
   parts.ts           the tracker: numbers, stage moves, claiming, problems
   subsystems.ts      subsystems, progress tiles, assembly steps
   shop.ts            machines, process types, roles
-  seasons.ts         seasons + first-run setup
+  seasons.ts         seasons: first-run setup, adding a year, switching year
   cots.ts            bought items
   intake.ts          the "New from Onshape" queue and the manual ways in
   settings.ts        app settings and the API budget meter
@@ -289,7 +289,7 @@ convex/
   users.ts           user roster queries
   todos.ts           the season to-do list and its tags
   dashboard.ts       aggregate dashboard/countdown stats
-  competitions.ts    competition dates
+  competitions.ts    competition dates, per season
   inventory.ts       stocked-inventory items
   github.ts          GitHub issue/PR queries, mutations, repo mapping
 src/
@@ -323,9 +323,55 @@ teams have, and the processes that decide which stages a part skips —
 all editable afterwards. Then, on the **People** tab, give the design leads the
 `lead` role.
 
+That is the first year only. Later years are added on the **Season** tab and
+start with Drivetrain alone — see [A new year](#a-new-year).
+
 The app doesn't track who is approved to run which machine; a machine marked
 "a mentor has to be in the room" still shows that warning on the part, but
 tool approval itself is handled outside the tracker.
+
+## A new year
+
+Each year the team tracks is a **season**, and everything that belongs to one
+robot hangs off it: the subsystems, their part numbers, the parts, the bought
+items, the to-dos and the events.
+
+A mentor adds next year on **Settings → Season**. It starts with one subsystem,
+Drivetrain, and its `{YY}-DRV-000` assembly; the rest go on the Subsystems tab.
+Adding a season does not switch to it, so next year's season can be created in
+November without moving the team off the robot they are still building.
+
+Two seasons may not share a year. The year is half of every part number, so a
+duplicate would mean two different things both answering to `27-DRV-000`.
+
+**Switching is team-wide.** _Make this the current season_ moves every screen,
+for everyone — there is no per-person view of an old year. It asks twice,
+because a part created while an old season is current gets that old year's
+number: switch back to 2027, press _Get a part number_, and you get a 2027
+number. The app bar says **not the newest season** whenever the team is working
+in a year it has since moved past.
+
+Events belong to a season too, so last year's regionals stop counting down the
+moment you move on. Machines, process types, to-do tags, inventory, issues and
+the roster are team-wide and outlive a season — a bandsaw doesn't change in
+April.
+
+There is no way to delete a season, on purpose. Its parts, assemblies, numbers,
+to-dos and bought items are the record of that robot, and looking back is the
+point.
+
+### One-off: stamping old events
+
+Events added before they were season-scoped have no season, so they show up
+nowhere. Once, after deploying that change:
+
+```
+npx convex run competitions:backfillSeason
+```
+
+It stamps them with whatever season is current, reports how many it touched,
+and is safe to run twice. Until it runs, the Events tab and the countdown read
+empty.
 
 ## Sub-assemblies
 
@@ -507,7 +553,9 @@ finish one.
 
 One page, mentors only, at **Settings** in the sidebar. Tabs for the things
 the app owns — Subsystems, Shop (processes and machines), To-dos (the tag
-list), People, Season and Events — plus **Connections**, which is only the two
+list), People, Season (rename this one, add next year, switch which year the
+team is in) and Events (this season's calendar) — plus **Connections**, which
+is only the two
 outside services: Onshape and GitHub. Those two keep their own pages, reached
 from there.
 

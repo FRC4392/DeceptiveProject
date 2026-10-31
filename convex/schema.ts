@@ -69,11 +69,18 @@ export default defineSchema({
   }).index("by_todo", ["todoId"]),
 
   // Competition dates power the dashboard countdown and the "next event" card
-  // in the tracker's sidebar. Mentor-managed.
+  // in the tracker's sidebar. Mentor-managed, and scoped to a season — a 2027
+  // regional has no business counting down on the 2028 dashboard.
   competitions: defineTable({
+    // Missing on rows that predate season-scoped events;
+    // competitions:backfillSeason stamps those with whatever season was
+    // current when it ran.
+    seasonId: v.optional(v.id("seasons")),
     name: v.string(),
     date: v.number(),
-  }).index("by_date", ["date"]),
+  })
+    .index("by_season_and_date", ["seasonId", "date"])
+    .index("by_date", ["date"]),
 
   // ---- Part tracker ----
 

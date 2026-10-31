@@ -119,11 +119,17 @@ function Panel({
   );
 }
 
+/** Next season's year and name, the way a mentor would most likely type them. */
+function nextSeasonDefaults() {
+  const year = String(new Date().getFullYear() + 1).slice(-2);
+  return { year, name: `20${year} robot` };
+}
+
 function SeasonSetup() {
   const seed = useMutation(api.seasons.seedDefaults);
-  const thisYear = String(new Date().getFullYear() + 1).slice(-2);
-  const [year, setYear] = useState(thisYear);
-  const [name, setName] = useState(`20${thisYear} robot`);
+  const defaults = nextSeasonDefaults();
+  const [year, setYear] = useState(defaults.year);
+  const [name, setName] = useState(defaults.name);
   const [error, setError] = useState<string | null>(null);
 
   return (
@@ -170,13 +176,23 @@ function SeasonSetup() {
 }
 
 function SeasonSettings({ season }: { season: Doc<"seasons"> }) {
+  return (
+    <>
+      <ThisSeasonPanel season={season} />
+      <SeasonsPanel season={season} />
+    </>
+  );
+}
+
+function ThisSeasonPanel({ season }: { season: Doc<"seasons"> }) {
   const update = useMutation(api.seasons.update);
   const [year, setYear] = useState(season.year);
   const [name, setName] = useState(season.name);
+  const [error, setError] = useState<string | null>(null);
 
   return (
     <Panel
-      title="Season"
+      title="This season"
       description="The two digits that open every part number, and what this robot is called."
     >
       <div className="grid max-w-md gap-4">
@@ -199,15 +215,137 @@ function SeasonSettings({ season }: { season: Doc<"seasons"> }) {
         </div>
         <Button
           className="justify-self-start"
-          onClick={() => void update({ id: season._id, year, name })}
+          onClick={() => {
+            setError(null);
+            update({ id: season._id, year, name }).catch((err: unknown) =>
+              setError(err instanceof Error ? err.message : "No luck."),
+            );
+          }}
         >
           Save
         </Button>
+        {error && <p className="text-sm text-danger">{error}</p>}
         <p className="text-xs text-muted-foreground">
           Changing the year doesn't renumber parts that already have numbers — a
           number is never reused.
         </p>
       </div>
+    </Panel>
+  );
+}
+
+/**
+ * Every year the team has tracked, and the way between them. Switching is
+ * team-wide, so it asks twice rather than acting on one press.
+ */
+function SeasonsPanel({ season }: { season: Doc<"seasons"> }) {
+  const seasons = useQuery(api.seasons.list, {});
+  const create = useMutation(api.seasons.create);
+  const setActive = useMutation(api.seasons.setActive);
+  const defaults = nextSeasonDefaults();
+  const [year, setYear] = useState(defaults.year);
+  const [name, setName] = useState(defaults.name);
+  const [confirmId, setConfirmId] = useState<Id<"seasons"> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function run(action: Promise<unknown>) {
+    setError(null);
+    action.catch((err: unknown) =>
+      setError(err instanceof Error ? err.message : "No luck."),
+    );
+  }
+
+  return (
+    <Panel
+      title="Seasons"
+      description="Switching moves every screen, for everyone. New part numbers get the year of whichever season is current, so switching back to an old year and adding a part will number it into that year."
+    >
+      <div className="space-y-3">
+        {seasons === undefined ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          seasons.map((s) => (
+            <div
+              key={s._id}
+              className="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+            >
+              <span className="font-mono text-sm font-semibold">{s.year}</span>
+              <span className="grow font-medium">{s.name}</span>
+              {s._id === season._id ? (
+                <span className="text-sm text-muted-foreground">Current</span>
+              ) : confirmId === s._id ? (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setConfirmId(null);
+                      run(setActive({ id: s._id }));
+                    }}
+                  >
+                    Yes, switch to {s.year}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmId(null)}
+                  >
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmId(s._id)}
+                >
+                  Make this the current season
+                </Button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          run(create({ year, name, makeActive: false }));
+        }}
+        className="mt-4 flex flex-wrap items-end gap-3 border-t pt-4"
+      >
+        <div className="grid gap-2">
+          <Label htmlFor="ns-year">Year</Label>
+          <Input
+            id="ns-year"
+            value={year}
+            maxLength={2}
+            className="w-24 font-mono"
+            onChange={(e) => setYear(e.target.value)}
+          />
+        </div>
+        <div className="grid grow gap-2">
+          <Label htmlFor="ns-name">Name</Label>
+          <Input
+            id="ns-name"
+            value={name}
+            placeholder="2028 robot"
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <Button
+          type="submit"
+          disabled={year.trim().length === 0 || name.trim().length === 0}
+        >
+          Add season
+        </Button>
+      </form>
+      <p className="mt-2 text-xs text-muted-foreground">
+        A new season starts with one subsystem, Drivetrain, and its{" "}
+        <span className="font-mono">{year || "28"}-DRV-000</span> assembly — add
+        the rest on the Subsystems tab once you've switched to it. Adding a
+        season doesn't switch the team onto it.
+      </p>
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
     </Panel>
   );
 }

@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireMentor } from "./lib/auth";
@@ -11,6 +11,46 @@ const vSeason = v.object({
   name: v.string(),
   active: v.boolean(),
 });
+
+/**
+ * A season's year is half of every part number, so two seasons may not share
+ * one: {YY}-{SUB}-{NNN} would collide, and the partNumberKey lookups in
+ * lib/numbering.ts use `.unique()`, which throws when two rows match. Pass
+ * `except` when renaming, so a season keeps the right to its own year.
+ */
+async function assertYearFree(
+  ctx: MutationCtx,
+  year: string,
+  except?: Id<"seasons">,
+): Promise<void> {
+  const seasons = await ctx.db.query("seasons").collect();
+  if (seasons.some((s) => s.year === year && s._id !== except)) {
+    throw new Error(`Season ${year} already exists.`);
+  }
+}
+
+/**
+ * A subsystem and the {YY}-{SUB}-000 assembly it is born with. Both the
+ * first-run seeder and "add a season" come through here, so there is one way
+ * a subsystem comes into being.
+ */
+async function addSubsystem(
+  ctx: MutationCtx,
+  season: Doc<"seasons">,
+  code: string,
+  name: string,
+  order: number,
+): Promise<void> {
+  const subsystemId = await ctx.db.insert("subsystems", {
+    seasonId: season._id,
+    code,
+    name,
+    order,
+  });
+  // ensureDefaultSubAssembly wants the row, not the id.
+  const subsystem = await ctx.db.get(subsystemId);
+  if (subsystem) await ensureDefaultSubAssembly(ctx, season, subsystem);
+}
 
 export const list = query({
   args: {},
@@ -31,6 +71,12 @@ export const active = query({
   },
 });
 
+/**
+ * Add a year. It starts with one subsystem, Drivetrain, and its
+ * {YY}-DRV-000 assembly — the rest go on the Subsystems tab. Adding a season
+ * doesn't switch to it unless asked: starting next year in November shouldn't
+ * move the team off the robot they're still building.
+ */
 export const create = mutation({
   args: {
     year: v.string(),
@@ -40,6 +86,8 @@ export const create = mutation({
   returns: v.id("seasons"),
   handler: async (ctx, { year, name, makeActive }) => {
     await requireMentor(ctx);
+    const trimmedYear = year.trim();
+    await assertYearFree(ctx, trimmedYear);
     const existing = await ctx.db.query("seasons").collect();
     const active = makeActive ?? existing.length === 0;
     if (active) {
@@ -47,11 +95,16 @@ export const create = mutation({
         if (s.active) await ctx.db.patch(s._id, { active: false });
       }
     }
-    return ctx.db.insert("seasons", {
-      year: year.trim(),
+    const seasonId = await ctx.db.insert("seasons", {
+      year: trimmedYear,
       name: name.trim(),
       active,
     });
+    // The number comes from the season it's handed, never the active one, so
+    // adding 28 while 27 is current still gives 28-DRV-000.
+    const season = await ctx.db.get(seasonId);
+    if (season) await addSubsystem(ctx, season, "DRV", "Drivetrain", 0);
+    return seasonId;
   },
 });
 
@@ -65,7 +118,11 @@ export const update = mutation({
   handler: async (ctx, { id, year, name }) => {
     await requireMentor(ctx);
     const patch: Partial<Doc<"seasons">> = {};
-    if (year !== undefined) patch.year = year.trim();
+    if (year !== undefined) {
+      const trimmed = year.trim();
+      await assertYearFree(ctx, trimmed, id);
+      patch.year = trimmed;
+    }
     if (name !== undefined) patch.name = name.trim();
     await ctx.db.patch(id, patch);
     return null;
@@ -123,29 +180,24 @@ export const seedDefaults = mutation({
   returns: v.object({ seasonId: v.id("seasons") }),
   handler: async (ctx, { year, name }) => {
     await requireMentor(ctx);
+    const trimmedYear = year.trim();
+    await assertYearFree(ctx, trimmedYear);
 
     const seasons = await ctx.db.query("seasons").collect();
     for (const s of seasons) {
       if (s.active) await ctx.db.patch(s._id, { active: false });
     }
     const seasonId = await ctx.db.insert("seasons", {
-      year: year.trim(),
+      year: trimmedYear,
       name: name.trim(),
       active: true,
     });
 
     let order = 0;
     const season = await ctx.db.get(seasonId);
-    for (const sub of DEFAULT_SUBSYSTEMS) {
-      const subsystemId = await ctx.db.insert("subsystems", {
-        seasonId,
-        ...sub,
-        order: order++,
-      });
-      const subsystem = await ctx.db.get(subsystemId);
-      // Every subsystem is born with its {YY}-{SUB}-000 assembly.
-      if (season && subsystem) {
-        await ensureDefaultSubAssembly(ctx, season, subsystem);
+    if (season) {
+      for (const sub of DEFAULT_SUBSYSTEMS) {
+        await addSubsystem(ctx, season, sub.code, sub.name, order++);
       }
     }
 

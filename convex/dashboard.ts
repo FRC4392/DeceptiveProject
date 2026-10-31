@@ -145,10 +145,14 @@ export const summary = query({
           .take(SCAN_LIMIT)
       : [];
 
-    const upcoming = await ctx.db
-      .query("competitions")
-      .withIndex("by_date", (q) => q.gte("date", Date.now()))
-      .take(1);
+    const upcoming = season
+      ? await ctx.db
+          .query("competitions")
+          .withIndex("by_season_and_date", (q) =>
+            q.eq("seasonId", season._id).gte("date", Date.now()),
+          )
+          .take(1)
+      : [];
 
     return {
       outstanding: {

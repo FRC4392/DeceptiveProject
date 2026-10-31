@@ -39,6 +39,10 @@ The code is written and tested. None of it runs until these three happen.
       mentions them; they're left over from the previous auth system.
 - [ ] **Set `GITHUB_TOKEN`** if you want issue commenting and bulk import.
       Issue sync reads fine without it.
+- [ ] **Stamp the old events with a season**, with
+      `npx convex run competitions:backfillSeason`. Events are per-season now;
+      any added before that change have no season and show up nowhere until
+      this runs. It reports what it touched and is safe to run twice.
 - [ ] **Push `new-tracker`.** Thirteen commits, no remote branch, no PR.
 
 ## From the handoff, not built

@@ -156,10 +156,15 @@ export const search = query({
 
     const key = normalizePartNumber(trimmed);
     if (key.length > 0) {
-      const exact = await ctx.db
-        .query("parts")
-        .withIndex("by_partNumberKey", (q) => q.eq("partNumberKey", key))
-        .take(5);
+      const exact = (
+        await ctx.db
+          .query("parts")
+          .withIndex("by_partNumberKey", (q) => q.eq("partNumberKey", key))
+          .take(5)
+      )
+        // That index spans every season. The year prefix normally keeps them
+        // apart, but don't lean on that to decide what this season can see.
+        .filter((part) => part.seasonId === season._id);
       if (exact.length > 0) return exact;
     }
 

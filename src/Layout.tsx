@@ -19,8 +19,15 @@ export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const season = useQuery(api.seasons.active, {});
+  const seasons = useQuery(api.seasons.list, {});
   const pending = useQuery(api.intake.pendingCount, isLead ? {} : "skip");
   const nextEvent = useQuery(api.competitions.next, {});
+
+  // seasons.list comes back newest year first, so anything else means the team
+  // is working in a year it has since moved past — worth saying out loud,
+  // because switching is team-wide and easy to forget you did.
+  const newest = seasons?.[0];
+  const notNewest = !!season && !!newest && newest._id !== season._id;
 
   const sections: NavSection[] = [
     // Dashboard sits on its own above the first heading.
@@ -130,6 +137,11 @@ export function AppShell() {
                   {season.name}
                 </span>{" "}
                 · season {season.year}
+                {notNewest && (
+                  <span className="ml-2 rounded-md bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">
+                    not the newest season
+                  </span>
+                )}
               </p>
             )}
             <div className="ml-auto flex items-center gap-3">

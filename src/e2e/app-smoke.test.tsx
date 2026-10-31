@@ -11,6 +11,17 @@ const clerkMock = vi.hoisted(() => ({
   signInProps: [] as Array<Record<string, unknown>>,
 }));
 
+const seasonMock = vi.hoisted(() => {
+  const active = {
+    _id: "season_1",
+    _creationTime: 0,
+    year: "27",
+    name: "2027 robot",
+    active: true,
+  };
+  return { active, list: [active] as (typeof active)[] };
+});
+
 vi.mock("../../convex/_generated/api", () => ({
   api: {
     auth: {
@@ -65,7 +76,7 @@ vi.mock("../../convex/_generated/api", () => ({
       headsUp: "parts.headsUp",
       search: "parts.search",
     },
-    seasons: { active: "seasons.active" },
+    seasons: { active: "seasons.active", list: "seasons.list" },
     settings: { budget: "settings.budget" },
     shop: {
       listMachines: "shop.listMachines",
@@ -140,13 +151,12 @@ vi.mock("convex/react", () => ({
       case "subsystems.progress":
         return [];
       case "seasons.active":
-        return {
-          _id: "season_1",
-          _creationTime: 0,
-          year: "27",
-          name: "2027 robot",
-          active: true,
-        };
+        return seasonMock.active;
+      // Needed, not optional: without this case the query reads as still
+      // loading and the app bar's "not the newest season" badge never renders
+      // either way, so the branch would go untested while the suite passed.
+      case "seasons.list":
+        return seasonMock.list;
       case "competitions.next":
         return null;
       case "intake.pendingCount":
@@ -230,10 +240,29 @@ describe("app smoke routes", () => {
     clerkMock.isLoaded = true;
     clerkMock.isSignedIn = true;
     clerkMock.signInProps = [];
+    seasonMock.list = [seasonMock.active];
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("names the season in the app bar, and says nothing when it's the newest", () => {
+    renderAt("/dashboard");
+
+    expect(screen.getByText("2027 robot")).toBeInTheDocument();
+    expect(screen.queryByText(/not the newest season/i)).toBeNull();
+  });
+
+  it("warns when the team is working in a year it has moved past", () => {
+    seasonMock.list = [
+      { ...seasonMock.active, _id: "season_2", year: "28", name: "2028 robot" },
+      seasonMock.active,
+    ];
+
+    renderAt("/dashboard");
+
+    expect(screen.getByText(/not the newest season/i)).toBeInTheDocument();
   });
 
   it("loads the authenticated dashboard shell", () => {

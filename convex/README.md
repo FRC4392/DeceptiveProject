@@ -10,7 +10,8 @@ query, auth, and testing patterns for this repo.
 ## Shape
 
 - `schema.ts` defines the app tables: synced Clerk `users`, projects, boards,
-  tasks/comments/attachments, competitions, parts/QC/inventory, Onshape state,
+  tasks/comments/attachments, competitions (per season), parts/QC/inventory,
+  Onshape state,
   and GitHub issues/comments/repo mappings.
 - `auth.ts` and `auth.config.ts` wire Clerk into Convex, store the current
   Clerk user, verify Clerk webhooks, and sync the Clerk roster into `users`.
