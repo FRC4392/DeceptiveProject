@@ -545,3 +545,56 @@ describe("a bought item a release mentioned", () => {
     expect(row?.status).toBe("processed");
   });
 });
+
+describe("bought items that were already on the board", () => {
+  test("an item nothing imported is matchable, with no migration", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    // A row exactly as prod holds them: typed in by hand, long before any of
+    // this existed. The match key is derived at match time, so there is
+    // nothing to stamp onto it first.
+    await t.run(async (ctx) => {
+      const season = (await ctx.db.query("seasons").first())!;
+      await ctx.db.insert("cotsItems", {
+        seasonId: season._id,
+        subsystemId: intake._id,
+        name: "Compliant wheel",
+        qtyNeeded: 4,
+        status: "needed",
+        vendorPartNumber: "AM-3104",
+      });
+    });
+
+    await mentor.mutation(api.intake.importCsv, {
+      label: "BOM",
+      csv:
+        "Item,Quantity,Name,Vendor,Part Number,Revision\n" +
+        "1,4,Compliant wheel,AndyMark,am-3104,B",
+    });
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.lines[0].kind).toBe("matched");
+    expect(listed.lines[0].target).toBe("cotsItem");
+    // The line resolves to the item too, not just to "matched" — the two used
+    // to be able to disagree, which left a line nothing could decide.
+    expect(listed.lines[0].cotsItemId).toBeDefined();
+  });
+
+  test("one with no vendor number at all is simply not matched", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Compliant wheel",
+      qtyNeeded: 4,
+    });
+
+    await mentor.mutation(api.intake.importCsv, {
+      label: "BOM",
+      csv:
+        "Item,Quantity,Name,Vendor,Part Number,Revision\n" +
+        "1,4,Compliant wheel,AndyMark,am-3104,B",
+    });
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.lines[0].kind).toBe("unknown");
+  });
+});

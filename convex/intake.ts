@@ -626,9 +626,6 @@ export const createCotsItemFromLine = mutation({
       status: "needed",
       vendor: args.vendor?.trim() || line.vendor,
       vendorPartNumber,
-      vendorPartNumberKey: vendorPartNumber
-        ? normalizePartNumber(vendorPartNumber)
-        : undefined,
       cost: args.cost,
       onshapeDocumentId: line.onshapeDocumentId,
       onshapeElementId: line.onshapeElementId,

@@ -244,16 +244,14 @@ export default defineSchema({
     orderedAt: v.optional(v.number()),
     arrivedAt: v.optional(v.number()),
     cost: v.optional(v.number()),
-    // `normalizePartNumber(vendorPartNumber)`, so a release naming the
-    // vendor's own number finds this item instead of offering to create a
-    // second one. Deliberately derived from the number a human already types
-    // on the Ordering board rather than from a field only the importer sets:
-    // that way the items the team entered by hand are matchable too.
+    // `vendorPartNumber` is also how a release recognises this item: the
+    // number is normalized at match time rather than stored twice, so the
+    // items the team typed in by hand are matchable with no backfill, and
+    // there is no second field to keep in step. Unlike `parts.partNumberKey`
+    // it is nobody's guarantee of uniqueness — the same gearbox is
+    // legitimately two rows under two subsystems — so a lookup takes what it
+    // finds rather than expecting one.
     //
-    // Unlike `parts.partNumberKey` this is nobody's guarantee of uniqueness.
-    // The same gearbox is legitimately two rows under two subsystems, so a
-    // lookup here takes what it finds rather than expecting one.
-    vendorPartNumberKey: v.optional(v.string()),
     // Where it came from in CAD, when it came from CAD at all. A bought item
     // somebody typed onto the Ordering board has none of this.
     onshapeDocumentId: v.optional(v.string()),
@@ -265,7 +263,6 @@ export default defineSchema({
   })
     .index("by_subsystem", ["subsystemId"])
     .index("by_season", ["seasonId"])
-    .index("by_vendorPartNumberKey", ["vendorPartNumberKey"])
     .index("by_onshapeElementId", ["onshapeElementId"]),
 
   // A sub-assembly: a named, numbered thing that goes together, mirroring the

@@ -1,7 +1,7 @@
 # What's left
 
 Written 1 November 2026, on the `new-tracker` branch, which is pushed. Build,
-lint and all 491 tests pass; the working tree is clean. Everything below is
+lint and all 493 tests pass; the working tree is clean. Everything below is
 either configuration nobody has done yet, a rough edge we've decided to live
 with, or a decision worth taking deliberately.
 
@@ -69,10 +69,9 @@ ignored harmlessly, since unknown columns are skipped by position.
       real assembly sync to see whether that is a useful Ordering list or more
       rows than a lead wants to clear. If it's too much, the tag is already on
       the line — `standardContent` — so filtering is a one-line change.
-- [ ] **Prod needs the schema push.** `cotsItems` gained
-      `vendorPartNumberKey` and the CAD-link fields, and
-      `releaseIntakeLines` gained `target: "cotsItem"`, `cotsItemId`,
-      `vendor`, `standardContent` and `onshapePartId`. All optional, so
-      nothing needs backfilling — but existing hand-entered bought items only
-      become matchable once someone edits them and their vendor number is
-      re-saved, or has one typed in for the first time.
+- [ ] **Prod needs the schema push**, but no backfill for this. `cotsItems`
+      gained the CAD-link fields and `releaseIntakeLines` gained
+      `target: "cotsItem"`, `cotsItemId`, `vendor`, `standardContent` and
+      `onshapePartId` — all optional. A bought item is matched on the vendor
+      number itself, normalized at match time, so the items the team typed in
+      by hand are recognised as they stand.

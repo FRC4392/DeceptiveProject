@@ -57,9 +57,19 @@ export async function loadKnown(
         .withIndex("by_season", (q) => q.eq("seasonId", args.seasonId))
         .take(5000);
 
+  // One expression feeds both the set the classifier matches against and the
+  // map the insert loops resolve through, so the two can't disagree about
+  // whether a number is known. An earlier version kept a normalized key on
+  // the row and read that here, which meant a row written before the field
+  // existed classified as matched and then resolved to nothing — a line
+  // nothing could decide. Deriving it is also why there is no backfill.
+  const withNumber = boughtRows.filter(
+    (i): i is Doc<"cotsItems"> & { vendorPartNumber: string } =>
+      Boolean(i.vendorPartNumber?.trim()),
+  );
   const boughtByNumber = new Map<string, Doc<"cotsItems">>();
-  for (const item of boughtRows) {
-    const key = item.vendorPartNumberKey;
+  for (const item of withNumber) {
+    const key = normalizePartNumber(item.vendorPartNumber);
     if (key && !boughtByNumber.has(key)) boughtByNumber.set(key, item);
   }
 
@@ -71,13 +81,11 @@ export async function loadKnown(
       revision: p.revision,
     })),
     byNumber: new Map(live.map((p) => [normalizePartNumber(p.partNumber), p])),
-    bought: boughtRows
-      .filter((i) => i.vendorPartNumber)
-      .map((i) => ({
-        vendorPartNumber: i.vendorPartNumber!,
-        name: i.name,
-        status: i.status,
-      })),
+    bought: withNumber.map((i) => ({
+      vendorPartNumber: i.vendorPartNumber,
+      name: i.name,
+      status: i.status,
+    })),
     boughtByNumber,
   };
 }
