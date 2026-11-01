@@ -15,12 +15,16 @@ README under the release webhook.
 ## Housekeeping on the deployment
 
 - [x] **`GITHUB_TOKEN` is set**, so issue commenting and bulk import work.
-- [ ] **Open a PR for `new-tracker`.** The branch is pushed; nothing has been
-      merged to `main` yet.
-- [ ] **Deploy to production**, which is still on the old schema. It needs
-      the same two steps dev had: push, then
-      `npx convex run competitions:backfillSeason` — the backfill is
-      per-deployment, and running it on dev did nothing for prod.
+- [x] **Merged to `main`** as `1ca6305`, and production is running it.
+- [ ] **Finish the production first run** — the season, the Clerk roster, the
+      Onshape connection, the release webhook and the document mapping are all
+      still to do, in the app. `DEPLOY-PROD.md` has the order and the reasons.
+- [ ] **Set the Clerk session token template** on the production instance. It
+      needs the email, name and role claims, or every new sign-in lands as a
+      nameless student. The three existing mentors are unaffected.
+- [ ] **Delete eight orphaned tables** on production, left from the old
+      schema. One `boards` row is junk from a webhook that fired against the
+      old code mid-deploy; the rest are empty.
 
 ## Decided to live with
 
