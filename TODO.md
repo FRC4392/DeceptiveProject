@@ -1,9 +1,9 @@
 # What's left
 
 Written 1 November 2026, on the `new-tracker` branch, which is pushed. Build,
-lint and all 459 tests pass; the working tree is clean. Everything below is either
-configuration nobody has done yet, a rough edge worth knowing about, or a
-question whose answer would change the code.
+lint and all 459 tests pass; the working tree is clean. Everything below is
+either configuration nobody has done yet, a rough edge we've decided to live
+with, or a decision worth taking deliberately.
 
 ## Blocking: nothing, now
 
@@ -14,10 +14,7 @@ README under the release webhook.
 
 ## Housekeeping on the deployment
 
-- [ ] **Set `GITHUB_TOKEN`** if you want issue commenting and bulk import.
-      Issue sync reads fine without it. A classic PAT with `repo` scope, or a
-      fine-grained one with Issues: read and write on the repos you sync:
-      `npx convex env set GITHUB_TOKEN <token>`.
+- [x] **`GITHUB_TOKEN` is set**, so issue commenting and bulk import work.
 - [ ] **Open a PR for `new-tracker`.** The branch is pushed; nothing has been
       merged to `main` yet.
 - [ ] **Deploy to production**, which is still on the old schema. It needs
@@ -25,36 +22,46 @@ README under the release webhook.
       `npx convex run competitions:backfillSeason` — the backfill is
       per-deployment, and running it on dev did nothing for prod.
 
-## Rough edges
+## Decided to live with
 
-- [ ] **682 kB JS bundle**, past Vite's 500 kB warning, and untouched by the
-      asset work. Essentially `convex` + `@clerk/react` + `react-dom` +
-      Radix, with no chunking config at all. The two obvious moves are
-      `manualChunks` for the vendors and lazy-loading the routes most people
-      never open — `LoginPage` is the strongest candidate, being the only
-      consumer of Clerk's `SignIn` and sitting outside `RequireAuth`, so
-      every signed-in user downloads a sign-in screen they never render.
-      Note `src/e2e/app-smoke.test.tsx` mounts routes synchronously, so
-      `Suspense` boundaries would need those cases reworked.
+- [x] **682 kB JS bundle**, past Vite's 500 kB warning. Accepted as-is: it
+      gzips to 197 kB, it's `convex` + `@clerk/react` + `react-dom` + Radix
+      rather than anything of ours, and the pit crew loads the app once on a
+      field laptop. If it ever does need to come down, the two moves are
+      `manualChunks` for the vendors and lazy-loading `LoginPage` — the only
+      consumer of Clerk's `SignIn`, sitting outside `RequireAuth`, so every
+      signed-in user downloads a sign-in screen they never render. Note
+      `src/e2e/app-smoke.test.tsx` mounts routes synchronously, so `Suspense`
+      boundaries would need those cases reworked.
 
-## The BOM CSV, now that we've seen one
+## The BOM CSV
 
-The team's export heads `Item, Quantity, Name, Vendor, Part Number`. Three of
-those map (quantity, name, partNumber); `Item` and `Vendor` are ignored
-harmlessly, since unknown columns are skipped by position. So it imports. Two
-things that follow:
+The export heads `Item, Quantity, Name, Vendor, Part Number, Revision`.
+Quantity, name, part number and revision all map; `Item` and `Vendor` are
+ignored harmlessly, since unknown columns are skipped by position.
 
-- [ ] **No Revision column, so no rework detection.** Every imported line
-      arrives with no revision, which means the tracker can't tell a
-      re-release from a first one — a part already made never reads as
-      _changed_, and the Fix them / Remake all / They're fine as-is decision
-      never appears. Adding a `Revision` or `Rev` column to the export is
-      enough; both already map, no code change.
-- [ ] **A CSV can't create a bought item.** The `Vendor` column implies the
-      export mixes made and bought, but `parseBomCsv` only ever produces part
-      lines — there is no route from a CSV to the Ordering board, and the
-      vendor name is dropped. A bought row imports as an unknown part and,
-      once accepted, becomes a `parts` row with a tracker number rather than
-      a `cotsItems` row. Worth deciding whether the importer should learn
-      about bought items or whether those rows should be filtered out of the
-      export.
+- [x] **Revision is in the export**, so rework detection works: a
+      re-released part now reads as _changed_ and the Fix them / Remake all /
+      They're fine as-is decision appears. `revision` and `rev` both map, so
+      this needed no code change.
+
+## The one real decision left
+
+- [ ] **Nothing can import a bought item** — not the CSV, not the panel sync,
+      not the release webhook. `cotsItems` rows are only ever inserted by
+      `convex/cots.ts`, from the Ordering board, by hand. Every import path
+      ends in a `parts` row with a tracker number, because the release path
+      classifies each item as assembly-or-part and has no third branch, and
+      the CSV's `Vendor` column is dropped on the floor.
+
+      In practice this mostly doesn't bite, for a reason worth knowing: a
+      fastener inserted from Onshape's standard content library isn't an
+      element in the document, so it has nothing to release and never reaches
+      a release package at all. What does come through as a part is a vendor
+      component someone imported into their own Part Studio — a gearbox, a
+      bearing block — if they put it in the release.
+
+      So the choice is whether bought items should stay hand-entered on the
+      Ordering board (fine, and what happens today), or whether the importers
+      should learn to route a vendor row to `cotsItems`. Worth deciding
+      before the team builds a habit around the wrong one.
