@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { errorText } from "@/lib/errors";
 
 type Priority = Doc<"todos">["priority"];
 
@@ -80,7 +81,7 @@ export function TodoFormDialog({
       }
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
+      setError(errorText(err, "That didn't work."));
     } finally {
       setSaving(false);
     }

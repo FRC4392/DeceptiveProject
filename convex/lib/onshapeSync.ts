@@ -9,6 +9,7 @@ import {
 } from "./onshapeAssembly";
 import { onshapeFetch } from "./onshapeAuth";
 import type { CallPurpose } from "./budget";
+import { text } from "./untrusted";
 import type { ReleasePackage } from "./onshapeRelease";
 
 const API_BASE = process.env.ONSHAPE_BASE_URL ?? "https://cad.onshape.com";
@@ -63,12 +64,16 @@ export async function fetchElementInfo(
   );
   if (!res.ok) return { elementType: "", name: "" };
   const json = (await res.json()) as Array<{
-    elementType?: string;
-    name?: string;
+    elementType?: unknown;
+    name?: unknown;
   }>;
+  // This endpoint is documented to send strings, unlike the release package
+  // that sent `elementType` as a number — narrowed anyway, because a number
+  // here would leave a function promising `string` and silently compare
+  // false, turning an assembly into a Part Studio with no warning at all.
   return {
-    elementType: json[0]?.elementType ?? "",
-    name: json[0]?.name ?? "",
+    elementType: text(json[0]?.elementType),
+    name: text(json[0]?.name),
   };
 }
 

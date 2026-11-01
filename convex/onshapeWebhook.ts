@@ -394,6 +394,10 @@ export const onshapeWebhook = httpAction(async (ctx, req) => {
   await ctx.scheduler.runAfter(0, internal.onshapeWebhook.ingestRelease, {
     releasePackageId: rpid,
     messageId: event.messageId,
+    // Six fields, and the only record of what Onshape sent — the receiver
+    // used to parse this and drop it, which left no way to check whether
+    // the notification really carries what the code assumes.
+    notification: event,
   });
   return new Response("Accepted", { status: 200 });
 });
@@ -403,14 +407,33 @@ export const onshapeWebhook = httpAction(async (ctx, req) => {
  * package is one we haven't already taken in — a retried notification and a
  * second transition on the same package both land here.
  */
+const vNotification = v.object({
+  event: v.string(),
+  messageId: v.optional(v.string()),
+  webhookId: v.optional(v.string()),
+  objectType: v.optional(v.string()),
+  objectId: v.optional(v.string()),
+  documentId: v.optional(v.string()),
+  workspaceId: v.optional(v.string()),
+  versionId: v.optional(v.string()),
+  elementId: v.optional(v.string()),
+});
+
 export const ingestRelease = internalAction({
   args: {
     releasePackageId: v.string(),
     messageId: v.optional(v.string()),
+    /** What Onshape actually posted, kept so it can be read back later. */
+    notification: v.optional(vNotification),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await ingestOne(ctx, args.releasePackageId, args.messageId);
+    await ingestOne(
+      ctx,
+      args.releasePackageId,
+      args.messageId,
+      args.notification,
+    );
     return null;
   },
 });
@@ -424,6 +447,7 @@ async function ingestOne(
   ctx: ActionCtx,
   releasePackageId: string,
   messageId?: string,
+  notification?: Record<string, unknown>,
 ): Promise<boolean> {
   const handled = await ctx.runQuery(internal.onshapeWebhook.releaseHandled, {
     releasePackageId,
@@ -455,18 +479,53 @@ async function ingestOne(
     return false;
   }
 
-  const state = releaseState(pkg);
+  // Parsing is reading someone else's JSON, and a field arriving in a shape
+  // we didn't expect used to throw out of the whole action — one call spent,
+  // the release gone, and nothing kept to look at. Keep the package instead:
+  // a release you can read beats a stack trace you can't reproduce.
+  let state: string;
+  let lines: ReturnType<typeof releaseLines>;
+  try {
+    state = releaseState(pkg);
+    lines = releaseLines(pkg);
+  } catch (err) {
+    await ctx.runMutation(internal.onshape.queueRelease, {
+      releasePackageId,
+      reason: `The release couldn't be read: ${err instanceof Error ? err.message : String(err)}`,
+      raw: trimRawPackage(pkg),
+      notification,
+    });
+    console.error(
+      `Onshape release ${releasePackageId} could not be parsed:`,
+      err,
+    );
+    return true;
+  }
+
   if (!isReleasedState(state)) {
     // Submitted, rejected, or a custom workflow state we don't know. Either
-    // way the parts aren't real yet, and the next transition will tell us.
+    // way the parts aren't real yet, and the next transition will tell us —
+    // but keep the package, because a state nobody expected is exactly the
+    // thing someone will want to read afterwards.
+    await ctx.runMutation(internal.onshape.queueRelease, {
+      releasePackageId,
+      reason: `The release is "${state || "(no state)"}", not RELEASED.`,
+      raw: trimRawPackage(pkg),
+      notification,
+    });
     console.log(
       `Onshape release ${releasePackageId} is "${state || "(no state)"}" — not taking it in.`,
     );
     return true;
   }
 
-  const lines = releaseLines(pkg);
   if (lines.length === 0) {
+    await ctx.runMutation(internal.onshape.queueRelease, {
+      releasePackageId,
+      reason: "The release is RELEASED but lists no items.",
+      raw: trimRawPackage(pkg),
+      notification,
+    });
     console.warn(
       `Onshape release ${releasePackageId} is released but lists no items.`,
     );
@@ -523,6 +582,7 @@ async function ingestOne(
     state,
     messageId,
     raw: trimRawPackage(pkg),
+    notification,
     assemblyContents,
     bomUnread,
     items: lines,

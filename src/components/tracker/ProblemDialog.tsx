@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PROBLEM_REASONS } from "@/lib/stages";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 type Reason = Doc<"problems">["reason"];
 
@@ -59,7 +60,7 @@ export function ProblemDialog({
       setReason("broke");
       setRemake(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
+      setError(errorText(err, "That didn't work."));
     } finally {
       setSaving(false);
     }

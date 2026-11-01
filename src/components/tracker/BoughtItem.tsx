@@ -30,6 +30,7 @@ import {
   previousCotsStatus,
   type CotsStatus,
 } from "@/lib/cots";
+import { errorText } from "@/lib/errors";
 
 /** Dates go in and out of the input as yyyy-mm-dd in local time. */
 function toDateInput(at?: number): string {
@@ -153,7 +154,7 @@ export function BoughtItemDetail({
     setError(null);
     // The dates follow from the move, so the server stamps and clears them.
     void setStatus({ id: item._id, status }).catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : "That didn't work."),
+      setError(errorText(err, "That didn't work.")),
     );
   }
 
@@ -339,7 +340,7 @@ export function BoughtItemDialog({
       }
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't save.");
+      setError(errorText(err, "That didn't save."));
     } finally {
       setSaving(false);
     }

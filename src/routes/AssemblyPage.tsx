@@ -26,6 +26,7 @@ import {
 } from "../../convex/lib/assembly";
 import { onshapeElementUrl } from "../../convex/lib/onshapeLinks";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 /**
  * One sub-assembly, the way a part has a page of its own: what it is, whether
@@ -80,7 +81,7 @@ export function AssemblyPage() {
     try {
       await action();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
+      setError(errorText(err, "That didn't work."));
     }
   }
 

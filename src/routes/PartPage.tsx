@@ -43,6 +43,7 @@ import { useIsLead, useIsMentor } from "@/lib/roles";
 import { useRosterMap } from "@/lib/users";
 import { onshapeElementUrl } from "../../convex/lib/onshapeLinks";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 export function PartPage() {
   const { partId } = useParams<{ partId: string }>();
@@ -120,7 +121,7 @@ export function PartPage() {
     try {
       await action();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
+      setError(errorText(err, "That didn't work."));
     }
   }
 

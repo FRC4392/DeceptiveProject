@@ -20,6 +20,7 @@ import { useMachines, useProcessTypes, useSubsystems } from "@/lib/tracker";
 import { useRoster } from "@/lib/users";
 import type { Role } from "@/lib/roles";
 import { formatDate, fromDateInputValue } from "@/lib/dates";
+import { errorText } from "@/lib/errors";
 
 /** Everything a mentor sets up: the season, the shop, the people, the links. */
 export function SettingsPage() {
@@ -164,7 +165,7 @@ function SeasonSetup() {
           onClick={() => {
             setError(null);
             seed({ year, name }).catch((err: unknown) =>
-              setError(err instanceof Error ? err.message : "No luck."),
+              setError(errorText(err, "No luck.")),
             );
           }}
         >
@@ -244,9 +245,7 @@ function ThisSeasonPanel({ season }: { season: Doc<"seasons"> }) {
               year,
               name,
               numberPad: Number(pad) || undefined,
-            }).catch((err: unknown) =>
-              setError(err instanceof Error ? err.message : "No luck."),
-            );
+            }).catch((err: unknown) => setError(errorText(err, "No luck.")));
           }}
         >
           Save
@@ -277,9 +276,7 @@ function SeasonsPanel({ season }: { season: Doc<"seasons"> }) {
 
   function run(action: Promise<unknown>) {
     setError(null);
-    action.catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : "No luck."),
-    );
+    action.catch((err: unknown) => setError(errorText(err, "No luck.")));
   }
 
   return (
@@ -435,7 +432,7 @@ function SubsystemSettings() {
               onClick={() => {
                 setError(null);
                 remove({ id: s._id }).catch((err: unknown) =>
-                  setError(err instanceof Error ? err.message : "No luck."),
+                  setError(errorText(err, "No luck.")),
                 );
               }}
             >
@@ -474,9 +471,7 @@ function SubsystemSettings() {
                 setCode("");
                 setName("");
               })
-              .catch((err: unknown) =>
-                setError(err instanceof Error ? err.message : "No luck."),
-              );
+              .catch((err: unknown) => setError(errorText(err, "No luck.")));
           }}
         >
           Add subsystem
@@ -517,7 +512,7 @@ function NextNumberBox({
           if (!Number.isFinite(wanted) || wanted === next) return;
           onError(null);
           setNextNumber({ subsystemId, next: wanted }).catch((err: unknown) =>
-            onError(err instanceof Error ? err.message : "No luck."),
+            onError(errorText(err, "No luck.")),
           );
         }}
       />
@@ -579,7 +574,7 @@ function ProcessSettings() {
               onClick={() => {
                 setError(null);
                 remove({ id: p._id }).catch((err: unknown) =>
-                  setError(err instanceof Error ? err.message : "No luck."),
+                  setError(errorText(err, "No luck.")),
                 );
               }}
             >
@@ -642,9 +637,7 @@ function ProcessSettings() {
               needsFinishing,
             })
               .then(() => setName(""))
-              .catch((err: unknown) =>
-                setError(err instanceof Error ? err.message : "No luck."),
-              );
+              .catch((err: unknown) => setError(errorText(err, "No luck.")));
           }}
         >
           Add process
@@ -691,7 +684,7 @@ function MachineSettings() {
               onClick={() => {
                 setError(null);
                 remove({ id: m._id }).catch((err: unknown) =>
-                  setError(err instanceof Error ? err.message : "No luck."),
+                  setError(errorText(err, "No luck.")),
                 );
               }}
             >
@@ -723,9 +716,7 @@ function MachineSettings() {
             setError(null);
             create({ name, requiresMentorPresent: mentorPresent })
               .then(() => setName(""))
-              .catch((err: unknown) =>
-                setError(err instanceof Error ? err.message : "No luck."),
-              );
+              .catch((err: unknown) => setError(errorText(err, "No luck.")));
           }}
         >
           Add machine
@@ -747,7 +738,7 @@ function TagSettings() {
   function run(action: Promise<unknown>) {
     setError(null);
     action.catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : "That didn't work."),
+      setError(errorText(err, "That didn't work.")),
     );
   }
 
@@ -833,7 +824,7 @@ function PeopleSettings() {
     try {
       await syncUsers();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
+      setError(errorText(err, "That didn't work."));
     } finally {
       setSyncing(false);
     }
@@ -878,8 +869,7 @@ function PeopleSettings() {
                 onValueChange={(value) => {
                   setError(null);
                   setRole({ userId: person.authId, role: value as Role }).catch(
-                    (err: unknown) =>
-                      setError(err instanceof Error ? err.message : "No luck."),
+                    (err: unknown) => setError(errorText(err, "No luck.")),
                   );
                 }}
               >

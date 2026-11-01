@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { useIsMentor } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 import { CheckCircledIcon, CrossCircledIcon } from "@radix-ui/react-icons";
+import { errorText } from "@/lib/errors";
 
 export function GitHubAdminPage() {
   const isMentor = useIsMentor();
@@ -46,7 +47,7 @@ export function GitHubAdminPage() {
       );
       setRepo("");
     } catch (err) {
-      setNote(err instanceof Error ? err.message : "Import failed.");
+      setNote(errorText(err, "Import failed."));
     } finally {
       setImporting(false);
     }

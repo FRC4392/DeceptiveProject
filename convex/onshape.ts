@@ -405,6 +405,8 @@ export const receiveRelease = internalMutation({
     messageId: v.optional(v.string()),
     /** The raw package, kept so the first real one can be read by a human. */
     raw: v.optional(v.any()),
+    /** What Onshape posted — the notification itself, not the package. */
+    notification: v.optional(v.any()),
     items: v.array(vReleaseItem),
     /** What each released assembly contains, when the BOM could be read. */
     assemblyContents: v.optional(
@@ -483,6 +485,7 @@ export const receiveRelease = internalMutation({
         state: args.state,
         messageId: args.messageId,
         raw: args.raw,
+        notification: args.notification,
       },
     };
     let intakeId;
@@ -533,6 +536,7 @@ export const receiveRelease = internalMutation({
           onshapeElementId: source.elementId ?? match.onshapeElementId,
           onshapePartId: source.partId ?? match.onshapePartId,
           onshapeVersionId: source.versionId ?? match.onshapeVersionId,
+          lastReleasePackageId: args.releasePackageId,
           lastSyncedAt: now,
         });
       }
@@ -607,6 +611,7 @@ export const receiveRelease = internalMutation({
           onshapeDocumentId: item.documentId ?? match.onshapeDocumentId,
           onshapeElementId: item.elementId ?? match.onshapeElementId,
           onshapeVersionId: item.versionId ?? match.onshapeVersionId,
+          lastReleasePackageId: args.releasePackageId,
           lastSyncedAt: now,
         });
       }
@@ -624,7 +629,14 @@ export const receiveRelease = internalMutation({
  * Reconcile reads it when there's allowance again.
  */
 export const queueRelease = internalMutation({
-  args: { releasePackageId: v.string(), reason: v.string() },
+  args: {
+    releasePackageId: v.string(),
+    reason: v.string(),
+    /** The package, when it was read but couldn't be understood. */
+    raw: v.optional(v.any()),
+    /** What Onshape posted, so the notification's own shape can be checked. */
+    notification: v.optional(v.any()),
+  },
   returns: v.null(),
   handler: async (ctx, args) => {
     const already = await ctx.db
@@ -643,6 +655,12 @@ export const queueRelease = internalMutation({
       payload: {
         releasePackageId: args.releasePackageId,
         queuedBecause: args.reason,
+        // Only set when the read succeeded and the parse didn't: without it
+        // the one failure worth debugging is the one that leaves no trace.
+        ...(args.raw === undefined ? {} : { raw: args.raw }),
+        ...(args.notification === undefined
+          ? {}
+          : { notification: args.notification }),
       },
     });
     return null;

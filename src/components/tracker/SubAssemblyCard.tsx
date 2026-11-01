@@ -13,6 +13,7 @@ import { onshapeElementUrl } from "../../../convex/lib/onshapeLinks";
 import { ClaimLine } from "@/components/tracker/ClaimLine";
 import { useCurrentUserId } from "@/lib/roles";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 /**
  * One sub-assembly: whether it can go together, what to build it from, who has
@@ -53,7 +54,7 @@ export function SubAssemblyCard({
   function run(action: Promise<unknown>) {
     setError(null);
     action.catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : "That didn't work."),
+      setError(errorText(err, "That didn't work.")),
     );
   }
 

@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { wouldCycle } from "../../../convex/lib/assembly";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 export type AssemblyRow = {
   assembly: Doc<"subAssemblies">;
@@ -49,7 +50,7 @@ export function AssemblyMembers({
   function run(action: Promise<unknown>) {
     setError(null);
     action.catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : "That didn't work."),
+      setError(errorText(err, "That didn't work.")),
     );
   }
 

@@ -25,6 +25,7 @@ import {
   useProcessMap,
   useSubsystemMap,
 } from "@/lib/tracker";
+import { errorText } from "@/lib/errors";
 
 /**
  * The shop screen: what someone standing at a machine with a phone needs.
@@ -186,9 +187,7 @@ export function ShopPage() {
                         onClick={() => {
                           setError(null);
                           claim({ partId: part._id }).catch((err: unknown) =>
-                            setError(
-                              err instanceof Error ? err.message : "No luck.",
-                            ),
+                            setError(errorText(err, "No luck.")),
                           );
                         }}
                       >
@@ -227,9 +226,7 @@ export function ShopPage() {
                         onClick={() => {
                           setError(null);
                           advance({ partId: part._id }).catch((err: unknown) =>
-                            setError(
-                              err instanceof Error ? err.message : "No luck.",
-                            ),
+                            setError(errorText(err, "No luck.")),
                           );
                         }}
                       >

@@ -293,6 +293,10 @@ export const applyLine = mutation({
     }
     const season = await requireActiveSeason(ctx);
     const now = Date.now();
+    // Which release this decision came from, stamped wherever lastSyncedAt
+    // is so the field keeps one meaning across both mutations.
+    const intake = await ctx.db.get(line.intakeId);
+    const fromRelease = intake?.onshapeReleasePackageId;
 
     const patchLine = async (
       decision: typeof args.decision,
@@ -349,6 +353,7 @@ export const applyLine = mutation({
           isArchived: false,
           revision: line.revision,
           lastSyncedAt: now,
+          lastReleasePackageId: fromRelease,
           flags: [],
         });
         await ctx.db.insert("stageEvents", {
@@ -369,6 +374,7 @@ export const applyLine = mutation({
         await ctx.db.patch(part._id, {
           revision: line.revision ?? part.revision,
           lastSyncedAt: now,
+          lastReleasePackageId: fromRelease,
         });
         await patchLine("linked", part._id);
         return part._id;
@@ -379,6 +385,7 @@ export const applyLine = mutation({
         await ctx.db.patch(part._id, {
           revision: line.revision ?? part.revision,
           lastSyncedAt: now,
+          lastReleasePackageId: fromRelease,
           flags: [
             ...part.flags.filter((f) => f.kind !== "changed_after_made"),
             {
@@ -410,6 +417,7 @@ export const applyLine = mutation({
           claimedByUserId: undefined,
           revision: line.revision ?? part.revision,
           lastSyncedAt: now,
+          lastReleasePackageId: fromRelease,
           flags: [
             ...part.flags.filter((f) => f.kind !== "changed_after_made"),
             {
@@ -436,6 +444,7 @@ export const applyLine = mutation({
         await ctx.db.patch(part._id, {
           revision: line.revision ?? part.revision,
           lastSyncedAt: now,
+          lastReleasePackageId: fromRelease,
           flags: part.flags.filter((f) => f.kind !== "changed_after_made"),
         });
         await ctx.db.insert("stageEvents", {
@@ -540,6 +549,11 @@ export const applyMatched = mutation({
       .withIndex("by_intake", (q) => q.eq("intakeId", intakeId))
       .collect();
     const now = Date.now();
+    // The release this intake came from, so every patch below can say which
+    // one it was — the field means "last seen in", so it goes wherever
+    // lastSyncedAt goes.
+    const intake = await ctx.db.get(intakeId);
+    const fromRelease = intake?.onshapeReleasePackageId;
     let moved = 0;
 
     for (const line of lines) {
@@ -555,6 +569,7 @@ export const applyMatched = mutation({
             await ctx.db.patch(assembly._id, {
               revision: line.revision ?? assembly.revision,
               lastSyncedAt: now,
+              lastReleasePackageId: fromRelease,
             });
           }
         }
@@ -580,6 +595,7 @@ export const applyMatched = mutation({
             stageSince: now,
             revision: line.revision ?? part.revision,
             lastSyncedAt: now,
+            lastReleasePackageId: fromRelease,
           });
           await ctx.db.insert("stageEvents", {
             partId: part._id,
@@ -595,6 +611,7 @@ export const applyMatched = mutation({
         await ctx.db.patch(part._id, {
           revision: line.revision ?? part.revision,
           lastSyncedAt: now,
+          lastReleasePackageId: fromRelease,
           flags: [
             ...part.flags.filter((f) => f.kind !== "drawing_out_of_date"),
             {
@@ -609,6 +626,7 @@ export const applyMatched = mutation({
         await ctx.db.patch(part._id, {
           revision: line.revision ?? part.revision,
           lastSyncedAt: now,
+          lastReleasePackageId: fromRelease,
         });
       }
       await ctx.db.patch(line._id, { decision: "keep" });

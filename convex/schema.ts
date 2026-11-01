@@ -169,6 +169,9 @@ export default defineSchema({
     onshapePartId: v.optional(v.string()),
     onshapeVersionId: v.optional(v.string()),
     revision: v.optional(v.string()),
+    // The release package this was last seen in. Written wherever
+    // lastSyncedAt is, so it always means the same thing: the last release
+    // that mentioned it, not the one that moved it.
     lastReleasePackageId: v.optional(v.string()),
     lastSyncedAt: v.optional(v.number()),
     flags: v.array(flagValidator),
@@ -265,6 +268,9 @@ export default defineSchema({
     onshapeElementId: v.optional(v.string()),
     onshapeVersionId: v.optional(v.string()),
     revision: v.optional(v.string()),
+    // The release package this was last seen in. Written wherever
+    // lastSyncedAt is, so it always means the same thing: the last release
+    // that mentioned it, not the one that moved it.
     lastReleasePackageId: v.optional(v.string()),
     lastSyncedAt: v.optional(v.number()),
     // A drawing that isn't in Onshape — a PDF on the shop drive, say. Rendered

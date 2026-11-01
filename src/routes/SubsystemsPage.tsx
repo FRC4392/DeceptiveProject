@@ -38,6 +38,7 @@ import {
 import { useProcessMap, useSubsystems } from "@/lib/tracker";
 import { useRosterMap } from "@/lib/users";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 type RowFilter = "all" | "coming";
 
@@ -550,9 +551,7 @@ export function SubsystemsPage() {
                   void navigate(`/assemblies/${made.id}`);
                 })
                 .catch((err: unknown) =>
-                  setError(
-                    err instanceof Error ? err.message : "That didn't work.",
-                  ),
+                  setError(errorText(err, "That didn't work.")),
                 );
             }}
           >

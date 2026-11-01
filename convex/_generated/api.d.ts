@@ -34,6 +34,7 @@ import type * as lib_onshapeSync from "../lib/onshapeSync.js";
 import type * as lib_season from "../lib/season.js";
 import type * as lib_stages from "../lib/stages.js";
 import type * as lib_tokenCrypto from "../lib/tokenCrypto.js";
+import type * as lib_untrusted from "../lib/untrusted.js";
 import type * as onshape from "../onshape.js";
 import type * as onshapeOAuth from "../onshapeOAuth.js";
 import type * as onshapeWebhook from "../onshapeWebhook.js";
@@ -80,6 +81,7 @@ declare const fullApi: ApiFromModules<{
   "lib/season": typeof lib_season;
   "lib/stages": typeof lib_stages;
   "lib/tokenCrypto": typeof lib_tokenCrypto;
+  "lib/untrusted": typeof lib_untrusted;
   onshape: typeof onshape;
   onshapeOAuth: typeof onshapeOAuth;
   onshapeWebhook: typeof onshapeWebhook;

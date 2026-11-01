@@ -3,6 +3,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { initials } from "@/lib/stages";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 /**
  * The words for picking work up. One copy of them, because a part saying "Up
@@ -67,9 +68,7 @@ export function ClaimLine({
       setError(null);
       setBusy(true);
       void Promise.resolve(action())
-        .catch((err: unknown) =>
-          setError(err instanceof Error ? err.message : "That didn't work."),
-        )
+        .catch((err: unknown) => setError(errorText(err, "That didn't work.")))
         .finally(() => setBusy(false));
     };
   }

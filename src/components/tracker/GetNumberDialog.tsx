@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useProcessTypes, useSubsystems } from "@/lib/tracker";
+import { errorText } from "@/lib/errors";
 
 /**
  * "Get a part number" — the student's way in. The app issues the number; the
@@ -87,7 +88,7 @@ export function GetNumberDialog({
       setIssued(result.partNumber);
       setIssuedId(result.partId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
+      setError(errorText(err, "That didn't work."));
     } finally {
       setSaving(false);
     }

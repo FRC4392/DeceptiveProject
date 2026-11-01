@@ -1,3 +1,4 @@
+import { str } from "./untrusted";
 /**
  * Onshape release webhooks, on the pure side of the line.
  *
@@ -38,10 +39,6 @@ export type WebhookEvent = {
   elementId?: string;
 };
 
-function str(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 /** Normalize a notification body. null when it isn't one. */
 export function parseWebhookEvent(body: unknown): WebhookEvent | null {
   if (typeof body !== "object" || body === null) return null;
@@ -72,7 +69,7 @@ export function isLifecycleEvent(event: string): boolean {
  */
 export function releasePackageId(event: WebhookEvent): string | null {
   if (event.event !== RELEASE_TRANSITION_EVENT) return null;
-  if ((event.objectType ?? "").toUpperCase() !== "RELEASE") return null;
+  if ((str(event.objectType) ?? "").toUpperCase() !== "RELEASE") return null;
   return event.objectId ?? null;
 }
 
@@ -96,28 +93,37 @@ export function secretsMatch(provided: string, expected: string): boolean {
 // ---- The release package ----
 
 type ReleaseProperty = {
-  propertyId?: string;
-  name?: string;
+  propertyId?: unknown;
+  name?: unknown;
   value?: unknown;
 };
 
+// Every field here is read back off JSON Onshape sent, so each one is
+// `unknown` rather than `string`: the shapes are guesses from Onshape's own
+// sample client, and a field arriving as something else should narrow to
+// "absent", not throw halfway through an ingest. Read them through `str`.
 export type ReleaseItem = {
-  id?: string;
-  documentId?: string;
-  elementId?: string;
-  versionId?: string;
-  partId?: string;
-  elementType?: string;
-  name?: string;
-  partNumber?: string;
-  revision?: string;
+  id?: unknown;
+  documentId?: unknown;
+  elementId?: unknown;
+  versionId?: unknown;
+  partId?: unknown;
+  /** A number in a real package: 1 assembly, 0 Part Studio. */
+  elementType?: unknown;
+  /** "onshape/assembly" or "onshape/partstudio" — the clearest signal. */
+  mimeType?: unknown;
+  name?: unknown;
+  partNumber?: unknown;
+  revision?: unknown;
   properties?: ReleaseProperty[];
+  /** A released assembly carries its parts here, not as siblings. */
+  children?: ReleaseItem[];
 };
 
 export type ReleasePackage = {
-  id?: string;
-  name?: string;
-  workflow?: { state?: { name?: string } };
+  id?: unknown;
+  name?: unknown;
+  workflow?: { state?: { name?: unknown } };
   items?: ReleaseItem[];
   properties?: ReleaseProperty[];
 };
@@ -136,7 +142,7 @@ export type ReleaseLine = {
 
 /** The workflow state, upper-cased. "" when the package doesn't say. */
 export function releaseState(pkg: ReleasePackage): string {
-  return (pkg.workflow?.state?.name ?? "").trim().toUpperCase();
+  return (str(pkg.workflow?.state?.name) ?? "").trim().toUpperCase();
 }
 
 /**
@@ -157,7 +163,7 @@ function propertyValue(
 ): string | undefined {
   const wanted = name.toLowerCase();
   const prop = (properties ?? []).find(
-    (p) => (p.name ?? "").toLowerCase() === wanted,
+    (p) => (str(p.name) ?? "").toLowerCase() === wanted,
   );
   return typeof prop?.value === "string" && prop.value.length > 0
     ? prop.value
@@ -174,29 +180,91 @@ function itemField(item: ReleaseItem, property: string): string | undefined {
   return propertyValue(item.properties, property);
 }
 
+/**
+ * Whether a released item is an assembly.
+ *
+ * A real Classroom package answers this three ways and none of them is the
+ * string the first version of this code looked for. In order of how much
+ * they can be trusted:
+ *
+ * - `mimeType` — "onshape/assembly" or "onshape/partstudio". Self-describing,
+ *   so prefer it.
+ * - `elementType` — 1 and 0 respectively. Undocumented, hence the fallback.
+ * - `partId` — only a part has one.
+ *
+ * Nothing recognisable means "part", because that is the safe way to be
+ * wrong: a part on the board is visible and fixable, where a silently
+ * mis-filed assembly is neither. It says so out loud rather than guessing
+ * quietly — that warning is how the numeric form was found.
+ */
+export function isAssemblyItem(item: ReleaseItem): boolean {
+  const mime = str(item.mimeType)?.toLowerCase();
+  if (mime === "onshape/assembly") return true;
+  if (mime === "onshape/partstudio") return false;
+
+  if (typeof item.elementType === "number") return item.elementType === 1;
+  const named = str(item.elementType)?.toUpperCase();
+  if (named) return named === "ASSEMBLY";
+
+  if (str(item.partId)) return false;
+  if (item.elementType !== undefined && item.elementType !== null) {
+    console.warn(
+      `Onshape sent elementType as ${typeof item.elementType}: ${JSON.stringify(item.elementType)?.slice(0, 120)}`,
+    );
+  }
+  return false;
+}
+
+// Deep enough for any real release, shallow enough to stop a cycle. The
+// package is someone else's JSON and nothing promises it is a tree.
+const MAX_ITEM_DEPTH = 12;
+
+function lineFor(item: ReleaseItem): ReleaseLine {
+  const partNumber = itemField(item, "Part number") ?? str(item.partNumber);
+  const revision = itemField(item, "Revision") ?? str(item.revision);
+  const name =
+    itemField(item, "Name") ?? str(item.name) ?? partNumber ?? "Released item";
+  return {
+    partNumber,
+    revision,
+    name,
+    documentId: str(item.documentId),
+    elementId: str(item.elementId),
+    versionId: str(item.versionId),
+    partId: str(item.partId),
+    isAssembly: isAssemblyItem(item),
+  };
+}
+
+/**
+ * Every released item, flattened.
+ *
+ * A release of an assembly puts the assembly in `items` and its parts in
+ * that item's `children`, so reading only the top level meant a forty-part
+ * release produced one line and the parts were never seen.
+ */
 export function releaseLines(pkg: ReleasePackage): ReleaseLine[] {
-  return (pkg.items ?? []).map((item): ReleaseLine => {
-    const partNumber = itemField(item, "Part number") ?? str(item.partNumber);
-    const revision = itemField(item, "Revision") ?? str(item.revision);
-    const name =
-      itemField(item, "Name") ??
-      str(item.name) ??
-      partNumber ??
-      "Released item";
-    return {
-      partNumber,
-      revision,
-      name,
-      documentId: str(item.documentId),
-      elementId: str(item.elementId),
-      versionId: str(item.versionId),
-      partId: str(item.partId),
-      // Only an explicit element type makes something an assembly. Guessing
-      // from a missing partId would turn every item Onshape describes in a
-      // shape we haven't seen into a sub-assembly on the board.
-      isAssembly: (item.elementType ?? "").toUpperCase() === "ASSEMBLY",
-    };
-  });
+  const out: ReleaseLine[] = [];
+  const walk = (items: ReleaseItem[], depth: number, seen: Set<string>) => {
+    if (depth > MAX_ITEM_DEPTH) {
+      console.warn(
+        `Onshape release items nest deeper than ${MAX_ITEM_DEPTH} — stopping here.`,
+      );
+      return;
+    }
+    for (const item of items) {
+      // `id` is per-item within a package, so it is also the loop guard.
+      const id = str(item.id);
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      out.push(lineFor(item));
+      if (item.children?.length) walk(item.children, depth + 1, seen);
+    }
+  };
+  walk(pkg.items ?? [], 0, new Set());
+  return out;
 }
 
 /** What the intake queue calls this release. */

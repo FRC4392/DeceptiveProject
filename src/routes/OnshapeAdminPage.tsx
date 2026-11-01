@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { TrashIcon } from "@radix-ui/react-icons";
 import type { Id } from "../../convex/_generated/dataModel";
+import { errorText } from "@/lib/errors";
 
 const NO_SUBSYSTEM = "__none__";
 
@@ -270,7 +271,7 @@ function ConnectionPanel({ siteUrl }: { siteUrl?: string }) {
       const state = await beginConnect({});
       window.location.href = `${siteUrl}/onshape/oauth/start?state=${encodeURIComponent(state)}`;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't start that.");
+      setError(errorText(err, "Couldn't start that."));
       setBusy(false);
     }
   }
@@ -352,7 +353,7 @@ function ReleaseWebhookPanel({ siteUrl }: { siteUrl?: string }) {
     try {
       await fn();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
+      setError(errorText(err, "That didn't work."));
     } finally {
       setBusy(false);
     }

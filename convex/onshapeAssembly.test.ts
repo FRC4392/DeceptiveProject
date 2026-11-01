@@ -238,3 +238,58 @@ describe("the sub-assemblies placed directly inside one", () => {
     expect(rootSubAssemblies({ rootAssembly: {} }, "doc")).toEqual([]);
   });
 });
+
+describe("an assembly definition in a shape we didn't expect", () => {
+  // `type` is Onshape's JSON too. A release package sent a sibling field as
+  // a number once, and `(x ?? "").toLowerCase()` only guards null — so this
+  // is the same crash waiting on a different field.
+  test("a non-string instance type is skipped, not fatal", () => {
+    const def = {
+      rootAssembly: {
+        instances: [
+          { id: "i1", type: 3 as never, elementId: "e1", documentId: "d1" },
+          {
+            id: "i2",
+            type: "Part",
+            elementId: "e2",
+            documentId: "d1",
+            partId: "p1",
+          },
+        ],
+        occurrences: [{ path: ["i1"] }, { path: ["i2"] }],
+      },
+      subAssemblies: [],
+    };
+
+    const parts = aggregateAssemblyParts(def, "d1");
+
+    expect(parts.map((p) => p.partId)).toEqual(["p1"]);
+    expect(() => rootSubAssemblies(def, "d1")).not.toThrow();
+  });
+
+  test("a non-string name doesn't break the suffix strip", () => {
+    const parts = aggregateAssemblyParts(
+      {
+        rootAssembly: {
+          instances: [
+            {
+              id: "i1",
+              type: "Part",
+              elementId: "e1",
+              documentId: "d1",
+              partId: "p1",
+              name: 42 as never,
+            },
+          ],
+          occurrences: [{ path: ["i1"] }],
+        },
+        subAssemblies: [],
+      },
+      "d1",
+    );
+
+    // Not a crash, and it falls back to the usual placeholder rather than
+    // carrying a number into a field the board renders.
+    expect(parts[0].name).toBe("Onshape part");
+  });
+});

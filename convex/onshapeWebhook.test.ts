@@ -279,7 +279,7 @@ describe("taking a release in", () => {
     expect(parts.some((p) => p.partNumber === "99-XXX-001")).toBe(false);
   });
 
-  test("a package that isn't released yet is left alone", async () => {
+  test("a package that isn't released yet puts nothing on the board", async () => {
     const t = convexTest(schema, modules);
     const { mentor } = await setup(t);
     stubOnshape(
@@ -289,7 +289,14 @@ describe("taking a release in", () => {
       ),
     );
     await deliver(t);
-    expect(await mentor.query(api.intake.list, {})).toEqual([]);
+
+    // Kept rather than binned: a state nobody expected is the thing someone
+    // will want to read afterwards, and it used to leave only a log line.
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.intake.status).toBe("queued");
+    expect(listed.lines).toEqual([]);
+    const payload = listed.intake.payload as { queuedBecause?: string };
+    expect(payload.queuedBecause).toMatch(/not RELEASED/);
   });
 
   test("the same release twice makes one intake and one read", async () => {
@@ -833,5 +840,32 @@ describe("reading what a released assembly contains", () => {
     const assembly = listed.lines.find((l) => l.target === "subAssembly");
     expect(assembly?.partNumber).toBe("27-INT-040");
     expect(assembly?.note).toMatch(/wasn't read/);
+  });
+});
+
+describe("a release the parser can't understand", () => {
+  test("is kept rather than lost, with the package to look at", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor } = await setup(t);
+    // `properties` as an object rather than an array: `.find` isn't a
+    // function on it, so parsing throws where nothing used to catch it.
+    stubOnshape(
+      releasePackage([
+        { name: "Side plate", properties: { bogus: true } as never },
+      ]),
+    );
+
+    await deliver(t);
+
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.intake.status).toBe("queued");
+    const payload = listed.intake.payload as {
+      queuedBecause?: string;
+      raw?: unknown;
+    };
+    expect(payload.queuedBecause).toMatch(/couldn't be read/);
+    // The package itself is kept — the whole point, since a parse failure
+    // leaves no other record of what Onshape actually sent.
+    expect(payload.raw).toBeTruthy();
   });
 });

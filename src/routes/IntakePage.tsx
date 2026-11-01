@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { useProcessTypes, useSubsystems } from "@/lib/tracker";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 type Line = Doc<"releaseIntakeLines">;
 
@@ -220,9 +221,7 @@ function BudgetBanner({
                       : `Read ${r.processed} release${r.processed === 1 ? "" : "s"}${r.remaining > 0 ? `, ${r.remaining} still waiting` : ""}.`,
                   ),
                 )
-                .catch((err: unknown) =>
-                  setNote(err instanceof Error ? err.message : "No luck."),
-                )
+                .catch((err: unknown) => setNote(errorText(err, "No luck.")))
                 .finally(() => setBusy(false));
             }}
           >
@@ -298,7 +297,7 @@ function IntakeCard({
               onClick={() => {
                 setError(null);
                 applyMatched({ intakeId: intake._id }).catch((err: unknown) =>
-                  setError(err instanceof Error ? err.message : "No luck."),
+                  setError(errorText(err, "No luck.")),
                 );
               }}
             >
@@ -475,9 +474,7 @@ function AssemblyLine({ line }: { line: Line }) {
               createSubAssembly({
                 lineId: line._id,
                 subsystemId: subsystemId as Id<"subsystems">,
-              }).catch((err: unknown) =>
-                setError(err instanceof Error ? err.message : "No luck."),
-              );
+              }).catch((err: unknown) => setError(errorText(err, "No luck.")));
             }}
           >
             Add as a sub-assembly
@@ -567,9 +564,7 @@ function UnknownLine({ line }: { line: Line }) {
               processTypeId: processTypeId as Id<"processTypes">,
               qtyNeeded: Number(qtyNeeded) || 1,
               qtySpares: Number(qtySpares) || 0,
-            }).catch((err: unknown) =>
-              setError(err instanceof Error ? err.message : "No luck."),
-            );
+            }).catch((err: unknown) => setError(errorText(err, "No luck.")));
           }}
         >
           Add to the board
@@ -723,9 +718,7 @@ function ManualEntry({ onDone }: { onDone: () => void }) {
               : undefined,
           })
             .then(onDone)
-            .catch((err: unknown) =>
-              setError(err instanceof Error ? err.message : "No luck."),
-            );
+            .catch((err: unknown) => setError(errorText(err, "No luck.")));
         }}
       >
         Match these up
@@ -770,9 +763,7 @@ function CsvImport({ onDone }: { onDone: () => void }) {
           setError(null);
           importCsv({ label, csv })
             .then(onDone)
-            .catch((err: unknown) =>
-              setError(err instanceof Error ? err.message : "No luck."),
-            );
+            .catch((err: unknown) => setError(errorText(err, "No luck.")));
         }}
       >
         Import it

@@ -567,8 +567,20 @@ What actually crosses the wire is worth knowing, because it shapes the design:
    the read — Onshape retries anything it doesn't see acknowledged quickly.
 3. `ingestRelease` reads `GET /api/releasepackages/{id}?detailed=true`: one
    call, every item with its part number, revision and source document.
-4. Anything that isn't `RELEASED` is logged and dropped. A submitted or
-   rejected package isn't a fact about the robot yet.
+   Two things about that package were learned from a real Classroom rather
+   than from any documentation:
+   - **It nests.** A released assembly is one entry in `items` with its parts
+     in that entry's `children`. Reading only the top level meant a forty-part
+     release produced one line and the parts were never seen.
+   - **`elementType` is a number** — `1` assembly, `0` Part Studio — not the
+     string the first version looked for. `mimeType` says the same thing more
+     plainly (`onshape/assembly`), so that is believed first.
+4. Anything that isn't `RELEASED` is parked as a queued intake rather than
+   dropped — a submitted or rejected package isn't a fact about the robot
+   yet, but a state nobody expected is what someone will want to read
+   afterwards. Same for a package that can't be parsed. Each keeps the
+   package **and the notification that announced it**, which is otherwise the
+   only record of what Onshape sent and used to be thrown away.
 5. Each released **assembly** gets one more call, reading what it contains so
    the CAD's quantities arrive without anyone opening the panel. Refused
    outside Normal mode, and a refusal doesn't cost the release: it comes in
@@ -584,11 +596,18 @@ authenticated connection. Arriving twice is normal — a retry, or a package tha
 transitions more than once — and a package already taken in is dropped before
 any call is spent.
 
-**Unverified:** Onshape's published webhook docs don't describe
-`onshape.workflow.transition` at all, and don't say what `detailed=true` adds.
-The field names come from Onshape's own sample client. Every field is read
-defensively and the raw package is kept on the intake (`releaseIntakes.payload`)
-so the first real release can be checked against what this code assumes.
+**Checked against a real release.** Onshape's docs still don't describe
+`onshape.workflow.transition` or say what `detailed=true` adds, but a
+Classroom release has now been through end to end: the notification does carry
+`objectType` and `objectId`, items do carry **Part number** and **Revision** as
+properties, and the workflow state really is `RELEASED`. The two things that
+weren't as assumed are described above.
+
+The lesson that outlived them: a declared TypeScript type is a guess about
+someone else's JSON. `elementType` arriving as a number crashed an entire
+ingest on `.toUpperCase()`, because `?? ""` guards only null and undefined.
+Fields off the wire are typed `unknown` and narrowed at the boundary through
+[`convex/lib/untrusted.ts`](convex/lib/untrusted.ts).
 
 ## The to-do list
 

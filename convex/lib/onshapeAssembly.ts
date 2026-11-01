@@ -1,3 +1,4 @@
+import { text } from "./untrusted";
 // Pure helpers for turning an Onshape assembly definition into a de-duplicated
 // list of parts with their true quantities (how many times each part is placed).
 // Kept free of Convex/`ctx` so it can be unit-tested against sample JSON.
@@ -43,8 +44,10 @@ export type AggregatedAssemblyPart = {
 };
 
 // Drop Onshape's per-instance " <n>" suffix (e.g. "Bracket <3>" → "Bracket").
-function stripInstanceSuffix(name?: string): string {
-  return (name ?? "").replace(/\s*<\d+>\s*$/, "").trim();
+function stripInstanceSuffix(name?: unknown): string {
+  return text(name)
+    .replace(/\s*<\d+>\s*$/, "")
+    .trim();
 }
 
 /**
@@ -77,7 +80,7 @@ export function aggregateAssemblyParts(
     if (!path || path.length === 0) continue;
     const leaf = byId.get(path[path.length - 1]);
     if (!leaf) continue;
-    if ((leaf.type ?? "").toLowerCase() !== "part") continue;
+    if (text(leaf.type).toLowerCase() !== "part") continue;
     if (leaf.isStandardContent || leaf.suppressed) continue;
     if (!leaf.partId || !leaf.elementId || !leaf.documentId) continue;
 
@@ -125,7 +128,7 @@ export function rootSubAssemblies(
 ): AssemblyChild[] {
   const byKey = new Map<string, AssemblyChild>();
   for (const instance of def.rootAssembly?.instances ?? []) {
-    if ((instance.type ?? "").toLowerCase() !== "assembly") continue;
+    if (text(instance.type).toLowerCase() !== "assembly") continue;
     if (instance.suppressed) continue;
     const { elementId, documentId } = instance;
     if (!elementId) continue;

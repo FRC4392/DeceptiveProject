@@ -11,6 +11,7 @@ import { AssigneePicker } from "@/components/tracker/AssigneePicker";
 import { initials } from "@/lib/stages";
 import { useIsLead, useIsMentor } from "@/lib/roles";
 import { useRosterMap } from "@/lib/users";
+import { errorText } from "@/lib/errors";
 
 /** One to-do, laid out like a part page: what it is, who's on it, notes. */
 export function TodoPage() {
@@ -62,7 +63,7 @@ export function TodoPage() {
   function run(action: Promise<unknown>) {
     setError(null);
     action.catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : "That didn't work."),
+      setError(errorText(err, "That didn't work.")),
     );
   }
 
