@@ -55,9 +55,9 @@ GitHub.
 
 ## 2. Vercel environment variables (Production scope)
 
-I could not read these — the CLI token in this checkout is expired, so
-`npx vercel env ls` fails. **You need to check these by hand** in the Vercel
-dashboard, under Settings → Environment Variables, Production:
+**Reported set as of 1 November 2026.** I could not verify them myself — the
+CLI token in this checkout is expired, so `npx vercel env ls` fails. Kept as
+the record of what has to be there:
 
 | Variable                     | Value                                                                     | Why                                                                                                                                                        |
 | ---------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,19 +70,19 @@ hand-set value will fight it.
 
 ## 3. Convex production environment variables
 
-Production currently has three, all Clerk:
+**Done — all ten are set as of 1 November 2026.** Verify any time with:
 
 ```bash
 npx convex env list --prod --names-only
 ```
 
-`CLERK_JWT_ISSUER_DOMAIN`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`. The
-issuer is a real production Clerk instance, not a `*.clerk.accounts.dev` one,
-so that part is already right. (`--names-only` keeps the values off your
-screen; plain `env list` prints every secret in full.)
+(`--names-only` keeps the values off your screen; plain `env list` prints
+every secret in full.)
 
-**All seven Onshape and GitHub variables are missing.** Nothing Onshape or
-GitHub does will work until these are set:
+The Clerk issuer is a real production instance, not a `*.clerk.accounts.dev`
+one, so that part was already right. The four `WORKOS_*` leftovers described
+in step 8 have been removed. What follows is kept as the record of what was
+set and why, since two of these have consequences that outlive the setup.
 
 ```bash
 # Onshape OAuth — the same dev-portal app as dev is fine (see step 5)
@@ -197,10 +197,38 @@ from inside the app, in step 7.
 
 ## 6. The GitHub webhook
 
-Add a repository webhook with payload URL
-`https://neat-alligator-295.convex.site/github/webhook`, content type JSON, events
-**Issues**, **Issue comments** and **Pull requests**, and the secret you set
-as `GITHUB_WEBHOOK_SECRET`. Admin → GitHub in the app shows the exact URL.
+**This one can be done and verified before the merge.** `main` already serves
+`/github/webhook` with the same signature check and the same `ping` → `pong`
+reply, so a green first delivery is a real result today. That is not true of
+the Onshape release webhook: `/onshape/webhook` **does not exist on `main`**,
+so registering it before the merge would point Onshape at a 404. It is
+registered from inside the app in step 7, after the deploy, which is why it
+sits there and not here.
+
+| Field            | Value                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| Payload URL      | `https://neat-alligator-295.convex.site/github/webhook`                               |
+| Content type     | `application/json` — **not** form-encoded                                             |
+| Secret           | `npx convex env get GITHUB_WEBHOOK_SECRET --prod`                                     |
+| SSL verification | Enabled                                                                               |
+| Events           | _Let me select individual events_ → **Issues**, **Issue comments**, **Pull requests** |
+
+Content type matters more than it looks. The signature is computed over the
+raw body either way, so a form-encoded payload passes the signature check and
+then dies in `JSON.parse` — a 400 that looks like a secret problem but isn't.
+
+The three failure modes are distinguishable, which makes this quick to debug
+from GitHub's own delivery log:
+
+| Response                     | Cause                                                                 |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `503 Webhook not configured` | `GITHUB_WEBHOOK_SECRET` not set on the deployment                     |
+| `401 Invalid signature`      | Secret in GitHub doesn't match the one in Convex                      |
+| `400 Bad JSON`               | Content type is form-encoded instead of JSON                          |
+| `200 pong`                   | Working. GitHub signs the ping too, so this proves the secret matches |
+
+Issues carry no `seasonId`, so none of this waits on a season existing —
+GitHub sync is the one piece that works on a completely fresh deployment.
 
 ## 7. First run, in this order
 
