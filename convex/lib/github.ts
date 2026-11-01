@@ -12,7 +12,8 @@ export type IssueState = "open" | "closed";
  */
 export function derivePriority(labels: string[]): IssuePriority {
   const lower = labels.map((l) => l.toLowerCase());
-  const has = (kws: string[]) => lower.some((l) => kws.some((k) => l.includes(k)));
+  const has = (kws: string[]) =>
+    lower.some((l) => kws.some((k) => l.includes(k)));
   if (has(["critical", "urgent", "blocker", "p0", "p1", "high"])) return "high";
   if (has(["low", "minor", "trivial", "p3", "p4"])) return "low";
   return "medium";

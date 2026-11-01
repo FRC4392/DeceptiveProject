@@ -1,182 +1,460 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+// A part's flag chips — the small coloured labels on a board card. Problems
+// get their own table; these are the lightweight "look at this" markers.
+export const flagValidator = v.object({
+  kind: v.union(
+    v.literal("changed_after_made"), // released again after someone made it
+    v.literal("drawing_out_of_date"), // CAD moved on, the DXF didn't
+    v.literal("remake"), // one broke / was scrapped, make another
+    v.literal("waiting"), // off at a sponsor, waiting on stock, …
+  ),
+  note: v.optional(v.string()),
+  qty: v.optional(v.number()),
+  at: v.number(),
+  byUserId: v.optional(v.string()),
+});
+
 export default defineSchema({
   // Mirrors Clerk user data, kept in sync from sign-in storage, Clerk webhooks,
   // and the mentor-triggered Clerk backfill action in convex/auth.ts.
   // Clerk user ids are the app-facing identity key.
+  //
+  // `role` is the Clerk-sourced mentor/student flag and is overwritten on every
+  // sync. `appRole` is the tracker's own role, set in Settings by a mentor, and
+  // wins when present — that's what makes someone a lead without touching Clerk.
   users: defineTable({
     authId: v.string(),
     email: v.string(),
     name: v.string(),
     role: v.optional(v.union(v.literal("mentor"), v.literal("student"))),
+    appRole: v.optional(
+      v.union(
+        v.literal("student"),
+        v.literal("lead"),
+        v.literal("mentor"),
+        v.literal("admin"),
+      ),
+    ),
   }).index("authId", ["authId"]),
 
-  // A project groups one or more Onshape documents (and their parts/tasks) into
-  // one effort — the competition robot, an off-season module, etc. `tag` fills
-  // the middle segment of a part number (replacing the auto year): "26",
-  // "SWERVE", … `numberingMode` picks whether the app auto-generates numbers or
-  // leaves them to Onshape/manual entry. Mentor-managed.
-  projects: defineTable({
-    name: v.string(),
-    tag: v.string(),
-    numberingMode: v.union(v.literal("auto"), v.literal("manual")),
-    archived: v.optional(v.boolean()),
-  }).index("by_tag", ["tag"]),
-
-  // A board is a subsystem-scoped bucket of tasks (drivetrain, intake,
-  // electrical, software, etc.). Mentor-managed set. A board may belong to a
-  // project (its manual tasks inherit that project) or be cross-project.
-  boards: defineTable({
-    name: v.string(),
-    subsystem: v.string(),
-    order: v.number(),
-    projectId: v.optional(v.id("projects")),
-  }).index("by_project", ["projectId"]),
-
-  // The single canonical to-do list for the whole suite. Parts (Phase 2/3)
-  // and issues (Phase 4) mirror their lifecycle here via source/sourceId.
-  tasks: defineTable({
+  // The season's to-do list: one list, no boards. A to-do is a title, some
+  // tags, who picked it up, and done or not done — deliberately the same
+  // shape as a part, so the two screens read alike.
+  todos: defineTable({
+    seasonId: v.id("seasons"),
     title: v.string(),
     description: v.optional(v.string()),
-    boardId: v.id("boards"),
-    assigneeIds: v.array(v.string()), // Clerk user IDs
-    dueDate: v.optional(v.number()),
-    completedAt: v.optional(v.number()), // set when status -> done
-    status: v.union(
-      v.literal("todo"),
-      v.literal("in_progress"),
-      v.literal("blocked"),
-      v.literal("done"),
-    ),
+    tagIds: v.array(v.id("todoTags")),
     priority: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
-    labels: v.array(v.string()),
-    parentTaskId: v.optional(v.id("tasks")), // subtasks
-    dependsOn: v.array(v.id("tasks")),
-    source: v.union(v.literal("manual"), v.literal("part"), v.literal("issue")),
-    sourceId: v.optional(v.string()), // parts._id or issues._id, for the deep link back
-    // Which project this task belongs to (for project-scoped views). Part-sourced
-    // tasks inherit the part's project; manual tasks inherit their board's.
-    projectId: v.optional(v.id("projects")),
+    claimedByUserId: v.optional(v.string()),
+    doneAt: v.optional(v.number()),
+    doneByUserId: v.optional(v.string()),
   })
-    .index("by_board", ["boardId"])
-    .index("by_status", ["status"])
-    .index("by_parent", ["parentTaskId"])
-    .index("by_source", ["source", "sourceId"])
-    .index("by_project", ["projectId"])
-    .index("by_project_and_board", ["projectId", "boardId"]),
+    .index("by_season", ["seasonId"])
+    .index("by_claimedBy", ["claimedByUserId"]),
 
-  taskComments: defineTable({
-    taskId: v.id("tasks"),
-    authorId: v.string(),
-    body: v.string(),
-  }).index("by_task", ["taskId"]),
-
-  taskAttachments: defineTable({
-    taskId: v.id("tasks"),
-    storageId: v.id("_storage"),
-    filename: v.string(),
-  }).index("by_task", ["taskId"]),
-
-  // Competition dates power the dashboard countdown. Mentor-managed.
-  competitions: defineTable({
+  // The tags a to-do can carry. Team-wide and mentor-managed, like machines
+  // and process types — they outlive a season.
+  todoTags: defineTable({
     name: v.string(),
-    date: v.number(),
-  }).index("by_date", ["date"]),
-
-  // ---- Phase 2: Part tracker ----
-  // Written with Phase-3 (Onshape) fields present so Phase 3 needs no migration.
-  parts: defineTable({
-    partNumber: v.optional(v.string()), // null until Phase 3 auto-generates; manual meanwhile
-    name: v.string(),
-    material: v.optional(v.string()),
-    quantityNeeded: v.number(),
-    manufacturingMethod: v.union(
-      v.literal("mill"),
-      v.literal("lathe"),
-      v.literal("3d_print"),
-      v.literal("waterjet"),
-      v.literal("laser_cut"),
-      v.literal("cots"),
-    ),
-    status: v.union(
-      v.literal("needs_design"),
-      v.literal("in_design"),
-      v.literal("designed"),
-      v.literal("queued"),
-      v.literal("in_progress"),
-      v.literal("manufactured"),
-      v.literal("qc"),
-      v.literal("installed"),
-      v.literal("scrapped"),
-    ),
-    assigneeId: v.optional(v.string()),
-    thumbnailStorageId: v.optional(v.id("_storage")),
-    isCOTS: v.boolean(),
-    vendor: v.optional(v.string()),
-    vendorPartNumber: v.optional(v.string()),
-    cost: v.optional(v.number()),
-    orderStatus: v.optional(v.string()),
-    leadTime: v.optional(v.string()),
-    linkedTaskId: v.optional(v.id("tasks")), // back-reference to the auto-created task
-    // A blocked flag drives the linked task to "blocked" regardless of stage.
-    blocked: v.boolean(),
-    blockedReason: v.optional(v.string()),
-    // Phase 3 fields, present now to avoid a later migration:
-    onshapeDocumentId: v.optional(v.string()),
-    onshapeElementId: v.optional(v.string()),
-    documentNumber: v.optional(v.string()),
-    lastModifiedInOnshape: v.optional(v.number()),
-    designerId: v.optional(v.string()),
-    revisionConflict: v.boolean(),
-    // The project this part belongs to (from its Onshape document, or chosen on
-    // manual creation). Denormalized for direct project-scoped filtering.
-    projectId: v.optional(v.id("projects")),
-  })
-    .index("by_status", ["status"])
-    .index("by_isCOTS", ["isCOTS"])
-    .index("by_onshapeElementId", ["onshapeElementId"])
-    .index("by_project", ["projectId"]),
-
-  partComments: defineTable({
-    partId: v.id("parts"),
-    authorId: v.string(),
-    body: v.string(),
-  }).index("by_part", ["partId"]),
-
-  qcChecks: defineTable({
-    partId: v.id("parts"),
-    label: v.string(),
-    checked: v.boolean(),
-  }).index("by_part", ["partId"]),
-
-  inventoryItems: defineTable({
-    name: v.string(),
-    onHandQty: v.number(),
-    unitCost: v.optional(v.number()),
-    linkedPartId: v.optional(v.id("parts")),
+    order: v.number(),
   }),
 
-  // ---- Phase 3: Onshape integration ----
-  // Monotonic per-(project tag, document) sequence for generating
-  // 4392-<tag>-DDSSSS part numbers. Keyed by tag as well as document so two
-  // projects can reuse a 2-digit document number without colliding.
-  partNumberCounters: defineTable({
-    tag: v.string(), // project tag, e.g. "26"
-    documentNumber: v.string(), // 2-digit, e.g. "02"
-    lastSequence: v.number(),
-  }).index("by_tag_and_document", ["tag", "documentNumber"]),
+  todoNotes: defineTable({
+    todoId: v.id("todos"),
+    userId: v.string(),
+    body: v.string(),
+  }).index("by_todo", ["todoId"]),
 
-  // Known Onshape documents and their mentor-assigned 2-digit numbers. Each maps
-  // to a project (assigned in the admin UI); synced parts inherit it.
+  // Competition dates power the dashboard countdown and the "next event" card
+  // in the tracker's sidebar. Mentor-managed, and scoped to a season — a 2027
+  // regional has no business counting down on the 2028 dashboard.
+  competitions: defineTable({
+    // Missing on rows that predate season-scoped events;
+    // competitions:backfillSeason stamps those with whatever season was
+    // current when it ran.
+    seasonId: v.optional(v.id("seasons")),
+    name: v.string(),
+    date: v.number(),
+  })
+    .index("by_season_and_date", ["seasonId", "date"])
+    .index("by_date", ["date"]),
+
+  // ---- Part tracker ----
+
+  // A season owns a set of subsystems, its parts and their numbering. `year` is
+  // the two digits that open every part number: 27-INT-104.
+  seasons: defineTable({
+    year: v.string(),
+    name: v.string(),
+    active: v.boolean(),
+    // How many digits the sequence is padded to; missing means three.
+    // Settable only while the season has issued nothing, because
+    // normalizePartNumber strips separators but not leading zeros — mix 104
+    // and 0104 in one season and typing "104" stops finding the second.
+    numberPad: v.optional(v.number()),
+  }),
+
+  // The subsystems the robot is split into. `code` is the middle segment of a
+  // part number (DRV, INT, ELV, …) and is unique within a season.
+  subsystems: defineTable({
+    seasonId: v.id("seasons"),
+    code: v.string(),
+    name: v.string(),
+    leadUserId: v.optional(v.string()),
+    order: v.number(),
+  })
+    .index("by_season", ["seasonId"])
+    .index("by_season_and_code", ["seasonId", "code"]),
+
+  // Per (season, subsystem) sequence for {YY}-{SUB}-{NNN}. Incremented inside a
+  // mutation, which Convex runs as a transaction, so concurrent "get a number"
+  // requests serialize and a number is never handed out twice.
+  partNumberCounters: defineTable({
+    seasonId: v.id("seasons"),
+    subsystemId: v.id("subsystems"),
+    next: v.number(),
+  }).index("by_season_and_subsystem", ["seasonId", "subsystemId"]),
+
+  // A machine in the shop. `requiresMentorPresent` surfaces as a
+  // safety warning on the shop screen.
+  machines: defineTable({
+    name: v.string(),
+    requiresMentorPresent: v.boolean(),
+    order: v.number(),
+  }),
+
+  // How a part gets made. The two flags decide which stages the part skips:
+  // a 3D print needs no drawing, a part with no finishing skips stage 4.
+  processTypes: defineTable({
+    name: v.string(),
+    machineId: v.optional(v.id("machines")),
+    needsDrawing: v.boolean(),
+    needsFinishing: v.boolean(),
+    // Bought items never get made — they go straight to "Ready to assemble".
+    isBought: v.optional(v.boolean()),
+    order: v.number(),
+  }),
+
+  parts: defineTable({
+    seasonId: v.id("seasons"),
+    subsystemId: v.id("subsystems"),
+    partNumber: v.string(),
+    // normalizePartNumber(partNumber) — "27INT104" — so "int-104" and "104"
+    // both find it without scanning every spelling.
+    partNumberKey: v.string(),
+    name: v.string(),
+    processTypeId: v.id("processTypes"),
+    material: v.optional(v.string()),
+    qtyNeeded: v.number(),
+    qtySpares: v.number(),
+    qtyMade: v.number(),
+    stage: v.number(), // 1-6, see convex/lib/stages.ts
+    claimedByUserId: v.optional(v.string()),
+    designerUserId: v.optional(v.string()),
+    drawingCheckedByUserId: v.optional(v.string()),
+    makerUserId: v.optional(v.string()),
+    assemblerUserId: v.optional(v.string()),
+    // When it entered the stage it's in — drives the "waiting too long" list.
+    stageSince: v.number(),
+    isArchived: v.boolean(),
+    binLabel: v.optional(v.string()),
+    notesForMaker: v.optional(v.string()),
+    thumbnailStorageId: v.optional(v.id("_storage")),
+    // Onshape, all optional: the tracker works with no CAD link at all.
+    onshapeDocumentId: v.optional(v.string()),
+    onshapeElementId: v.optional(v.string()),
+    onshapePartId: v.optional(v.string()),
+    onshapeVersionId: v.optional(v.string()),
+    revision: v.optional(v.string()),
+    // The release package this was last seen in. Written wherever
+    // lastSyncedAt is, so it always means the same thing: the last release
+    // that mentioned it, not the one that moved it.
+    lastReleasePackageId: v.optional(v.string()),
+    lastSyncedAt: v.optional(v.number()),
+    flags: v.array(flagValidator),
+  })
+    .index("by_partNumberKey", ["partNumberKey"])
+    .index("by_season", ["seasonId"])
+    .index("by_subsystem", ["subsystemId"])
+    .index("by_season_and_stage", ["seasonId", "stage"])
+    .index("by_claimedBy", ["claimedByUserId"])
+    .index("by_onshapeElementId", ["onshapeElementId"]),
+
+  // Every stage move, forward or back, with who and when. The part page's
+  // History panel reads this straight through.
+  stageEvents: defineTable({
+    partId: v.id("parts"),
+    fromStage: v.number(),
+    toStage: v.number(),
+    userId: v.string(),
+    note: v.optional(v.string()),
+  }).index("by_part", ["partId"]),
+
+  partNotes: defineTable({
+    partId: v.id("parts"),
+    userId: v.string(),
+    body: v.string(),
+  }).index("by_part", ["partId"]),
+
+  // "Something went wrong": broke, scrapped, ran out of material, unsure.
+  problems: defineTable({
+    partId: v.id("parts"),
+    reason: v.union(
+      v.literal("broke"),
+      v.literal("scrapped"),
+      v.literal("out_of_material"),
+      v.literal("wrong_size"),
+      v.literal("unsure"),
+      v.literal("other"),
+    ),
+    qtyAffected: v.number(),
+    note: v.optional(v.string()),
+    openedByUserId: v.string(),
+    resolvedByUserId: v.optional(v.string()),
+    resolution: v.optional(v.string()),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_part", ["partId"])
+    .index("by_resolved", ["resolvedAt"]),
+
+  // Bought items draw no tracker number — nothing is made, so there is no
+  // {YY}-{SUB}-{NNN} to issue and the subsystem counter never moves. Tracked
+  // by name per subsystem, and "arrived" counts as ready to assemble.
+  cotsItems: defineTable({
+    seasonId: v.id("seasons"),
+    subsystemId: v.id("subsystems"),
+    name: v.string(),
+    qtyNeeded: v.number(),
+    unit: v.optional(v.string()),
+    status: v.union(
+      v.literal("needed"),
+      v.literal("ordered"),
+      v.literal("arrived"),
+    ),
+    vendor: v.optional(v.string()),
+    vendorPartNumber: v.optional(v.string()),
+    /** When it's expected to turn up. Known only sometimes. */
+    eta: v.optional(v.number()),
+    // When each step actually happened. Stamped on the move rather than
+    // asked for — nobody is going to fill in a date field to tell the app
+    // something it already knows, and an empty one tells you nothing.
+    orderedAt: v.optional(v.number()),
+    arrivedAt: v.optional(v.number()),
+    cost: v.optional(v.number()),
+    // `vendorPartNumber` is also how a release recognises this item: the
+    // number is normalized at match time rather than stored twice, so the
+    // items the team typed in by hand are matchable with no backfill, and
+    // there is no second field to keep in step. Unlike `parts.partNumberKey`
+    // it is nobody's guarantee of uniqueness — the same gearbox is
+    // legitimately two rows under two subsystems — so a lookup takes what it
+    // finds rather than expecting one.
+    //
+    // Where it came from in CAD, when it came from CAD at all. A bought item
+    // somebody typed onto the Ordering board has none of this.
+    onshapeDocumentId: v.optional(v.string()),
+    onshapeElementId: v.optional(v.string()),
+    onshapePartId: v.optional(v.string()),
+    onshapeVersionId: v.optional(v.string()),
+    lastReleasePackageId: v.optional(v.string()),
+    lastSyncedAt: v.optional(v.number()),
+  })
+    .index("by_subsystem", ["subsystemId"])
+    .index("by_season", ["seasonId"])
+    .index("by_onshapeElementId", ["onshapeElementId"]),
+
+  // A sub-assembly: a named, numbered thing that goes together, mirroring the
+  // CAD. It holds parts, bought items and *other sub-assemblies*, so an intake
+  // can be a frame assembly plus a roller assembly rather than one flat list.
+  //
+  // Every subsystem has exactly one with `isDefault`, numbered {YY}-{SUB}-000.
+  // Marking that one built is what "the subsystem is on the robot" means.
+  //
+  // The Onshape field names deliberately match `parts`, so release matching is
+  // written once over { partNumberKey, onshapeElementId } and used for both.
+  subAssemblies: defineTable({
+    seasonId: v.id("seasons"),
+    subsystemId: v.id("subsystems"),
+    partNumber: v.string(),
+    partNumberKey: v.string(),
+    name: v.string(),
+    order: v.number(),
+    isDefault: v.optional(v.boolean()),
+    onshapeDocumentId: v.optional(v.string()),
+    onshapeElementId: v.optional(v.string()),
+    onshapeVersionId: v.optional(v.string()),
+    revision: v.optional(v.string()),
+    // The release package this was last seen in. Written wherever
+    // lastSyncedAt is, so it always means the same thing: the last release
+    // that mentioned it, not the one that moved it.
+    lastReleasePackageId: v.optional(v.string()),
+    lastSyncedAt: v.optional(v.number()),
+    // A drawing that isn't in Onshape — a PDF on the shop drive, say. Rendered
+    // as a link, so http(s) only (see lib/assembly.ts::isSafeDrawingUrl). The
+    // CAD link is derived from the ids above and never stored.
+    drawingUrl: v.optional(v.string()),
+    claimedByUserId: v.optional(v.string()),
+    // How many go on the robot, how many extra to build, and how many are
+    // built so far — the same three numbers a part carries, because the job
+    // is the same job. Missing qtyNeeded means one.
+    qtyNeeded: v.optional(v.number()),
+    qtySpares: v.optional(v.number()),
+    qtyBuilt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    completedByUserId: v.optional(v.string()),
+  })
+    .index("by_subsystem", ["subsystemId"])
+    .index("by_season", ["seasonId"])
+    .index("by_partNumberKey", ["partNumberKey"])
+    .index("by_onshapeElementId", ["onshapeElementId"])
+    .index("by_subsystem_and_default", ["subsystemId", "isDefault"]),
+
+  // What a sub-assembly is made of. Exactly one of the three ids is set on any
+  // row — that invariant is enforced in subAssemblies.setMembers, which is the
+  // only thing allowed to write this table.
+  //
+  // The same part may appear under several sub-assemblies: two roller
+  // assemblies sharing an end cap is ordinary, not a mistake. What that costs
+  // is worked out in lib/assembly.ts::rollUpDemand rather than by pretending
+  // each part has one home.
+  subAssemblyMembers: defineTable({
+    subAssemblyId: v.id("subAssemblies"),
+    partId: v.optional(v.id("parts")),
+    cotsItemId: v.optional(v.id("cotsItems")),
+    childSubAssemblyId: v.optional(v.id("subAssemblies")),
+    /** How many of it this assembly uses. Missing means one. */
+    quantity: v.optional(v.number()),
+  })
+    .index("by_parent", ["subAssemblyId"])
+    .index("by_part", ["partId"])
+    .index("by_child", ["childSubAssemblyId"]),
+
+  // Notes on a sub-assembly, the same shape as a part's. Assemblies get
+  // reopened and rebuilt, and "why" belongs somewhere other than someone's
+  // memory.
+  subAssemblyNotes: defineTable({
+    subAssemblyId: v.id("subAssemblies"),
+    userId: v.string(),
+    body: v.string(),
+  }).index("by_subAssembly", ["subAssemblyId"]),
+
+  // A sub-assembly has no stages, so there is no stageEvents equivalent to
+  // read its history from. These are the things that do happen to one: it got
+  // built, it got reopened, someone changed how many are built.
+  assemblyEvents: defineTable({
+    subAssemblyId: v.id("subAssemblies"),
+    kind: v.union(
+      v.literal("built"),
+      v.literal("reopened"),
+      v.literal("qty_built"),
+    ),
+    userId: v.string(),
+    // qty_built only: what it moved from and to.
+    from: v.optional(v.number()),
+    to: v.optional(v.number()),
+  }).index("by_subAssembly", ["subAssemblyId"]),
+
+  // ---- Onshape intake ----
+  // A release (or a manually entered / CSV-imported stand-in) waiting to be
+  // turned into board changes. Received for free; reading it costs 1 API call.
+  releaseIntakes: defineTable({
+    source: v.union(
+      v.literal("onshape"),
+      v.literal("manual"),
+      v.literal("csv"),
+    ),
+    onshapeReleasePackageId: v.optional(v.string()),
+    label: v.string(),
+    receivedAt: v.number(),
+    status: v.union(
+      v.literal("queued"), // held: no reads allowed, or not looked at yet
+      v.literal("read"), // lines built, waiting on a lead
+      v.literal("processed"),
+      v.literal("dismissed"),
+    ),
+    payload: v.optional(v.any()),
+    processedByUserId: v.optional(v.string()),
+  })
+    .index("by_package", ["onshapeReleasePackageId"])
+    .index("by_status", ["status"]),
+
+  releaseIntakeLines: defineTable({
+    intakeId: v.id("releaseIntakes"),
+    partNumber: v.optional(v.string()),
+    revision: v.optional(v.string()),
+    name: v.string(),
+    quantity: v.optional(v.number()),
+    kind: v.union(
+      v.literal("matched"), // number is known, stage moved
+      v.literal("changed"), // new revision of something already made
+      v.literal("unknown"), // a number the app never issued
+      v.literal("removed"), // gone from the subsystem assembly
+    ),
+    decision: v.optional(
+      v.union(
+        v.literal("rework"),
+        v.literal("remake_all"),
+        v.literal("keep"),
+        v.literal("linked"),
+        v.literal("created"),
+        v.literal("archived"),
+        v.literal("ignored"),
+      ),
+    ),
+    partId: v.optional(v.id("parts")),
+    // Absent means the line is about a part, which is the common case.
+    target: v.optional(
+      v.union(
+        v.literal("part"),
+        v.literal("subAssembly"),
+        v.literal("cotsItem"),
+      ),
+    ),
+    subAssemblyId: v.optional(v.id("subAssemblies")),
+    cotsItemId: v.optional(v.id("cotsItems")),
+    subsystemId: v.optional(v.id("subsystems")),
+    // The vendor a BOM row named, carried so the lead doesn't retype it and
+    // so a row that plainly describes something bought can default that way.
+    vendor: v.optional(v.string()),
+    // Onshape's own standard content — library hardware. Same purpose as
+    // `vendor` above: a reason to offer Buy it before Make it.
+    standardContent: v.optional(v.boolean()),
+    // Where it came from in CAD. Kept on the line because something the
+    // board doesn't know yet has nowhere else to put them, and whatever the
+    // lead turns the line into needs them to build its deep link.
+    onshapeDocumentId: v.optional(v.string()),
+    onshapeElementId: v.optional(v.string()),
+    onshapePartId: v.optional(v.string()),
+    onshapeVersionId: v.optional(v.string()),
+    note: v.optional(v.string()),
+  }).index("by_intake", ["intakeId"]),
+
+  // Every Onshape call, so the budget meter is measured rather than guessed.
+  // Only 2xx/3xx responses count against the plan's allowance.
+  apiCalls: defineTable({
+    method: v.string(),
+    endpoint: v.string(),
+    status: v.number(),
+    counted: v.boolean(),
+    reason: v.optional(v.string()),
+  }).index("by_counted", ["counted"]),
+
+  // Budget limit, renewal date, thresholds, forced mode, webhook id, …
+  appSettings: defineTable({
+    key: v.string(),
+    value: v.any(),
+  }).index("by_key", ["key"]),
+
+  // Known Onshape documents, mapped to the subsystem they hold the CAD for.
   onshapeDocuments: defineTable({
-    documentNumber: v.string(),
     onshapeDocumentId: v.string(),
     name: v.string(),
-    projectId: v.optional(v.id("projects")),
+    subsystemId: v.optional(v.id("subsystems")),
   })
     .index("by_onshapeDocumentId", ["onshapeDocumentId"])
-    .index("by_project", ["projectId"]),
+    .index("by_subsystem", ["subsystemId"]),
 
   // Single-row team-level Onshape OAuth token store (one connection for the
   // whole team, refreshed as needed).
@@ -184,69 +462,86 @@ export default defineSchema({
     accessToken: v.string(),
     refreshToken: v.string(),
     expiresAt: v.number(),
+    /** The `users.authId` of whoever authorized this connection. */
     connectedBy: v.optional(v.string()),
+    connectedAt: v.optional(v.number()),
+    // A query can't ask Onshape whether the token still works, so the fetch
+    // path writes down what happened last. Without this the admin page says
+    // "Connected" forever, including after the owner leaves the Classroom.
+    lastError: v.optional(v.string()),
+    lastErrorAt: v.optional(v.number()),
+    // Read from Onshape when the connection is made, so registering the
+    // webhook doesn't depend on someone pasting the right id.
+    companyId: v.optional(v.string()),
   }),
 
-  // Short-lived CSRF state values for the OAuth authorize round-trip.
+  // Short-lived CSRF state for the OAuth authorize round-trip. It doubles as
+  // proof that a mentor started the flow — /onshape/oauth/start is a public
+  // endpoint, and without this anyone who knew the URL could repoint the
+  // team's connection at their own Onshape account.
   onshapeOAuthState: defineTable({
     state: v.string(),
+    userId: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
   }).index("by_state", ["state"]),
 
-  // Short-lived, single-use tokens for the Onshape right-panel app. The panel
-  // (served to an Onshape iframe) mints one after validating the shared secret;
-  // the browser's "Sync selected" POST redeems it, so the long-lived
-  // ONSHAPE_SYNC_SECRET never has to be carried in client-side JS. The token
-  // also captures the document/element context server-side so the client can't
-  // tamper with which element gets synced.
+  // The release webhook Onshape calls when a release package transitions.
+  // One registration for the whole team; this row is also what the admin page
+  // shows as its status, which is why the lifecycle timestamps live on it.
+  onshapeWebhooks: defineTable({
+    webhookId: v.string(),
+    companyId: v.optional(v.string()),
+    events: v.array(v.string()),
+    registeredAt: v.number(),
+    registeredBy: v.optional(v.string()),
+    /** Onshape's own register/ping traffic — proof the callback is reachable. */
+    lastPingAt: v.optional(v.number()),
+    /** The last real transition we were told about. */
+    lastEventAt: v.optional(v.number()),
+    // Set when the Onshape connection is re-authorized: the registration was
+    // made under the old authorization and may no longer be live, but Onshape
+    // doesn't tell us that — so say "re-register" rather than "✓ Registered".
+    staleSince: v.optional(v.number()),
+  }).index("by_webhookId", ["webhookId"]),
+
+  // Short-lived, single-use tokens for the Onshape right-panel app.
   onshapePanelTokens: defineTable({
     token: v.string(),
     documentId: v.string(),
-    wv: v.string(), // "w" (workspace) or "v" (version)
+    wv: v.string(),
     wvid: v.string(),
     elementId: v.string(),
     expiresAt: v.number(),
   }).index("by_token", ["token"]),
 
-  // ---- Phase 4: GitHub issue/PR sync ----
-  // Software issues/PRs mirror their lifecycle into the single `tasks` list via
-  // source: "issue" / sourceId (see convex/lib/taskSync.ts::syncTaskForIssue).
-  // `source: "github"` rows are owned by the GitHub webhook (repo + number
-  // identify them); `source: "manual"` rows are bug reports created in-app that
-  // never leave the tracker. `priority` is derived from labels on GitHub rows
-  // and set directly on manual ones.
+  // ---- GitHub issue/PR sync ----
   issues: defineTable({
     source: v.union(v.literal("github"), v.literal("manual")),
-    repo: v.optional(v.string()), // "owner/name" (GitHub rows)
-    number: v.optional(v.number()), // issue/PR number within the repo
-    githubId: v.optional(v.number()), // GitHub's stable numeric id
+    repo: v.optional(v.string()),
+    number: v.optional(v.number()),
+    githubId: v.optional(v.number()),
     title: v.string(),
     body: v.optional(v.string()),
     state: v.union(v.literal("open"), v.literal("closed")),
     htmlUrl: v.optional(v.string()),
     labels: v.array(v.string()),
-    assigneeLogins: v.array(v.string()), // GitHub logins (not Clerk ids)
+    assigneeLogins: v.array(v.string()),
     authorLogin: v.optional(v.string()),
     isPullRequest: v.boolean(),
-    // The effective priority (displayed + mirrored to the task). On GitHub rows
-    // it tracks the labels via derivePriority unless overridden below.
     priority: v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
-    // An in-app override that survives GitHub re-syncs. When set on a GitHub
-    // row it wins over the label-derived priority; clearing it reverts to the
-    // labels. (Manual rows set `priority` directly and ignore this.)
     priorityOverride: v.optional(
       v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
     ),
-    linkedTaskId: v.optional(v.id("tasks")), // back-reference to the mirror task
-    projectId: v.optional(v.id("projects")),
+    // Who on the team picked it up. GitHub has assignees of its own, but
+    // those are GitHub logins; this is a tracker user, the same as a part's
+    // or a to-do's claimant, and the GitHub re-sync leaves it alone.
+    claimedByUserId: v.optional(v.string()),
     lastSyncedAt: v.optional(v.number()),
   })
     .index("by_repo_and_number", ["repo", "number"])
     .index("by_state", ["state"])
-    .index("by_project", ["projectId"]),
+    .index("by_claimedBy", ["claimedByUserId"]),
 
-  // Comments on an issue. GitHub-mirrored comments carry `githubCommentId` +
-  // `authorLogin`; locally-authored team notes carry `authorId` (Clerk id) and
-  // stay in the tracker only.
   issueComments: defineTable({
     issueId: v.id("issues"),
     githubCommentId: v.optional(v.number()),
@@ -257,12 +552,11 @@ export default defineSchema({
     .index("by_issue", ["issueId"])
     .index("by_githubCommentId", ["githubCommentId"]),
 
-  // Mentor-managed mapping from a GitHub repo ("owner/name") to a project, so
-  // synced/imported issues auto-inherit a project (the GitHub twin of
-  // onshapeDocuments→project). Manual per-issue triage still wins and is never
-  // overwritten. Mirrors Onshape's document mapping.
-  githubRepos: defineTable({
-    repo: v.string(), // canonical GitHub full_name, e.g. "deceivers/robot-2026"
-    projectId: v.id("projects"),
-  }).index("by_repo", ["repo"]),
+  // Stocked consumables and spares, optionally tied to a tracked part.
+  inventoryItems: defineTable({
+    name: v.string(),
+    onHandQty: v.number(),
+    unitCost: v.optional(v.number()),
+    linkedPartId: v.optional(v.id("parts")),
+  }),
 });

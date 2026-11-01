@@ -3,21 +3,23 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  mutation,
   query,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { htmlResponse, TOKEN_URL } from "./lib/onshapeAuth";
+import { fetchCompanyId } from "./lib/onshapeSync";
 import {
+  fetchElementPartNumberProperty,
   fetchPartNumberProperty,
-  fetchPartPreview,
-  fetchShadedViewBase64,
   partKey,
   resolveSyncParts,
-  writePartNumber,
 } from "./lib/onshapeSync";
 import { esc, panelHtml } from "./lib/onshapePanelHtml";
 import { encryptToken, decryptToken } from "./lib/tokenCrypto";
+import { requireMentor } from "./lib/auth";
 
 const AUTHORIZE_URL = "https://oauth.onshape.com/oauth/authorize";
 const CALLBACK_PATH = "/onshape/oauth/callback";
@@ -27,16 +29,33 @@ function siteUrl(): string {
 }
 
 // ---- Token + state storage (internal) ----
-export const createState = internalMutation({
-  args: { state: v.string() },
-  returns: v.null(),
-  handler: async (ctx, { state }) => {
-    await ctx.db.insert("onshapeOAuthState", { state });
-    return null;
+const STATE_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Start a connection. Called from the admin page, so it runs as a signed-in
+ * mentor — which is the point: `/onshape/oauth/start` is a public endpoint
+ * with no identity of its own, and the state it demands is minted here.
+ *
+ * The same row remembers who started it, so the finished connection can say
+ * whose it is instead of leaving the team to remember.
+ */
+export const beginConnect = mutation({
+  args: {},
+  returns: v.string(),
+  handler: async (ctx) => {
+    const user = await requireMentor(ctx);
+    const state = crypto.randomUUID();
+    await ctx.db.insert("onshapeOAuthState", {
+      state,
+      userId: user.authId,
+      expiresAt: Date.now() + STATE_TTL_MS,
+    });
+    return state;
   },
 });
 
-export const consumeState = internalMutation({
+/** Look at a state without spending it — the redirect isn't the callback. */
+export const peekState = internalQuery({
   args: { state: v.string() },
   returns: v.boolean(),
   handler: async (ctx, { state }) => {
@@ -44,9 +63,27 @@ export const consumeState = internalMutation({
       .query("onshapeOAuthState")
       .withIndex("by_state", (q) => q.eq("state", state))
       .unique();
-    if (!row) return false;
+    // A row with no expiry predates this check and is treated as expired,
+    // rather than as a permanent key to the connection.
+    return row !== null && (row.expiresAt ?? 0) > Date.now();
+  },
+});
+
+export const consumeState = internalMutation({
+  args: { state: v.string() },
+  returns: v.union(
+    v.object({ userId: v.union(v.string(), v.null()) }),
+    v.null(),
+  ),
+  handler: async (ctx, { state }) => {
+    const row = await ctx.db
+      .query("onshapeOAuthState")
+      .withIndex("by_state", (q) => q.eq("state", state))
+      .unique();
+    if (!row) return null;
     await ctx.db.delete(row._id);
-    return true;
+    if ((row.expiresAt ?? 0) <= Date.now()) return null;
+    return { userId: row.userId ?? null };
   },
 });
 
@@ -55,11 +92,28 @@ export const consumeState = internalMutation({
 // stored row is ciphertext. `onshapeAuth` is a single-row table, so a
 // reconnect (Admin → Onshape → Connect) naturally re-encrypts under the
 // current key; there's no separate migration path for existing rows.
+export const storeCompanyId = internalMutation({
+  args: { companyId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { companyId }) => {
+    const existing = await ctx.db.query("onshapeAuth").take(1);
+    if (existing[0]) await ctx.db.patch(existing[0]._id, { companyId });
+    return null;
+  },
+});
+
 export const storeTokens = internalMutation({
   args: {
     accessToken: v.string(),
     refreshToken: v.string(),
     expiresAt: v.number(),
+    /**
+     * "connect" is somebody authorizing the app; "refresh" is the same
+     * authorization getting a new access token. Only the first changes who
+     * owns the connection — and only the first can invalidate the webhook.
+     */
+    reason: v.union(v.literal("connect"), v.literal("refresh")),
+    connectedBy: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -67,13 +121,47 @@ export const storeTokens = internalMutation({
       accessToken: await encryptToken(args.accessToken),
       refreshToken: await encryptToken(args.refreshToken),
       expiresAt: args.expiresAt,
+      // Whatever went wrong before, it was with the old token.
+      lastError: undefined,
+      lastErrorAt: undefined,
     };
+    const owner =
+      args.reason === "connect"
+        ? { connectedBy: args.connectedBy, connectedAt: Date.now() }
+        : {};
     const existing = await ctx.db.query("onshapeAuth").take(1);
     if (existing[0]) {
-      await ctx.db.patch(existing[0]._id, encrypted);
+      await ctx.db.patch(existing[0]._id, { ...encrypted, ...owner });
     } else {
-      await ctx.db.insert("onshapeAuth", encrypted);
+      await ctx.db.insert("onshapeAuth", { ...encrypted, ...owner });
     }
+
+    if (args.reason === "connect") {
+      // The webhook was registered under the previous authorization. Onshape
+      // won't tell us whether it survived, so stop claiming it did.
+      for (const hook of await ctx.db.query("onshapeWebhooks").collect()) {
+        await ctx.db.patch(hook._id, { staleSince: Date.now() });
+      }
+    }
+    return null;
+  },
+});
+
+/**
+ * Remember that Onshape turned us down. The admin page has no way to find
+ * this out on its own — a query can't call Onshape — so the one code path
+ * that does learn it writes it down.
+ */
+export const recordAuthFailure = internalMutation({
+  args: { error: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { error }) => {
+    const existing = await ctx.db.query("onshapeAuth").take(1);
+    if (!existing[0]) return null;
+    await ctx.db.patch(existing[0]._id, {
+      lastError: error,
+      lastErrorAt: Date.now(),
+    });
     return null;
   },
 });
@@ -113,30 +201,77 @@ export const getAuthInternal = internalQuery({
 // the stored tokens actually decrypt (not just that a row exists) so a
 // pre-encryption or stale-key row shows as disconnected rather than a false
 // "Connected" the UI can't act on.
+//
+// `lastError` is the other half of that honesty. A query can't ask Onshape
+// whether the refresh token still works, so a connection whose owner has left
+// the Classroom decrypts perfectly and fails every call. Reporting the last
+// failure is the difference between the page saying "Connected" forever and
+// the page saying "reconnect".
 export const connectionStatus = query({
   args: {},
-  returns: v.object({ connected: v.boolean(), expiresAt: v.union(v.number(), v.null()) }),
+  returns: v.object({
+    connected: v.boolean(),
+    expiresAt: v.union(v.number(), v.null()),
+    connectedBy: v.union(v.string(), v.null()),
+    connectedAt: v.union(v.number(), v.null()),
+    lastError: v.union(v.string(), v.null()),
+    lastErrorAt: v.union(v.number(), v.null()),
+  }),
   handler: async (ctx) => {
+    const none = {
+      connected: false,
+      expiresAt: null,
+      connectedBy: null,
+      connectedAt: null,
+      lastError: null,
+      lastErrorAt: null,
+    };
     const rows = await ctx.db.query("onshapeAuth").take(1);
     const a = rows[0];
-    if (!a) return { connected: false, expiresAt: null };
+    if (!a) return none;
     try {
       await decryptToken(a.accessToken);
-      return { connected: true, expiresAt: a.expiresAt };
     } catch {
-      return { connected: false, expiresAt: null };
+      return none;
     }
+    const owner = a.connectedBy
+      ? await ctx.db
+          .query("users")
+          .withIndex("authId", (q) => q.eq("authId", a.connectedBy!))
+          .unique()
+      : null;
+    return {
+      connected: true,
+      expiresAt: a.expiresAt,
+      connectedBy: owner?.name ?? (a.connectedBy ? "someone else" : null),
+      connectedAt: a.connectedAt ?? null,
+      lastError: a.lastError ?? null,
+      lastErrorAt: a.lastErrorAt ?? null,
+    };
   },
 });
 
 // ---- OAuth authorization-code flow ----
-export const oauthStart = httpAction(async (ctx) => {
+export const oauthStart = httpAction(async (ctx, req) => {
   const clientId = process.env.ONSHAPE_OAUTH_CLIENT_ID;
   if (!clientId) {
     return htmlResponse("ONSHAPE_OAUTH_CLIENT_ID is not set.", 500);
   }
-  const state = crypto.randomUUID();
-  await ctx.runMutation(internal.onshapeOAuth.createState, { state });
+  // This endpoint is public and has no identity of its own, so it won't start
+  // anything a signed-in mentor didn't ask for: the state comes from
+  // `beginConnect`, and without a live one there is no redirect. Otherwise
+  // anyone with the URL could repoint the team's connection at their own
+  // Onshape account.
+  const state = new URL(req.url).searchParams.get("state") ?? "";
+  const valid: boolean = await ctx.runQuery(internal.onshapeOAuth.peekState, {
+    state,
+  });
+  if (!valid) {
+    return htmlResponse(
+      "Start the connection from Settings → Onshape in the tracker.",
+      400,
+    );
+  }
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -155,10 +290,11 @@ export const oauthCallback = httpAction(async (ctx, req) => {
   const state = url.searchParams.get("state");
   if (!code || !state) return htmlResponse("Missing code or state.", 400);
 
-  const validState = await ctx.runMutation(internal.onshapeOAuth.consumeState, {
-    state,
-  });
-  if (!validState) return htmlResponse("Invalid or expired state.", 400);
+  const consumed: { userId: string | null } | null = await ctx.runMutation(
+    internal.onshapeOAuth.consumeState,
+    { state },
+  );
+  if (!consumed) return htmlResponse("Invalid or expired state.", 400);
 
   const clientId = process.env.ONSHAPE_OAUTH_CLIENT_ID;
   const clientSecret = process.env.ONSHAPE_OAUTH_CLIENT_SECRET;
@@ -178,7 +314,10 @@ export const oauthCallback = httpAction(async (ctx, req) => {
     }),
   });
   if (!res.ok) {
-    return htmlResponse(`Token exchange failed: ${res.status} ${await res.text()}`, 502);
+    return htmlResponse(
+      `Token exchange failed: ${res.status} ${await res.text()}`,
+      502,
+    );
   }
   const tok = (await res.json()) as {
     access_token: string;
@@ -189,30 +328,29 @@ export const oauthCallback = httpAction(async (ctx, req) => {
     accessToken: tok.access_token,
     refreshToken: tok.refresh_token,
     expiresAt: Date.now() + (tok.expires_in ?? 3600) * 1000,
+    reason: "connect",
+    connectedBy: consumed.userId ?? undefined,
   });
+
+  // One call, once, to save a mentor pasting an id nothing validates. A
+  // failure here is not a failed connection — the webhook page still takes
+  // the id by hand.
+  try {
+    const companyId = await fetchCompanyId(ctx);
+    if (companyId) {
+      await ctx.runMutation(internal.onshapeOAuth.storeCompanyId, {
+        companyId,
+      });
+    }
+  } catch (err) {
+    console.error("Could not read the Onshape company:", err);
+  }
   return htmlResponse("✅ Onshape connected. You can close this tab.");
 });
 
 // Which of the given `elementId:partId` keys already exist in the tracker.
-export const trackedElementIds = internalQuery({
-  args: { onshapeElementIds: v.array(v.string()) },
-  returns: v.array(v.string()),
-  handler: async (ctx, { onshapeElementIds }) => {
-    const tracked: string[] = [];
-    for (const eid of onshapeElementIds) {
-      const p = await ctx.db
-        .query("parts")
-        .withIndex("by_onshapeElementId", (q) => q.eq("onshapeElementId", eid))
-        .unique();
-      if (p) tracked.push(eid);
-    }
-    return tracked;
-  },
-});
-
-// List the parts in an element for the right-panel checklist, flagging which
-// are already tracked and their assembly quantity. No writes — purely for
-// rendering the picker. Works for both Part Studios and Assemblies.
+// List the parts in an element for the right-panel checklist. No writes —
+// purely for rendering the picker. Works for Part Studios and Assemblies.
 export const listElementParts = internalAction({
   args: {
     documentId: v.string(),
@@ -225,7 +363,6 @@ export const listElementParts = internalAction({
       key: v.string(),
       name: v.string(),
       material: v.union(v.string(), v.null()),
-      tracked: v.boolean(),
       quantity: v.number(),
       sameDocument: v.boolean(),
     }),
@@ -238,141 +375,23 @@ export const listElementParts = internalAction({
       args.wvid,
       args.elementId,
     );
-    const keys = parts.map((p) => partKey(p.sourceElementId, p.partId));
-    const tracked: string[] = await ctx.runQuery(
-      internal.onshapeOAuth.trackedElementIds,
-      { onshapeElementIds: keys },
-    );
-    const trackedSet = new Set(tracked);
-    return parts.map((p) => {
-      const key = partKey(p.sourceElementId, p.partId);
-      return {
-        key,
-        name: p.name,
-        material: p.material,
-        tracked: trackedSet.has(key),
-        quantity: p.quantity,
-        sameDocument: p.sameDocument,
-      };
-    });
+    return parts.map((p) => ({
+      key: partKey(p.sourceElementId, p.partId),
+      name: p.name,
+      material: p.material,
+      quantity: p.quantity,
+      sameDocument: p.sameDocument,
+    }));
   },
 });
 
-// Read-only preview for the panel's confirm step: for each selected part,
-// fetch its rendered image and the part number it would get on sync. Makes NO
-// changes to the tracker or Onshape (the counter is only projected, not
-// advanced), so the user can review before committing. `keys` are the composite
-// `sourceElementId:partId` ids from the picker.
-export const buildPreview = internalAction({
-  args: {
-    documentId: v.string(),
-    wv: v.string(),
-    wvid: v.string(),
-    elementId: v.string(),
-    keys: v.array(v.string()),
-  },
-  returns: v.object({
-    wv: v.string(),
-    parts: v.array(
-      v.object({
-        name: v.string(),
-        material: v.union(v.string(), v.null()),
-        image: v.union(v.string(), v.null()), // data URL, or null if unavailable
-        partNumber: v.union(v.string(), v.null()),
-        tracked: v.boolean(),
-        willWriteBack: v.boolean(),
-        quantity: v.number(),
-        sameDocument: v.boolean(),
-      }),
-    ),
-  }),
-  handler: async (ctx, args) => {
-    const { parts: all } = await resolveSyncParts(
-      ctx,
-      args.documentId,
-      args.wv,
-      args.wvid,
-      args.elementId,
-    );
-    const wanted = new Set(args.keys);
-    const parts = all.filter((p) =>
-      wanted.has(partKey(p.sourceElementId, p.partId)),
-    );
-
-    const meta: Array<{
-      part: (typeof parts)[number];
-      onshapePartNumber?: string;
-      image: string | null;
-    }> = [];
-    for (const p of parts) {
-      let onshapePartNumber: string | undefined;
-      let image: string | null = null;
-      // Metadata + thumbnail only exist for same-document (enrichable) parts.
-      if (p.enrichable) {
-        try {
-          const prop = await fetchPartNumberProperty(
-            ctx,
-            p.sourceDocumentId,
-            args.wv,
-            args.wvid,
-            p.sourceElementId,
-            p.partId,
-          );
-          onshapePartNumber = prop?.value ? prop.value : undefined;
-        } catch (err) {
-          console.error(`Preview part-number read failed for ${p.partId}:`, err);
-        }
-        try {
-          const b64 = await fetchShadedViewBase64(
-            ctx,
-            p.sourceDocumentId,
-            args.wv,
-            args.wvid,
-            p.sourceElementId,
-            p.partId,
-          );
-          if (b64) image = `data:image/png;base64,${b64}`;
-        } catch (err) {
-          console.error(`Preview image fetch failed for ${p.partId}:`, err);
-        }
-      }
-      meta.push({ part: p, onshapePartNumber, image });
-    }
-
-    const numbers: Array<{
-      partNumber: string | null;
-      tracked: boolean;
-      willWriteBack: boolean;
-    }> = await ctx.runQuery(internal.onshape.previewNumbers, {
-      items: meta.map((m) => ({
-        onshapeElementId: partKey(m.part.sourceElementId, m.part.partId),
-        onshapeDocumentId: m.part.sourceDocumentId,
-        onshapePartNumber: m.onshapePartNumber,
-      })),
-    });
-
-    return {
-      wv: args.wv,
-      parts: meta.map((m, i) => ({
-        name: m.part.name,
-        material: m.part.material,
-        image: m.image,
-        partNumber: numbers[i].partNumber,
-        tracked: numbers[i].tracked,
-        willWriteBack:
-          numbers[i].willWriteBack && m.part.enrichable && args.wv === "w",
-        quantity: m.part.quantity,
-        sameDocument: m.part.sameDocument,
-      })),
-    };
-  },
-});
-
-// Sync an element's parts (on demand) into the tracker. With `keys`, only those
-// parts are synced. For an Assembly, quantities are instance counts; for a Part
-// Studio, 1 each. Per part: reconcile the part number bidirectionally, write
-// generated numbers back into Onshape (same-document workspace only), and store
-// a shaded-view preview as the thumbnail.
+/**
+ * Read an element's parts and hand them to the tracker as a release intake.
+ *
+ * This writes nothing to the board on its own: a design lead reviews what came
+ * back on "New from Onshape" and decides. It also writes nothing back into
+ * Onshape — students paste their own numbers, which costs the team nothing.
+ */
 export const syncElement = internalAction({
   args: {
     documentId: v.string(),
@@ -382,12 +401,17 @@ export const syncElement = internalAction({
     keys: v.optional(v.array(v.string())),
   },
   returns: v.object({
-    upserted: v.number(),
-    numbersWritten: v.number(),
-    previews: v.number(),
+    found: v.number(),
+    lines: v.number(),
+    intakeId: v.id("releaseIntakes"),
   }),
   handler: async (ctx, args) => {
-    const { parts: all } = await resolveSyncParts(
+    const {
+      parts: all,
+      elementType,
+      elementName,
+      children,
+    } = await resolveSyncParts(
       ctx,
       args.documentId,
       args.wv,
@@ -397,96 +421,69 @@ export const syncElement = internalAction({
     let parts = all;
     if (args.keys) {
       const wanted = new Set(args.keys);
-      parts = all.filter((p) => wanted.has(partKey(p.sourceElementId, p.partId)));
-    }
-
-    let upserted = 0;
-    let numbersWritten = 0;
-    let previews = 0;
-
-    for (const p of parts) {
-      // 1. Read Onshape's current part number (same-document parts only).
-      let pnProp: { propertyId: string; value: string } | null = null;
-      if (p.enrichable) {
-        try {
-          pnProp = await fetchPartNumberProperty(
-            ctx,
-            p.sourceDocumentId,
-            args.wv,
-            args.wvid,
-            p.sourceElementId,
-            p.partId,
-          );
-        } catch (err) {
-          console.error(`Part number read failed for ${p.partId}:`, err);
-        }
-      }
-
-      // 2. Upsert, feeding the tracker Onshape's number and the assembly qty.
-      const result = await ctx.runMutation(
-        internal.onshape.upsertPartFromOnshape,
-        {
-          onshapeElementId: partKey(p.sourceElementId, p.partId),
-          onshapeDocumentId: p.sourceDocumentId,
-          name: p.name,
-          material: p.material ?? undefined,
-          quantityNeeded: p.quantity,
-          onshapePartNumber: pnProp?.value ? pnProp.value : undefined,
-          lastModifiedInOnshape: Date.now(),
-        },
+      parts = all.filter((p) =>
+        wanted.has(partKey(p.sourceElementId, p.partId)),
       );
-      upserted++;
-
-      // 3. Push a generated/kept number back into Onshape. Same-document
-      //    workspace only, and only when we found the property id to target.
-      if (
-        result.writeBackPartNumber &&
-        p.enrichable &&
-        args.wv === "w" &&
-        pnProp?.propertyId
-      ) {
-        try {
-          const ok = await writePartNumber(
-            ctx,
-            p.sourceDocumentId,
-            args.wvid,
-            p.sourceElementId,
-            p.partId,
-            pnProp.propertyId,
-            result.writeBackPartNumber,
-          );
-          if (ok) numbersWritten++;
-        } catch (err) {
-          console.error(`Part number write-back failed for ${p.partId}:`, err);
-        }
-      }
-
-      // 4. Store a shaded-view preview as the part thumbnail (same-document).
-      if (p.enrichable) {
-        try {
-          const blob = await fetchPartPreview(
-            ctx,
-            p.sourceDocumentId,
-            args.wv,
-            args.wvid,
-            p.sourceElementId,
-            p.partId,
-          );
-          if (blob) {
-            const storageId = await ctx.storage.store(blob);
-            await ctx.runMutation(internal.parts.setThumbnailInternal, {
-              id: result.partId,
-              storageId,
-            });
-            previews++;
-          }
-        } catch (err) {
-          console.error(`Preview fetch failed for ${p.partId}:`, err);
-        }
-      }
     }
 
-    return { upserted, numbersWritten, previews };
+    // The part number Onshape holds is how a release is matched to a part, so
+    // it's worth a read each — but only for parts in this document, which are
+    // the only ones whose metadata we can reach.
+    const lines = [];
+    for (const part of parts) {
+      const property = part.sameDocument
+        ? await fetchPartNumberProperty(
+            ctx,
+            args.documentId,
+            args.wv,
+            args.wvid,
+            part.sourceElementId,
+            part.partId,
+          )
+        : null;
+      lines.push({
+        name: part.name,
+        partNumber: property?.value || undefined,
+        quantity: part.quantity,
+        onshapePartId: part.partId,
+        material: part.material ?? undefined,
+        standardContent: part.standardContent || undefined,
+      });
+    }
+
+    // An assembly carries a Part number of its own; that plus its element id
+    // is how the tracker recognises which sub-assembly it just looked at.
+    const assembly =
+      elementType === "ASSEMBLY"
+        ? {
+            name: elementName || "Assembly",
+            partNumber:
+              (await fetchElementPartNumberProperty(
+                ctx,
+                args.documentId,
+                args.wv,
+                args.wvid,
+                args.elementId,
+              )) ?? undefined,
+            children,
+          }
+        : undefined;
+
+    const result: { intakeId: Id<"releaseIntakes">; lines: number } =
+      await ctx.runMutation(internal.onshape.receiveSync, {
+        onshapeDocumentId: args.documentId,
+        onshapeElementId: args.elementId,
+        elementName: elementName || undefined,
+        versionId: args.wv === "v" ? args.wvid : undefined,
+        assembly,
+        parts: lines,
+      });
+
+    return {
+      found: parts.length,
+      lines: result.lines,
+      intakeId: result.intakeId,
+    };
   },
 });
 
@@ -534,22 +531,20 @@ export const ext = httpAction(async (ctx, req) => {
   }
   // Always 200 so the message renders in the popup (Cloudflare masks 5xx).
   try {
-    const result: {
-      upserted: number;
-      numbersWritten: number;
-      previews: number;
-    } = await ctx.runAction(internal.onshapeOAuth.syncElement, context);
+    const result: { found: number; lines: number } = await ctx.runAction(
+      internal.onshapeOAuth.syncElement,
+      context,
+    );
     return htmlResponse(
-      `✅ Synced ${result.upserted} part${result.upserted === 1 ? "" : "s"} to the Deceivers tracker` +
-        ` (${result.numbersWritten} number${result.numbersWritten === 1 ? "" : "s"} written, ` +
-        `${result.previews} preview${result.previews === 1 ? "" : "s"}).`,
+      `✅ Sent ${result.found} part${result.found === 1 ? "" : "s"} to the Deceivers tracker.` +
+        ` A design lead reviews them under "New from Onshape".`,
     );
   } catch (err) {
     return htmlResponse(`⚠️ Sync failed: ${errMessage(err)}`);
   }
 });
 
-// ---- Right-panel app (select parts, then sync only those) ----
+// ---- Right-panel app (pick the parts, then send those) ----
 // Short-lived, single-use tokens bind the panel's "Sync selected" POST to the
 // document/element context server-side so the client never carries the secret.
 export const createPanelToken = internalMutation({
@@ -604,32 +599,6 @@ export const consumePanelToken = internalMutation({
 
 // Read the panel context WITHOUT consuming the token — used by the preview
 // step, which is read-only and may run before the user confirms the sync.
-export const peekPanelToken = internalQuery({
-  args: { token: v.string() },
-  returns: v.union(
-    v.object({
-      documentId: v.string(),
-      wv: v.string(),
-      wvid: v.string(),
-      elementId: v.string(),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, { token }) => {
-    const row = await ctx.db
-      .query("onshapePanelTokens")
-      .withIndex("by_token", (q) => q.eq("token", token))
-      .unique();
-    if (!row || row.expiresAt < Date.now()) return null;
-    return {
-      documentId: row.documentId,
-      wv: row.wv,
-      wvid: row.wvid,
-      elementId: row.elementId,
-    };
-  },
-});
-
 export const panel = httpAction(async (ctx, req) => {
   const url = new URL(req.url);
   if (url.searchParams.get("secret") !== process.env.ONSHAPE_SYNC_SECRET) {
@@ -650,12 +619,14 @@ export const panel = httpAction(async (ctx, req) => {
     key: string;
     name: string;
     material: string | null;
-    tracked: boolean;
     quantity: number;
     sameDocument: boolean;
   }>;
   try {
-    parts = await ctx.runAction(internal.onshapeOAuth.listElementParts, context);
+    parts = await ctx.runAction(
+      internal.onshapeOAuth.listElementParts,
+      context,
+    );
   } catch (err) {
     return htmlResponse(`⚠️ Could not load parts: ${errMessage(err)}`);
   }
@@ -664,61 +635,6 @@ export const panel = httpAction(async (ctx, req) => {
     context,
   );
   return panelHtml(parts, token, context.wv);
-});
-
-// Read-only preview for the panel: does NOT consume the token (the user may
-// still go back and re-pick before confirming the sync).
-export const previewSelected = httpAction(async (ctx, req) => {
-  let body: { token?: unknown; keys?: unknown };
-  try {
-    body = (await req.json()) as { token?: unknown; keys?: unknown };
-  } catch {
-    return Response.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-  if (typeof body.token !== "string") {
-    return Response.json({ error: "token required" }, { status: 400 });
-  }
-  const keys = Array.isArray(body.keys)
-    ? body.keys.filter((x): x is string => typeof x === "string")
-    : [];
-  if (keys.length === 0) {
-    return Response.json({ error: "No parts selected" }, { status: 400 });
-  }
-  const context: {
-    documentId: string;
-    wv: string;
-    wvid: string;
-    elementId: string;
-  } | null = await ctx.runQuery(internal.onshapeOAuth.peekPanelToken, {
-    token: body.token,
-  });
-  if (!context) {
-    return Response.json(
-      { error: "Session expired — reopen the panel." },
-      { status: 401 },
-    );
-  }
-  try {
-    const result: {
-      wv: string;
-      parts: Array<{
-        name: string;
-        material: string | null;
-        image: string | null;
-        partNumber: string | null;
-        tracked: boolean;
-        willWriteBack: boolean;
-        quantity: number;
-        sameDocument: boolean;
-      }>;
-    } = await ctx.runAction(internal.onshapeOAuth.buildPreview, {
-      ...context,
-      keys,
-    });
-    return Response.json(result);
-  } catch (err) {
-    return Response.json({ error: errMessage(err) }, { status: 502 });
-  }
 });
 
 export const syncSelected = httpAction(async (ctx, req) => {
@@ -752,14 +668,10 @@ export const syncSelected = httpAction(async (ctx, req) => {
     );
   }
   try {
-    const result: {
-      upserted: number;
-      numbersWritten: number;
-      previews: number;
-    } = await ctx.runAction(internal.onshapeOAuth.syncElement, {
-      ...context,
-      keys,
-    });
+    const result: { found: number; lines: number } = await ctx.runAction(
+      internal.onshapeOAuth.syncElement,
+      { ...context, keys },
+    );
     return Response.json(result);
   } catch (err) {
     return Response.json({ error: errMessage(err) }, { status: 502 });

@@ -1,90 +1,211 @@
+// The dashboard's numbers: what's outstanding across the whole app, what's on
+// you, and how long until the robot has to be done.
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import { activeSeason } from "./lib/season";
+import {
+  ASSEMBLED_STAGE,
+  computeAssemblyStatuses,
+  READY_STAGE,
+  type AssemblyInput,
+} from "./lib/assembly";
 
-const BOARD_LIMIT = 500;
-const TASK_LIMIT = 2000;
+const SCAN_LIMIT = 5000;
 
-// Aggregate progress used by the /dashboard view: completion by subsystem,
-// overdue count, and the next competition countdown.
+const vCount = v.object({
+  parts: v.number(),
+  subAssemblies: v.number(),
+  todos: v.number(),
+  issues: v.number(),
+  total: v.number(),
+});
+
 export const summary = query({
-  args: { projectId: v.optional(v.id("projects")) },
+  args: {},
   returns: v.object({
-    subsystems: v.array(
-      v.object({
-        subsystem: v.string(),
-        total: v.number(),
-        done: v.number(),
-      }),
-    ),
-    totalTasks: v.number(),
-    doneTasks: v.number(),
-    overdueCount: v.number(),
+    /** Still to do, across everything. */
+    outstanding: vCount,
+    /** Of that, what this person has picked up. Issues are never counted:
+     *  GitHub assignees are GitHub logins, which don't map to people here. */
+    mine: vCount,
+    parts: v.object({ ready: v.number(), total: v.number() }),
+    subAssemblies: v.object({
+      built: v.number(),
+      total: v.number(),
+      readyToBuild: v.number(),
+    }),
+    todos: v.object({
+      done: v.number(),
+      total: v.number(),
+      unclaimed: v.number(),
+    }),
+    issues: v.object({
+      open: v.number(),
+      closed: v.number(),
+      prs: v.number(),
+      total: v.number(),
+    }),
+    /** Things the team buys. Two numbers, because they're two jobs: one is
+     *  somebody's to order, the other is only waiting on the post. */
+    bought: v.object({
+      toOrder: v.number(),
+      ordered: v.number(),
+      arrived: v.number(),
+      total: v.number(),
+    }),
     nextCompetition: v.union(
       v.object({ name: v.string(), date: v.number() }),
       v.null(),
     ),
   }),
-  handler: async (ctx, { projectId }) => {
-    const boards =
-      projectId === undefined
-        ? await ctx.db.query("boards").take(BOARD_LIMIT)
-        : await ctx.db
-            .query("boards")
-            .withIndex("by_project", (q) => q.eq("projectId", projectId))
-            .take(BOARD_LIMIT);
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const me = identity?.subject;
+    const season = await activeSeason(ctx);
 
-    const bySubsystem = new Map<string, { total: number; done: number }>();
-    let totalTasks = 0;
-    let doneTasks = 0;
-    const now = Date.now();
-    let overdueCount = 0;
+    const parts = season
+      ? (
+          await ctx.db
+            .query("parts")
+            .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+            .take(SCAN_LIMIT)
+        ).filter((p) => !p.isArchived)
+      : [];
+    const assemblies = season
+      ? await ctx.db
+          .query("subAssemblies")
+          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+          .take(SCAN_LIMIT)
+      : [];
+    const todos = season
+      ? await ctx.db
+          .query("todos")
+          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+          .take(SCAN_LIMIT)
+      : [];
+    const issues = await ctx.db.query("issues").take(SCAN_LIMIT);
 
-    for (const board of boards) {
-      const tasks =
-        projectId === undefined
-          ? await ctx.db
-              .query("tasks")
-              .withIndex("by_board", (q) => q.eq("boardId", board._id))
-              .take(TASK_LIMIT)
-          : await ctx.db
-              .query("tasks")
-              .withIndex("by_project_and_board", (q) =>
-                q.eq("projectId", projectId).eq("boardId", board._id),
-              )
-              .take(TASK_LIMIT);
-      const entry = bySubsystem.get(board.subsystem) ?? { total: 0, done: 0 };
-      for (const t of tasks) {
-        entry.total += 1;
-        totalTasks += 1;
-        if (t.status === "done") {
-          entry.done += 1;
-          doneTasks += 1;
-        }
-        if (t.dueDate !== undefined && t.dueDate < now && t.status !== "done") {
-          overdueCount += 1;
-        }
-      }
-      bySubsystem.set(board.subsystem, entry);
-    }
+    // How many sub-assemblies could be put together right now — the one
+    // number that says what today's work could be.
+    const members = await ctx.db.query("subAssemblyMembers").take(SCAN_LIMIT);
+    const partById = new Map(parts.map((p) => [p._id as string, p]));
+    const inputs: AssemblyInput[] = assemblies.map((assembly) => {
+      const mine = members.filter((m) => m.subAssemblyId === assembly._id);
+      return {
+        id: assembly._id,
+        number: assembly.partNumber,
+        name: assembly.name,
+        order: assembly.order,
+        completed: assembly.completedAt !== undefined,
+        childIds: mine
+          .map((m) => m.childSubAssemblyId)
+          .filter((id): id is NonNullable<typeof id> => id !== undefined),
+        members: mine
+          .filter((m) => m.partId !== undefined)
+          .map((m) => {
+            const part = partById.get(m.partId as string);
+            return {
+              kind: "part" as const,
+              label: part?.partNumber ?? "",
+              stageLabel: "",
+              ready: (part?.stage ?? 0) >= READY_STAGE,
+            };
+          }),
+      };
+    });
+    const statuses = computeAssemblyStatuses(inputs);
 
-    const subsystems = Array.from(bySubsystem.entries())
-      .map(([subsystem, v]) => ({ subsystem, total: v.total, done: v.done }))
-      .sort((a, b) => a.subsystem.localeCompare(b.subsystem));
+    const outstandingParts = parts.filter((p) => p.stage < ASSEMBLED_STAGE);
+    const outstandingAssemblies = assemblies.filter(
+      (a) => a.completedAt === undefined,
+    );
+    const outstandingTodos = todos.filter((t) => t.doneAt === undefined);
+    const openIssues = issues.filter((i) => i.state === "open");
 
-    const upcoming = await ctx.db
-      .query("competitions")
-      .withIndex("by_date", (q) => q.gte("date", now))
-      .take(1);
-    const nextCompetition = upcoming[0]
-      ? { name: upcoming[0].name, date: upcoming[0].date }
-      : null;
+    const mineParts = outstandingParts.filter(
+      (p) => me !== undefined && p.claimedByUserId === me,
+    );
+    const mineAssemblies = outstandingAssemblies.filter(
+      (a) => me !== undefined && a.claimedByUserId === me,
+    );
+    const mineTodos = outstandingTodos.filter(
+      (t) => me !== undefined && t.claimedByUserId === me,
+    );
+    // Issues used to be left out of "on you" because GitHub assignees are
+    // GitHub logins rather than people on the team. They can be claimed here
+    // now, so they count like everything else.
+    const mineIssues = openIssues.filter(
+      (i) => me !== undefined && i.claimedByUserId === me,
+    );
+
+    const bought = season
+      ? await ctx.db
+          .query("cotsItems")
+          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+          .take(SCAN_LIMIT)
+      : [];
+
+    const upcoming = season
+      ? await ctx.db
+          .query("competitions")
+          .withIndex("by_season_and_date", (q) =>
+            q.eq("seasonId", season._id).gte("date", Date.now()),
+          )
+          .take(1)
+      : [];
 
     return {
-      subsystems,
-      totalTasks,
-      doneTasks,
-      overdueCount,
-      nextCompetition,
+      outstanding: {
+        parts: outstandingParts.length,
+        subAssemblies: outstandingAssemblies.length,
+        todos: outstandingTodos.length,
+        issues: openIssues.length,
+        total:
+          outstandingParts.length +
+          outstandingAssemblies.length +
+          outstandingTodos.length +
+          openIssues.length,
+      },
+      mine: {
+        parts: mineParts.length,
+        subAssemblies: mineAssemblies.length,
+        todos: mineTodos.length,
+        issues: mineIssues.length,
+        total:
+          mineParts.length +
+          mineAssemblies.length +
+          mineTodos.length +
+          mineIssues.length,
+      },
+      parts: {
+        ready: parts.filter((p) => p.stage >= READY_STAGE).length,
+        total: parts.length,
+      },
+      subAssemblies: {
+        built: assemblies.length - outstandingAssemblies.length,
+        total: assemblies.length,
+        readyToBuild: statuses.filter((s) => s.ready && !s.done).length,
+      },
+      todos: {
+        done: todos.length - outstandingTodos.length,
+        total: todos.length,
+        unclaimed: outstandingTodos.filter((t) => !t.claimedByUserId).length,
+      },
+      issues: {
+        open: openIssues.length,
+        closed: issues.length - openIssues.length,
+        prs: issues.filter((i) => i.isPullRequest).length,
+        total: issues.length,
+      },
+      bought: {
+        toOrder: bought.filter((b) => b.status === "needed").length,
+        ordered: bought.filter((b) => b.status === "ordered").length,
+        arrived: bought.filter((b) => b.status === "arrived").length,
+        total: bought.length,
+      },
+      nextCompetition: upcoming[0]
+        ? { name: upcoming[0].name, date: upcoming[0].date }
+        : null,
     };
   },
 });

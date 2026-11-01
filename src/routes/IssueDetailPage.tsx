@@ -14,14 +14,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PriorityBadge } from "@/components/pm/TaskMeta";
+import { PriorityBadge } from "@/components/pm/PriorityBadge";
 import { IssueFormDialog } from "@/components/pm/IssueFormDialog";
+import { Chip } from "@/components/tracker/PartChips";
 import { useIsMentor } from "@/lib/roles";
 import { initials, useRosterMap } from "@/lib/users";
-import { useActiveProject } from "@/lib/project";
-import { PRIORITIES, formatDateTime, type TaskPriority } from "@/lib/pm";
+import { PRIORITIES, type Priority } from "@/lib/priority";
+import { formatDateTime } from "@/lib/dates";
 import { issueRef, issueStateMeta } from "@/lib/github";
-import { cn } from "@/lib/utils";
 import {
   ExternalLinkIcon,
   GitHubLogoIcon,
@@ -29,14 +29,13 @@ import {
   TrashIcon,
 } from "@radix-ui/react-icons";
 
-const NO_PROJECT = "__none__";
-
 export function IssueDetailPage() {
   const { issueId } = useParams<{ issueId: string }>();
   const id = issueId as Id<"issues">;
   const issue = useQuery(api.github.get, { id });
   const removeIssue = useMutation(api.github.remove);
   const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
   const isMentor = useIsMentor();
 
   if (issue === undefined) {
@@ -56,80 +55,86 @@ export function IssueDetailPage() {
   const stateMeta = issueStateMeta(issue.state);
 
   async function handleDelete() {
-    if (!confirm(`Delete "${issue!.title}"? This removes its task too.`)) return;
+    if (!confirm(`Delete "${issue!.title}"? This removes its task too.`))
+      return;
     await removeIssue({ id });
     void navigate("/issues");
   }
 
   return (
     <div className="space-y-6">
-      <div className="space-y-1">
-        <Link
-          to="/issues"
-          className="text-xs text-muted-foreground hover:text-foreground"
-        >
-          ← Issues
+      <nav className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+        <Link to="/issues" className="hover:text-foreground hover:underline">
+          Issues
         </Link>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted-foreground">
-              {issueRef(issue)}
-            </p>
-            <div className="mt-1 flex items-center gap-3">
-              <h1 className="brand-title text-2xl">{issue.title}</h1>
-              <span
-                className={cn(
-                  "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium",
-                  stateMeta.badgeClass,
-                )}
+        <span>/</span>
+        <span className="font-mono text-foreground">{issueRef(issue)}</span>
+      </nav>
+
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="brand-title text-3xl">{issue.title}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Chip className={stateMeta.badgeClass}>{stateMeta.label}</Chip>
+            {issue.isPullRequest && (
+              <Chip className="bg-muted text-muted-foreground">
+                Pull request
+              </Chip>
+            )}
+            {issue.labels.map((label) => (
+              <Chip
+                key={label}
+                className="bg-secondary text-secondary-foreground"
               >
-                {stateMeta.label}
-              </span>
-              {issue.isPullRequest && (
-                <Badge variant="outline" className="text-[10px] uppercase">
-                  PR
-                </Badge>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {issue.source === "manual" && (
-              <IssueFormDialog
-                issue={issue}
-                trigger={
-                  <Button variant="outline" size="sm">
-                    <Pencil1Icon className="mr-1.5 h-4 w-4" /> Edit
-                  </Button>
-                }
-              />
-            )}
-            {issue.htmlUrl && (
-              <Button asChild variant="outline" size="sm">
-                <a href={issue.htmlUrl} target="_blank" rel="noreferrer">
-                  <GitHubLogoIcon className="mr-1.5 h-4 w-4" /> View on GitHub
-                </a>
-              </Button>
-            )}
-            {isMentor && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleDelete()}
-              >
-                <TrashIcon className="mr-1.5 h-4 w-4" /> Delete
-              </Button>
-            )}
+                {label}
+              </Chip>
+            ))}
           </div>
         </div>
-      </div>
+        <div className="flex flex-wrap gap-2">
+          {issue.source === "manual" && (
+            <Button variant="outline" onClick={() => setEditing(true)}>
+              <Pencil1Icon className="mr-1.5 h-4 w-4" /> Edit
+            </Button>
+          )}
+          {issue.htmlUrl && (
+            <Button asChild variant="outline">
+              <a href={issue.htmlUrl} target="_blank" rel="noreferrer">
+                <GitHubLogoIcon className="mr-1.5 h-4 w-4" /> View on GitHub
+              </a>
+            </Button>
+          )}
+          {isMentor && (
+            <Button
+              variant="ghost"
+              className="text-danger"
+              onClick={() => void handleDelete()}
+            >
+              <TrashIcon className="mr-1.5 h-4 w-4" /> Delete
+            </Button>
+          )}
+        </div>
+      </header>
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-        <div className="space-y-8 lg:col-span-2">
-          <section>
-            <h2 className="mb-2 text-sm font-medium text-muted-foreground">
-              Description
-            </h2>
-            <p className="whitespace-pre-wrap text-sm">
+      {/* What to do about it, the way a part page leads with its one action. */}
+      <section className="rounded-lg border-2 border-primary bg-card p-4 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+          Right now
+        </p>
+        <h2 className="mt-1 text-lg font-semibold">
+          {issue.state === "open" ? "Open — somebody has to fix it" : "Closed"}
+        </h2>
+        <div className="mt-4 flex flex-wrap items-center gap-4">
+          <StateControl issue={issue} />
+          <PriorityControl issue={issue} />
+        </div>
+      </section>
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="space-y-6">
+          <section className="rounded-lg border bg-card p-4 shadow-sm">
+            <h2 className="font-semibold">Description</h2>
+            <p className="mt-3 whitespace-pre-wrap text-sm">
               {issue.body || (
                 <span className="text-muted-foreground">No description.</span>
               )}
@@ -139,11 +144,9 @@ export function IssueDetailPage() {
           <CommentsSection issue={issue} />
         </div>
 
-        <aside className="space-y-6">
-          <div className="space-y-4 rounded-lg border p-4">
-            <StateControl issue={issue} />
-            <PriorityControl issue={issue} />
-            <ProjectControl issue={issue} />
+        <aside className="space-y-4">
+          <section className="space-y-3 rounded-lg border bg-card p-4 shadow-sm">
+            <h2 className="font-semibold">Details</h2>
             {issue.repo && (
               <MetaRow label="Repo">
                 <span className="font-mono text-xs">{issueRef(issue)}</span>
@@ -161,30 +164,18 @@ export function IssueDetailPage() {
                 </span>
               </MetaRow>
             )}
-            {issue.labels.length > 0 && (
-              <MetaRow label="Labels">
-                <div className="flex flex-wrap justify-end gap-1">
-                  {issue.labels.map((l) => (
-                    <Badge key={l} variant="secondary" className="text-[10px]">
-                      {l}
-                    </Badge>
-                  ))}
-                </div>
+            {issue.lastSyncedAt !== undefined && (
+              <MetaRow label="Last synced">
+                <span className="text-sm">
+                  {formatDateTime(issue.lastSyncedAt)}
+                </span>
               </MetaRow>
             )}
-            {issue.linkedTaskId && (
-              <MetaRow label="Task">
-                <Link
-                  to={`/tasks/${issue.linkedTaskId}`}
-                  className="text-sm text-primary hover:underline"
-                >
-                  Open task →
-                </Link>
-              </MetaRow>
-            )}
-          </div>
+          </section>
         </aside>
       </div>
+
+      <IssueFormDialog issue={issue} open={editing} onOpenChange={setEditing} />
     </div>
   );
 }
@@ -215,22 +206,20 @@ function StateControl({ issue }: { issue: Doc<"issues"> }) {
   }
 
   return (
-    <div className="space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">State</span>
+    <div className="flex flex-col gap-1.5">
       <Button
-        variant="outline"
-        size="sm"
-        className="w-full"
+        size="lg"
+        variant={issue.state === "open" ? "default" : "outline"}
         disabled={busy}
         onClick={() => void toggle()}
       >
         {issue.state === "open"
           ? issue.source === "manual"
-            ? "Close issue"
-            : "Close on GitHub"
+            ? "Close it"
+            : "Close it on GitHub"
           : issue.source === "manual"
-            ? "Reopen issue"
-            : "Reopen on GitHub"}
+            ? "Reopen it"
+            : "Reopen it on GitHub"}
       </Button>
       {note && <p className="text-xs text-muted-foreground">{note}</p>}
     </div>
@@ -252,7 +241,7 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
         <Select
           value={issue.priority}
           onValueChange={(v) =>
-            void update({ id: issue._id, priority: v as TaskPriority })
+            void update({ id: issue._id, priority: v as Priority })
           }
         >
           <SelectTrigger>
@@ -274,13 +263,15 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
   const overridden = issue.priorityOverride !== undefined;
   return (
     <div className="space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">Priority</span>
+      <span className="text-xs font-medium text-muted-foreground">
+        Priority
+      </span>
       <Select
         value={issue.priorityOverride ?? AUTO_PRIORITY}
         onValueChange={(v) =>
           void update({
             id: issue._id,
-            priorityOverride: v === AUTO_PRIORITY ? null : (v as TaskPriority),
+            priorityOverride: v === AUTO_PRIORITY ? null : (v as Priority),
           })
         }
       >
@@ -300,37 +291,6 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
         {overridden ? "Pinned — survives re-sync." : "Currently"}
         {!overridden && <PriorityBadge priority={issue.priority} />}
       </p>
-    </div>
-  );
-}
-
-function ProjectControl({ issue }: { issue: Doc<"issues"> }) {
-  const { projects } = useActiveProject();
-  const update = useMutation(api.github.update);
-  return (
-    <div className="space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">Project</span>
-      <Select
-        value={issue.projectId ?? NO_PROJECT}
-        onValueChange={(v) =>
-          void update({
-            id: issue._id,
-            projectId: v === NO_PROJECT ? null : (v as Id<"projects">),
-          })
-        }
-      >
-        <SelectTrigger>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={NO_PROJECT}>No project</SelectItem>
-          {(projects ?? []).map((p) => (
-            <SelectItem key={p._id} value={p._id}>
-              {p.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
     </div>
   );
 }
@@ -370,7 +330,10 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
     setNote(null);
     try {
       if (toGitHub && canPostToGitHub) {
-        const res = await commentOnGitHub({ issueId: issue._id, body: trimmed });
+        const res = await commentOnGitHub({
+          issueId: issue._id,
+          body: trimmed,
+        });
         setNote(res.message);
         if (res.ok) setBody("");
       } else {
@@ -383,11 +346,9 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
   }
 
   return (
-    <section>
-      <h2 className="mb-3 text-sm font-medium text-muted-foreground">
-        Comments
-      </h2>
-      <div className="space-y-4">
+    <section className="rounded-lg border bg-card p-4 shadow-sm">
+      <h2 className="font-semibold">Comments</h2>
+      <div className="mt-3 space-y-4">
         {(comments ?? []).map((c) => {
           const isGitHub = c.githubCommentId !== undefined;
           const name = isGitHub

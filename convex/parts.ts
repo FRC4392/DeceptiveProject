@@ -1,287 +1,827 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+// The part tracker itself: issuing numbers, moving parts through the six
+// stages, claiming, recording how many were made, and raising problems.
+//
+// Every rule about who may move what lives in ./lib/stages.ts, which the React
+// screens import too — so a button is disabled for the same reason the server
+// would refuse it.
+import {
+  query,
+  mutation,
+  internalMutation,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
-import { requireUserId, requireMentor } from "./lib/auth";
-import { syncTaskForPart, deleteTaskForPart } from "./lib/taskSync";
+import type { Doc, Id } from "./_generated/dataModel";
+import { flagValidator } from "./schema";
+import {
+  getActor,
+  requireUserId,
+  requireLead,
+  requireMentor,
+} from "./lib/auth";
+import { activeSeason, requireActiveSeason } from "./lib/season";
+import { assertNumberFree, takePartNumber } from "./lib/numbering";
+import {
+  asStage,
+  canAdvance,
+  canClaim,
+  canMoveTo,
+  isLeadOrAbove,
+  nextStage,
+  normalizePartNumber,
+  partNumberMatches,
+  stageLabel,
+  type ProcessShape,
+  type Stage,
+} from "./lib/stages";
 
-export const partStatusValidator = v.union(
-  v.literal("needs_design"),
-  v.literal("in_design"),
-  v.literal("designed"),
-  v.literal("queued"),
-  v.literal("in_progress"),
-  v.literal("manufactured"),
-  v.literal("qc"),
-  v.literal("installed"),
-  v.literal("scrapped"),
-);
+const SCAN_LIMIT = 5000;
 
-export const methodValidator = v.union(
-  v.literal("mill"),
-  v.literal("lathe"),
-  v.literal("3d_print"),
-  v.literal("waterjet"),
-  v.literal("laser_cut"),
-  v.literal("cots"),
-);
-
-const vPart = v.object({
+export const vPart = v.object({
   _id: v.id("parts"),
   _creationTime: v.number(),
-  partNumber: v.optional(v.string()),
+  seasonId: v.id("seasons"),
+  subsystemId: v.id("subsystems"),
+  partNumber: v.string(),
+  partNumberKey: v.string(),
   name: v.string(),
+  processTypeId: v.id("processTypes"),
   material: v.optional(v.string()),
-  quantityNeeded: v.number(),
-  manufacturingMethod: methodValidator,
-  status: partStatusValidator,
-  assigneeId: v.optional(v.string()),
+  qtyNeeded: v.number(),
+  qtySpares: v.number(),
+  qtyMade: v.number(),
+  stage: v.number(),
+  claimedByUserId: v.optional(v.string()),
+  designerUserId: v.optional(v.string()),
+  drawingCheckedByUserId: v.optional(v.string()),
+  makerUserId: v.optional(v.string()),
+  assemblerUserId: v.optional(v.string()),
+  stageSince: v.number(),
+  isArchived: v.boolean(),
+  binLabel: v.optional(v.string()),
+  notesForMaker: v.optional(v.string()),
   thumbnailStorageId: v.optional(v.id("_storage")),
-  isCOTS: v.boolean(),
-  vendor: v.optional(v.string()),
-  vendorPartNumber: v.optional(v.string()),
-  cost: v.optional(v.number()),
-  orderStatus: v.optional(v.string()),
-  leadTime: v.optional(v.string()),
-  linkedTaskId: v.optional(v.id("tasks")),
-  blocked: v.boolean(),
-  blockedReason: v.optional(v.string()),
   onshapeDocumentId: v.optional(v.string()),
   onshapeElementId: v.optional(v.string()),
-  documentNumber: v.optional(v.string()),
-  lastModifiedInOnshape: v.optional(v.number()),
-  designerId: v.optional(v.string()),
-  revisionConflict: v.boolean(),
-  projectId: v.optional(v.id("projects")),
+  onshapePartId: v.optional(v.string()),
+  onshapeVersionId: v.optional(v.string()),
+  revision: v.optional(v.string()),
+  lastReleasePackageId: v.optional(v.string()),
+  lastSyncedAt: v.optional(v.number()),
+  flags: v.array(flagValidator),
 });
 
-const SCAN_LIMIT = 2000;
+async function processShape(
+  ctx: QueryCtx | MutationCtx,
+  processTypeId: Id<"processTypes">,
+): Promise<ProcessShape> {
+  const process = await ctx.db.get(processTypeId);
+  if (!process) {
+    // A deleted process shouldn't strand a part: treat it as the common case.
+    return { needsDrawing: true, needsFinishing: true, machineId: null };
+  }
+  return {
+    needsDrawing: process.needsDrawing,
+    needsFinishing: process.needsFinishing,
+    machineId: process.machineId ?? null,
+  };
+}
+
+// ---- Reads ----
 
 export const list = query({
   args: {
-    status: v.optional(partStatusValidator),
-    manufacturingMethod: v.optional(methodValidator),
-    isCOTS: v.optional(v.boolean()),
-    projectId: v.optional(v.id("projects")),
+    subsystemId: v.optional(v.id("subsystems")),
+    includeArchived: v.optional(v.boolean()),
   },
   returns: v.array(vPart),
-  handler: async (ctx, args) => {
-    let parts: Doc<"parts">[];
-    if (args.projectId !== undefined) {
-      parts = await ctx.db
-        .query("parts")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .take(SCAN_LIMIT);
-    } else if (args.status !== undefined) {
-      parts = await ctx.db
-        .query("parts")
-        .withIndex("by_status", (q) => q.eq("status", args.status!))
-        .take(SCAN_LIMIT);
-    } else if (args.isCOTS !== undefined) {
-      parts = await ctx.db
-        .query("parts")
-        .withIndex("by_isCOTS", (q) => q.eq("isCOTS", args.isCOTS!))
-        .take(SCAN_LIMIT);
-    } else {
-      parts = await ctx.db.query("parts").order("desc").take(SCAN_LIMIT);
-    }
-    return parts.filter(
-      (p) =>
-        (args.status === undefined || p.status === args.status) &&
-        (args.manufacturingMethod === undefined ||
-          p.manufacturingMethod === args.manufacturingMethod) &&
-        (args.isCOTS === undefined || p.isCOTS === args.isCOTS),
-    );
+  handler: async (ctx, { subsystemId, includeArchived }) => {
+    const season = await activeSeason(ctx);
+    if (!season) return [];
+    const parts =
+      subsystemId !== undefined
+        ? await ctx.db
+            .query("parts")
+            .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
+            .take(SCAN_LIMIT)
+        : await ctx.db
+            .query("parts")
+            .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+            .take(SCAN_LIMIT);
+    const visible = includeArchived
+      ? parts
+      : parts.filter((p) => !p.isArchived);
+    return visible.sort((a, b) => a.partNumber.localeCompare(b.partNumber));
   },
 });
 
 export const get = query({
   args: { id: v.id("parts") },
   returns: v.union(vPart, v.null()),
-  handler: async (ctx, { id }) => ctx.db.get(id),
+  handler: (ctx, { id }) => ctx.db.get(id),
 });
 
-export const create = mutation({
-  args: {
-    name: v.string(),
-    manufacturingMethod: methodValidator,
-    quantityNeeded: v.optional(v.number()),
-    material: v.optional(v.string()),
-    status: v.optional(partStatusValidator),
-    assigneeId: v.optional(v.string()),
-    isCOTS: v.optional(v.boolean()),
-    vendor: v.optional(v.string()),
-    vendorPartNumber: v.optional(v.string()),
-    cost: v.optional(v.number()),
-    orderStatus: v.optional(v.string()),
-    leadTime: v.optional(v.string()),
-    partNumber: v.optional(v.string()),
-    projectId: v.optional(v.id("projects")),
-  },
-  returns: v.id("parts"),
-  handler: async (ctx, args) => {
-    await requireUserId(ctx);
-    const isCOTS = args.isCOTS ?? args.manufacturingMethod === "cots";
-    const id = await ctx.db.insert("parts", {
-      name: args.name,
-      manufacturingMethod: args.manufacturingMethod,
-      quantityNeeded: args.quantityNeeded ?? 1,
-      material: args.material,
-      status: args.status ?? "needs_design",
-      assigneeId: args.assigneeId,
-      isCOTS,
-      vendor: args.vendor,
-      vendorPartNumber: args.vendorPartNumber,
-      cost: args.cost,
-      orderStatus: args.orderStatus,
-      leadTime: args.leadTime,
-      partNumber: args.partNumber,
-      projectId: args.projectId,
-      blocked: false,
-      revisionConflict: false,
-    });
-    const part = await ctx.db.get(id);
-    if (part) await syncTaskForPart(ctx, part);
-    return id;
+/** Parts this person has claimed — the "My parts" screen and shop shortcuts. */
+export const listMine = query({
+  args: {},
+  returns: v.array(vPart),
+  handler: async (ctx) => {
+    const userId = await requireUserId(ctx);
+    const parts = await ctx.db
+      .query("parts")
+      .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
+      .take(SCAN_LIMIT);
+    return parts
+      .filter((p) => !p.isArchived)
+      .sort(
+        (a, b) => a.stage - b.stage || a.partNumber.localeCompare(b.partNumber),
+      );
   },
 });
+
+/**
+ * Forgiving part-number lookup: "27-INT-104", "int-104", "INT104" and "104"
+ * all land on the same part. Exact matches come first; anything else is a
+ * pick list.
+ */
+export const search = query({
+  args: { query: v.string(), limit: v.optional(v.number()) },
+  returns: v.array(vPart),
+  handler: async (ctx, { query: term, limit }) => {
+    const trimmed = term.trim();
+    if (trimmed.length === 0) return [];
+    const season = await activeSeason(ctx);
+    if (!season) return [];
+
+    const key = normalizePartNumber(trimmed);
+    if (key.length > 0) {
+      const exact = (
+        await ctx.db
+          .query("parts")
+          .withIndex("by_partNumberKey", (q) => q.eq("partNumberKey", key))
+          .take(5)
+      )
+        // That index spans every season. The year prefix normally keeps them
+        // apart, but don't lean on that to decide what this season can see.
+        .filter((part) => part.seasonId === season._id);
+      if (exact.length > 0) return exact;
+    }
+
+    const parts = await ctx.db
+      .query("parts")
+      .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+      .take(SCAN_LIMIT);
+    const lowered = trimmed.toLowerCase();
+    const matches = parts.filter(
+      (p) =>
+        !p.isArchived &&
+        (partNumberMatches(trimmed, p.partNumber) ||
+          p.name.toLowerCase().includes(lowered)),
+    );
+    // Shortest number first: "104" should offer 27-INT-104 before 27-INT-1041.
+    matches.sort(
+      (a, b) =>
+        a.partNumber.length - b.partNumber.length ||
+        a.partNumber.localeCompare(b.partNumber),
+    );
+    return matches.slice(0, limit ?? 20);
+  },
+});
+
+export const history = query({
+  args: { partId: v.id("parts") },
+  returns: v.array(
+    v.object({
+      _id: v.id("stageEvents"),
+      _creationTime: v.number(),
+      partId: v.id("parts"),
+      fromStage: v.number(),
+      toStage: v.number(),
+      userId: v.string(),
+      note: v.optional(v.string()),
+    }),
+  ),
+  handler: async (ctx, { partId }) => {
+    const events = await ctx.db
+      .query("stageEvents")
+      .withIndex("by_part", (q) => q.eq("partId", partId))
+      .collect();
+    return events.sort((a, b) => b._creationTime - a._creationTime);
+  },
+});
+
+export const notes = query({
+  args: { partId: v.id("parts") },
+  returns: v.array(
+    v.object({
+      _id: v.id("partNotes"),
+      _creationTime: v.number(),
+      partId: v.id("parts"),
+      userId: v.string(),
+      body: v.string(),
+    }),
+  ),
+  handler: async (ctx, { partId }) => {
+    const rows = await ctx.db
+      .query("partNotes")
+      .withIndex("by_part", (q) => q.eq("partId", partId))
+      .collect();
+    return rows.sort((a, b) => b._creationTime - a._creationTime);
+  },
+});
+
+const vProblem = v.object({
+  _id: v.id("problems"),
+  _creationTime: v.number(),
+  partId: v.id("parts"),
+  reason: v.union(
+    v.literal("broke"),
+    v.literal("scrapped"),
+    v.literal("out_of_material"),
+    v.literal("wrong_size"),
+    v.literal("unsure"),
+    v.literal("other"),
+  ),
+  qtyAffected: v.number(),
+  note: v.optional(v.string()),
+  openedByUserId: v.string(),
+  resolvedByUserId: v.optional(v.string()),
+  resolution: v.optional(v.string()),
+  resolvedAt: v.optional(v.number()),
+});
+
+export const problems = query({
+  args: { partId: v.id("parts") },
+  returns: v.array(vProblem),
+  handler: async (ctx, { partId }) => {
+    const rows = await ctx.db
+      .query("problems")
+      .withIndex("by_part", (q) => q.eq("partId", partId))
+      .collect();
+    return rows.sort((a, b) => b._creationTime - a._creationTime);
+  },
+});
+
+/**
+ * The leads-and-mentors list: parts changed after someone made them, drawings
+ * that have waited too long for a check, and open problems.
+ */
+export const headsUp = query({
+  args: { waitingDays: v.optional(v.number()) },
+  returns: v.array(
+    v.object({
+      kind: v.union(
+        v.literal("changed_after_made"),
+        v.literal("waiting_on_check"),
+        v.literal("problem"),
+      ),
+      partId: v.id("parts"),
+      partNumber: v.string(),
+      name: v.string(),
+      detail: v.string(),
+    }),
+  ),
+  handler: async (ctx, { waitingDays }) => {
+    const season = await activeSeason(ctx);
+    if (!season) return [];
+    const days = waitingDays ?? 3;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const parts = await ctx.db
+      .query("parts")
+      .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+      .take(SCAN_LIMIT);
+
+    // One scan for every open problem, grouped by part — this runs on the
+    // board for every lead, so it mustn't be a query per part.
+    const openByPart = new Map<Id<"parts">, Doc<"problems">[]>();
+    for (const problem of await ctx.db.query("problems").take(SCAN_LIMIT)) {
+      if (problem.resolvedAt !== undefined) continue;
+      const list = openByPart.get(problem.partId) ?? [];
+      list.push(problem);
+      openByPart.set(problem.partId, list);
+    }
+
+    const out: {
+      kind: "changed_after_made" | "waiting_on_check" | "problem";
+      partId: Id<"parts">;
+      partNumber: string;
+      name: string;
+      detail: string;
+    }[] = [];
+
+    for (const part of parts) {
+      if (part.isArchived) continue;
+      const changed = part.flags.find((f) => f.kind === "changed_after_made");
+      if (changed) {
+        out.push({
+          kind: "changed_after_made",
+          partId: part._id,
+          partNumber: part.partNumber,
+          name: part.name,
+          detail:
+            changed.note ??
+            `was changed in Onshape after ${part.qtyMade} were already made.`,
+        });
+      }
+      if (part.stage === 2 && part.stageSince < cutoff) {
+        const waited = Math.floor((Date.now() - part.stageSince) / 86_400_000);
+        out.push({
+          kind: "waiting_on_check",
+          partId: part._id,
+          partNumber: part.partNumber,
+          name: part.name,
+          detail: `drawing has waited ${waited} day${waited === 1 ? "" : "s"} for a check.`,
+        });
+      }
+      for (const problem of openByPart.get(part._id) ?? []) {
+        out.push({
+          kind: "problem",
+          partId: part._id,
+          partNumber: part.partNumber,
+          name: part.name,
+          detail: problem.note
+            ? problem.note
+            : `${problem.qtyAffected} ${problem.reason.replace(/_/g, " ")}.`,
+        });
+      }
+    }
+    return out;
+  },
+});
+
+// ---- Creating ----
+
+export const createWithNumber = mutation({
+  args: {
+    subsystemId: v.id("subsystems"),
+    name: v.string(),
+    processTypeId: v.id("processTypes"),
+    qtyNeeded: v.number(),
+    qtySpares: v.optional(v.number()),
+    material: v.optional(v.string()),
+    notesForMaker: v.optional(v.string()),
+  },
+  returns: v.object({ partId: v.id("parts"), partNumber: v.string() }),
+  handler: async (ctx, args) => {
+    const userId = await requireUserId(ctx);
+    const season = await requireActiveSeason(ctx);
+    const subsystem = await ctx.db.get(args.subsystemId);
+    if (!subsystem) throw new Error("Pick a subsystem.");
+    const process = await ctx.db.get(args.processTypeId);
+    if (!process) throw new Error("Pick how it gets made.");
+
+    const partNumber = await takePartNumber(ctx, season, subsystem);
+    const partNumberKey = normalizePartNumber(partNumber);
+    await assertNumberFree(ctx, partNumber);
+
+    // A bought item never gets made, so it starts in the bin queue; everything
+    // else starts in design.
+    const stage: Stage = process.isBought ? 5 : 1;
+    const now = Date.now();
+    const partId = await ctx.db.insert("parts", {
+      seasonId: season._id,
+      subsystemId: args.subsystemId,
+      partNumber,
+      partNumberKey,
+      name: args.name.trim(),
+      processTypeId: args.processTypeId,
+      material: args.material?.trim() || undefined,
+      qtyNeeded: Math.max(1, args.qtyNeeded),
+      qtySpares: Math.max(0, args.qtySpares ?? 0),
+      qtyMade: 0,
+      stage,
+      designerUserId: userId,
+      stageSince: now,
+      isArchived: false,
+      notesForMaker: args.notesForMaker?.trim() || undefined,
+      flags: [],
+    });
+    await ctx.db.insert("stageEvents", {
+      partId,
+      fromStage: 0,
+      toStage: stage,
+      userId,
+      note: `got the number ${partNumber}`,
+    });
+    return { partId, partNumber };
+  },
+});
+
+// ---- Stage moves ----
+
+async function recordStageMove(
+  ctx: MutationCtx,
+  part: Doc<"parts">,
+  to: Stage,
+  userId: string,
+  note?: string,
+): Promise<void> {
+  const from = asStage(part.stage);
+  const patch: Partial<Doc<"parts">> = { stage: to, stageSince: Date.now() };
+
+  // Remember who did the thing the part just left behind, so the part page can
+  // say who drew it, who made it and who put it on the robot.
+  if (from === 2 && to > from) patch.drawingCheckedByUserId = userId;
+  if (from === 3 && to > from)
+    patch.makerUserId = part.claimedByUserId ?? userId;
+  if (from === 5 && to > from) patch.assemblerUserId = userId;
+  // A claim is for the stage it was made in; moving on releases it.
+  if (to !== from) patch.claimedByUserId = undefined;
+  // Moving forward past a drawing check clears a stale-drawing flag.
+  if (to > from) {
+    patch.flags = part.flags.filter((f) => f.kind !== "drawing_out_of_date");
+  }
+
+  await ctx.db.patch(part._id, patch);
+  await ctx.db.insert("stageEvents", {
+    partId: part._id,
+    fromStage: from,
+    toStage: to,
+    userId,
+    note,
+  });
+}
+
+export const advance = mutation({
+  args: { partId: v.id("parts"), note: v.optional(v.string()) },
+  returns: v.object({ stage: v.number() }),
+  handler: async (ctx, { partId, note }) => {
+    const actor = await getActor(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) throw new Error("That part is gone.");
+    const process = await processShape(ctx, part.processTypeId);
+    const from = asStage(part.stage);
+    const to = nextStage(from, process);
+    if (to === null) throw new Error("This part is already on the robot.");
+
+    const permission = canAdvance(
+      from,
+      process,
+      {
+        subsystemId: part.subsystemId as string,
+        qtyMade: part.qtyMade,
+        qtyNeeded: part.qtyNeeded,
+      },
+      actor,
+    );
+    if (!permission.allowed) throw new Error(permission.reason);
+
+    await recordStageMove(ctx, part, to, actor.userId, note);
+    return { stage: to };
+  },
+});
+
+export const moveTo = mutation({
+  args: {
+    partId: v.id("parts"),
+    stage: v.number(),
+    note: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { partId, stage, note }) => {
+    const actor = await getActor(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) throw new Error("That part is gone.");
+    const process = await processShape(ctx, part.processTypeId);
+    const to = asStage(stage);
+    const from = asStage(part.stage);
+    if (to === from) return null;
+
+    const permission = canMoveTo(
+      from,
+      to,
+      process,
+      {
+        subsystemId: part.subsystemId as string,
+        qtyMade: part.qtyMade,
+        qtyNeeded: part.qtyNeeded,
+      },
+      actor,
+    );
+    if (!permission.allowed) throw new Error(permission.reason);
+
+    await recordStageMove(
+      ctx,
+      part,
+      to,
+      actor.userId,
+      note ?? (to < from ? `moved back to ${stageLabel(to)}` : undefined),
+    );
+    return null;
+  },
+});
+
+// ---- Claiming ----
+
+export const claim = mutation({
+  args: { partId: v.id("parts") },
+  returns: v.null(),
+  handler: async (ctx, { partId }) => {
+    const actor = await getActor(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) throw new Error("That part is gone.");
+    if (part.claimedByUserId && part.claimedByUserId !== actor.userId) {
+      throw new Error("Someone else already claimed this one.");
+    }
+    const permission = canClaim(asStage(part.stage));
+    if (!permission.allowed) throw new Error(permission.reason);
+    await ctx.db.patch(partId, { claimedByUserId: actor.userId });
+    return null;
+  },
+});
+
+/**
+ * Put someone else on a part. Mentors only — claiming is for taking work
+ * yourself, this is for handing it out, and the two want different rules.
+ * Passing no userId takes whoever had it off.
+ */
+export const assign = mutation({
+  args: { partId: v.id("parts"), userId: v.union(v.string(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, { partId, userId }) => {
+    await requireMentor(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) throw new Error("That part is gone.");
+    if (userId !== null) {
+      const permission = canClaim(asStage(part.stage));
+      if (!permission.allowed) throw new Error(permission.reason);
+      const user = await ctx.db
+        .query("users")
+        .withIndex("authId", (q) => q.eq("authId", userId))
+        .unique();
+      if (!user) throw new Error("That person hasn't signed in yet.");
+    }
+    await ctx.db.patch(partId, { claimedByUserId: userId ?? undefined });
+    return null;
+  },
+});
+
+export const unclaim = mutation({
+  args: { partId: v.id("parts") },
+  returns: v.null(),
+  handler: async (ctx, { partId }) => {
+    const actor = await getActor(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) throw new Error("That part is gone.");
+    if (part.claimedByUserId !== actor.userId && !isLeadOrAbove(actor.role)) {
+      throw new Error("Only the person who claimed it can put it back.");
+    }
+    await ctx.db.patch(partId, { claimedByUserId: undefined });
+    return null;
+  },
+});
+
+// ---- Quantities ----
+
+export const setQtyMade = mutation({
+  args: { partId: v.id("parts"), qtyMade: v.number() },
+  returns: v.null(),
+  handler: async (ctx, { partId, qtyMade }) => {
+    await requireUserId(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) throw new Error("That part is gone.");
+    const target = part.qtyNeeded + part.qtySpares;
+    await ctx.db.patch(partId, {
+      qtyMade: Math.min(Math.max(0, Math.round(qtyMade)), target),
+    });
+    return null;
+  },
+});
+
+// ---- Problems ----
+
+export const reportProblem = mutation({
+  args: {
+    partId: v.id("parts"),
+    reason: v.union(
+      v.literal("broke"),
+      v.literal("scrapped"),
+      v.literal("out_of_material"),
+      v.literal("wrong_size"),
+      v.literal("unsure"),
+      v.literal("other"),
+    ),
+    qtyAffected: v.optional(v.number()),
+    note: v.optional(v.string()),
+    /** Knock the affected ones off the made count so they get remade. */
+    remake: v.optional(v.boolean()),
+  },
+  returns: v.id("problems"),
+  handler: async (ctx, args) => {
+    const userId = await requireUserId(ctx);
+    const part = await ctx.db.get(args.partId);
+    if (!part) throw new Error("That part is gone.");
+    const qtyAffected = Math.max(0, args.qtyAffected ?? 1);
+
+    const problemId = await ctx.db.insert("problems", {
+      partId: args.partId,
+      reason: args.reason,
+      qtyAffected,
+      note: args.note?.trim() || undefined,
+      openedByUserId: userId,
+    });
+
+    const patch: Partial<Doc<"parts">> = {
+      flags: [
+        ...part.flags,
+        {
+          kind: "remake" as const,
+          note: args.note?.trim() || args.reason.replace(/_/g, " "),
+          qty: qtyAffected,
+          at: Date.now(),
+          byUserId: userId,
+        },
+      ],
+    };
+    if (args.remake !== false && qtyAffected > 0) {
+      patch.qtyMade = Math.max(0, part.qtyMade - qtyAffected);
+      // Something has to be made again, so it belongs back on a machine.
+      if (part.stage > 3) {
+        patch.stage = 3;
+        patch.stageSince = Date.now();
+      }
+    }
+    await ctx.db.patch(args.partId, patch);
+
+    if (patch.stage !== undefined) {
+      await ctx.db.insert("stageEvents", {
+        partId: args.partId,
+        fromStage: part.stage,
+        toStage: patch.stage,
+        userId,
+        note: `something went wrong: ${args.reason.replace(/_/g, " ")}`,
+      });
+    }
+    return problemId;
+  },
+});
+
+export const resolveProblem = mutation({
+  args: { problemId: v.id("problems"), resolution: v.optional(v.string()) },
+  returns: v.null(),
+  handler: async (ctx, { problemId, resolution }) => {
+    const user = await requireLead(ctx);
+    const problem = await ctx.db.get(problemId);
+    if (!problem) return null;
+    await ctx.db.patch(problemId, {
+      resolvedByUserId: user.authId,
+      resolution: resolution?.trim() || undefined,
+      resolvedAt: Date.now(),
+    });
+    const part = await ctx.db.get(problem.partId);
+    if (part) {
+      const stillOpen = await ctx.db
+        .query("problems")
+        .withIndex("by_part", (q) => q.eq("partId", problem.partId))
+        .collect();
+      if (stillOpen.every((p) => p.resolvedAt !== undefined)) {
+        await ctx.db.patch(part._id, {
+          flags: part.flags.filter((f) => f.kind !== "remake"),
+        });
+      }
+    }
+    return null;
+  },
+});
+
+// ---- Flags ----
+
+export const clearFlag = mutation({
+  args: { partId: v.id("parts"), kind: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { partId, kind }) => {
+    await requireLead(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) return null;
+    await ctx.db.patch(partId, {
+      flags: part.flags.filter((f) => f.kind !== kind),
+    });
+    return null;
+  },
+});
+
+export const addFlag = mutation({
+  args: {
+    partId: v.id("parts"),
+    kind: v.union(
+      v.literal("changed_after_made"),
+      v.literal("drawing_out_of_date"),
+      v.literal("remake"),
+      v.literal("waiting"),
+    ),
+    note: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, { partId, kind, note }) => {
+    const userId = await requireUserId(ctx);
+    const part = await ctx.db.get(partId);
+    if (!part) return null;
+    await ctx.db.patch(partId, {
+      flags: [
+        ...part.flags.filter((f) => f.kind !== kind),
+        {
+          kind,
+          note: note?.trim() || undefined,
+          at: Date.now(),
+          byUserId: userId,
+        },
+      ],
+    });
+    return null;
+  },
+});
+
+// ---- Notes ----
+
+export const addNote = mutation({
+  args: { partId: v.id("parts"), body: v.string() },
+  returns: v.id("partNotes"),
+  handler: async (ctx, { partId, body }) => {
+    const userId = await requireUserId(ctx);
+    const trimmed = body.trim();
+    if (trimmed.length === 0) throw new Error("Write something first.");
+    return ctx.db.insert("partNotes", { partId, userId, body: trimmed });
+  },
+});
+
+// ---- Editing, archiving ----
 
 export const update = mutation({
   args: {
-    id: v.id("parts"),
+    partId: v.id("parts"),
     name: v.optional(v.string()),
-    manufacturingMethod: v.optional(methodValidator),
-    quantityNeeded: v.optional(v.number()),
+    processTypeId: v.optional(v.id("processTypes")),
     material: v.optional(v.union(v.string(), v.null())),
-    status: v.optional(partStatusValidator),
-    assigneeId: v.optional(v.union(v.string(), v.null())),
-    isCOTS: v.optional(v.boolean()),
-    vendor: v.optional(v.union(v.string(), v.null())),
-    vendorPartNumber: v.optional(v.union(v.string(), v.null())),
-    cost: v.optional(v.union(v.number(), v.null())),
-    orderStatus: v.optional(v.union(v.string(), v.null())),
-    leadTime: v.optional(v.union(v.string(), v.null())),
-    partNumber: v.optional(v.union(v.string(), v.null())),
-    projectId: v.optional(v.union(v.id("projects"), v.null())),
+    qtyNeeded: v.optional(v.number()),
+    qtySpares: v.optional(v.number()),
+    subsystemId: v.optional(v.id("subsystems")),
+    binLabel: v.optional(v.union(v.string(), v.null())),
+    notesForMaker: v.optional(v.union(v.string(), v.null())),
+    designerUserId: v.optional(v.union(v.string(), v.null())),
   },
   returns: v.null(),
-  handler: async (ctx, args) => {
-    await requireUserId(ctx);
-    const { id, ...rest } = args;
+  handler: async (ctx, { partId, ...rest }) => {
+    await requireLead(ctx);
     const patch: Partial<Doc<"parts">> = {};
-    if (rest.projectId !== undefined)
-      patch.projectId = rest.projectId ?? undefined;
-    if (rest.name !== undefined) patch.name = rest.name;
-    if (rest.manufacturingMethod !== undefined)
-      patch.manufacturingMethod = rest.manufacturingMethod;
-    if (rest.quantityNeeded !== undefined)
-      patch.quantityNeeded = rest.quantityNeeded;
-    if (rest.material !== undefined) patch.material = rest.material ?? undefined;
-    if (rest.status !== undefined) patch.status = rest.status;
-    if (rest.assigneeId !== undefined)
-      patch.assigneeId = rest.assigneeId ?? undefined;
-    if (rest.isCOTS !== undefined) patch.isCOTS = rest.isCOTS;
-    if (rest.vendor !== undefined) patch.vendor = rest.vendor ?? undefined;
-    if (rest.vendorPartNumber !== undefined)
-      patch.vendorPartNumber = rest.vendorPartNumber ?? undefined;
-    if (rest.cost !== undefined) patch.cost = rest.cost ?? undefined;
-    if (rest.orderStatus !== undefined)
-      patch.orderStatus = rest.orderStatus ?? undefined;
-    if (rest.leadTime !== undefined) patch.leadTime = rest.leadTime ?? undefined;
-    if (rest.partNumber !== undefined)
-      patch.partNumber = rest.partNumber ?? undefined;
-
-    await ctx.db.patch(id, patch);
-    const part = await ctx.db.get(id);
-    if (part) await syncTaskForPart(ctx, part);
+    if (rest.name !== undefined) patch.name = rest.name.trim();
+    if (rest.processTypeId !== undefined)
+      patch.processTypeId = rest.processTypeId;
+    if (rest.material !== undefined)
+      patch.material = rest.material ?? undefined;
+    if (rest.qtyNeeded !== undefined)
+      patch.qtyNeeded = Math.max(1, Math.round(rest.qtyNeeded));
+    if (rest.qtySpares !== undefined)
+      patch.qtySpares = Math.max(0, Math.round(rest.qtySpares));
+    if (rest.subsystemId !== undefined) patch.subsystemId = rest.subsystemId;
+    if (rest.binLabel !== undefined)
+      patch.binLabel = rest.binLabel ?? undefined;
+    if (rest.notesForMaker !== undefined)
+      patch.notesForMaker = rest.notesForMaker ?? undefined;
+    if (rest.designerUserId !== undefined)
+      patch.designerUserId = rest.designerUserId ?? undefined;
+    await ctx.db.patch(partId, patch);
     return null;
   },
 });
 
-export const updateStatus = mutation({
-  args: { id: v.id("parts"), status: partStatusValidator },
+export const setArchived = mutation({
+  args: { partId: v.id("parts"), archived: v.boolean() },
   returns: v.null(),
-  handler: async (ctx, { id, status }) => {
-    await requireUserId(ctx);
-    await ctx.db.patch(id, { status });
-    const part = await ctx.db.get(id);
-    if (part) await syncTaskForPart(ctx, part);
-    return null;
-  },
-});
-
-export const flagBlocked = mutation({
-  args: {
-    id: v.id("parts"),
-    blocked: v.boolean(),
-    reason: v.optional(v.string()),
-  },
-  returns: v.null(),
-  handler: async (ctx, { id, blocked, reason }) => {
-    await requireUserId(ctx);
-    await ctx.db.patch(id, {
-      blocked,
-      blockedReason: blocked ? reason : undefined,
-    });
-    const part = await ctx.db.get(id);
-    if (part) await syncTaskForPart(ctx, part);
+  handler: async (ctx, { partId, archived }) => {
+    await requireLead(ctx);
+    await ctx.db.patch(partId, { isArchived: archived });
     return null;
   },
 });
 
 export const remove = mutation({
-  args: { id: v.id("parts") },
+  args: { partId: v.id("parts") },
   returns: v.null(),
-  handler: async (ctx, { id }) => {
+  handler: async (ctx, { partId }) => {
     await requireMentor(ctx);
-    const part = await ctx.db.get(id);
+    const part = await ctx.db.get(partId);
     if (!part) return null;
-
-    await deleteTaskForPart(ctx, id);
-
-    for (const table of ["partComments", "qcChecks"] as const) {
+    for (const table of ["stageEvents", "partNotes", "problems"] as const) {
       const rows = await ctx.db
         .query(table)
-        .withIndex("by_part", (q) => q.eq("partId", id))
+        .withIndex("by_part", (q) => q.eq("partId", partId))
         .collect();
-      for (const r of rows) await ctx.db.delete(r._id);
+      for (const row of rows) await ctx.db.delete(row._id);
     }
-    if (part.thumbnailStorageId) {
+    const links = await ctx.db
+      .query("subAssemblyMembers")
+      .withIndex("by_part", (q) => q.eq("partId", partId))
+      .collect();
+    for (const link of links) await ctx.db.delete(link._id);
+    if (part.thumbnailStorageId)
       await ctx.storage.delete(part.thumbnailStorageId);
-    }
-    await ctx.db.delete(id);
+    await ctx.db.delete(partId);
     return null;
   },
 });
 
-// Delete every part and its dependents (linked tasks, comments, QC checks,
-// thumbnails) — same cleanup as `remove`, applied in bulk. Internal-only; run
-// with `npx convex run parts:deleteAllParts`. Leaves the Onshape document
-// mapping, OAuth connection, and part-number counters intact. Handles up to a
-// few thousand parts per call (fine for a test reset).
-export const deleteAllParts = internalMutation({
-  args: {},
-  returns: v.object({ deleted: v.number() }),
-  handler: async (ctx) => {
-    const parts = await ctx.db.query("parts").take(5000);
-    for (const part of parts) {
-      await deleteTaskForPart(ctx, part._id);
-      for (const table of ["partComments", "qcChecks"] as const) {
-        const rows = await ctx.db
-          .query(table)
-          .withIndex("by_part", (q) => q.eq("partId", part._id))
-          .collect();
-        for (const r of rows) await ctx.db.delete(r._id);
-      }
-      if (part.thumbnailStorageId) {
-        await ctx.storage.delete(part.thumbnailStorageId);
-      }
-      await ctx.db.delete(part._id);
-    }
-    return { deleted: parts.length };
-  },
-});
-
-// --- Thumbnail ---
+// ---- Thumbnails ----
 
 export const generateUploadUrl = mutation({
   args: {},
@@ -293,31 +833,26 @@ export const generateUploadUrl = mutation({
 });
 
 export const setThumbnail = mutation({
-  args: { id: v.id("parts"), storageId: v.id("_storage") },
+  args: { partId: v.id("parts"), storageId: v.id("_storage") },
   returns: v.null(),
-  handler: async (ctx, { id, storageId }) => {
+  handler: async (ctx, { partId, storageId }) => {
     await requireUserId(ctx);
-    const part = await ctx.db.get(id);
-    if (part?.thumbnailStorageId) {
+    const part = await ctx.db.get(partId);
+    if (part?.thumbnailStorageId)
       await ctx.storage.delete(part.thumbnailStorageId);
-    }
-    await ctx.db.patch(id, { thumbnailStorageId: storageId });
+    await ctx.db.patch(partId, { thumbnailStorageId: storageId });
     return null;
   },
 });
 
-// Set a part's thumbnail from a Convex-side action (the Onshape sync), which
-// has no logged-in user to guard on. Same body as `setThumbnail` minus the
-// auth check. Replaces any prior thumbnail blob.
 export const setThumbnailInternal = internalMutation({
-  args: { id: v.id("parts"), storageId: v.id("_storage") },
+  args: { partId: v.id("parts"), storageId: v.id("_storage") },
   returns: v.null(),
-  handler: async (ctx, { id, storageId }) => {
-    const part = await ctx.db.get(id);
-    if (part?.thumbnailStorageId) {
+  handler: async (ctx, { partId, storageId }) => {
+    const part = await ctx.db.get(partId);
+    if (part?.thumbnailStorageId)
       await ctx.storage.delete(part.thumbnailStorageId);
-    }
-    await ctx.db.patch(id, { thumbnailStorageId: storageId });
+    await ctx.db.patch(partId, { thumbnailStorageId: storageId });
     return null;
   },
 });
@@ -325,201 +860,5 @@ export const setThumbnailInternal = internalMutation({
 export const thumbnailUrl = query({
   args: { storageId: v.id("_storage") },
   returns: v.union(v.string(), v.null()),
-  handler: async (ctx, { storageId }) => ctx.storage.getUrl(storageId),
-});
-
-// --- Comments ---
-
-const vPartComment = v.object({
-  _id: v.id("partComments"),
-  _creationTime: v.number(),
-  partId: v.id("parts"),
-  authorId: v.string(),
-  body: v.string(),
-});
-
-export const addComment = mutation({
-  args: { partId: v.id("parts"), body: v.string() },
-  returns: v.id("partComments"),
-  handler: async (ctx, { partId, body }) => {
-    const authorId = await requireUserId(ctx);
-    return ctx.db.insert("partComments", { partId, authorId, body });
-  },
-});
-
-export const listComments = query({
-  args: { partId: v.id("parts") },
-  returns: v.array(vPartComment),
-  handler: async (ctx, { partId }) =>
-    ctx.db
-      .query("partComments")
-      .withIndex("by_part", (q) => q.eq("partId", partId))
-      .order("asc")
-      .collect(),
-});
-
-// --- QC checklist ---
-
-const vQCCheck = v.object({
-  _id: v.id("qcChecks"),
-  _creationTime: v.number(),
-  partId: v.id("parts"),
-  label: v.string(),
-  checked: v.boolean(),
-});
-
-export const listQCChecks = query({
-  args: { partId: v.id("parts") },
-  returns: v.array(vQCCheck),
-  handler: async (ctx, { partId }) =>
-    ctx.db
-      .query("qcChecks")
-      .withIndex("by_part", (q) => q.eq("partId", partId))
-      .collect(),
-});
-
-export const addQCCheck = mutation({
-  args: { partId: v.id("parts"), label: v.string() },
-  returns: v.id("qcChecks"),
-  handler: async (ctx, { partId, label }) => {
-    await requireUserId(ctx);
-    return ctx.db.insert("qcChecks", { partId, label, checked: false });
-  },
-});
-
-export const toggleQCCheck = mutation({
-  args: { id: v.id("qcChecks") },
-  returns: v.null(),
-  handler: async (ctx, { id }) => {
-    await requireUserId(ctx);
-    const check = await ctx.db.get(id);
-    if (check) await ctx.db.patch(id, { checked: !check.checked });
-    return null;
-  },
-});
-
-export const removeQCCheck = mutation({
-  args: { id: v.id("qcChecks") },
-  returns: v.null(),
-  handler: async (ctx, { id }) => {
-    await requireUserId(ctx);
-    await ctx.db.delete(id);
-    return null;
-  },
-});
-
-// --- Cost rollup (informational; skips missing values) ---
-
-export const costRollup = query({
-  args: { projectId: v.optional(v.id("projects")) },
-  returns: v.object({
-    total: v.number(),
-    partsTotal: v.number(),
-    inventoryTotal: v.number(),
-    cotsTotal: v.number(),
-    partsMissingCost: v.number(),
-    byMethod: v.array(
-      v.object({ method: methodValidator, total: v.number(), count: v.number() }),
-    ),
-  }),
-  handler: async (ctx, args) => {
-    const parts = (
-      args.projectId !== undefined
-        ? await ctx.db
-            .query("parts")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .take(SCAN_LIMIT)
-        : await ctx.db.query("parts").take(SCAN_LIMIT)
-    );
-    // Inventory isn't project-scoped; only include it in the whole-team rollup.
-    const inventory =
-      args.projectId !== undefined
-        ? []
-        : await ctx.db.query("inventoryItems").take(SCAN_LIMIT);
-
-    const byMethod = new Map<string, { total: number; count: number }>();
-    let partsTotal = 0;
-    let cotsTotal = 0;
-    let partsMissingCost = 0;
-    for (const p of parts) {
-      const entry = byMethod.get(p.manufacturingMethod) ?? {
-        total: 0,
-        count: 0,
-      };
-      entry.count += 1;
-      if (p.cost !== undefined) {
-        partsTotal += p.cost;
-        entry.total += p.cost;
-        if (p.isCOTS) cotsTotal += p.cost;
-      } else {
-        partsMissingCost += 1;
-      }
-      byMethod.set(p.manufacturingMethod, entry);
-    }
-
-    let inventoryTotal = 0;
-    for (const item of inventory) {
-      if (item.unitCost !== undefined) {
-        inventoryTotal += item.unitCost * item.onHandQty;
-      }
-    }
-
-    return {
-      total: partsTotal + inventoryTotal,
-      partsTotal,
-      inventoryTotal,
-      cotsTotal,
-      partsMissingCost,
-      byMethod: Array.from(byMethod.entries()).map(([method, v]) => ({
-        method: method as Doc<"parts">["manufacturingMethod"],
-        total: v.total,
-        count: v.count,
-      })),
-    };
-  },
-});
-
-// --- BOM export (flat rows; client builds the CSV) ---
-
-export const exportBOM = query({
-  args: { projectId: v.optional(v.id("projects")) },
-  returns: v.array(
-    v.object({
-      partNumber: v.string(),
-      name: v.string(),
-      material: v.string(),
-      quantityNeeded: v.number(),
-      manufacturingMethod: v.string(),
-      status: v.string(),
-      isCOTS: v.boolean(),
-      vendor: v.string(),
-      vendorPartNumber: v.string(),
-      cost: v.union(v.number(), v.null()),
-      leadTime: v.string(),
-      orderStatus: v.string(),
-    }),
-  ),
-  handler: async (ctx, args) => {
-    const parts =
-      args.projectId !== undefined
-        ? await ctx.db
-            .query("parts")
-            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-            .take(SCAN_LIMIT)
-        : await ctx.db.query("parts").order("desc").take(SCAN_LIMIT);
-    return parts.map((p) => ({
-      partNumber: p.partNumber ?? "",
-      name: p.name,
-      material: p.material ?? "",
-      quantityNeeded: p.quantityNeeded,
-      manufacturingMethod: p.manufacturingMethod,
-      status: p.status,
-      isCOTS: p.isCOTS,
-      vendor: p.vendor ?? "",
-      vendorPartNumber: p.vendorPartNumber ?? "",
-      cost: p.cost ?? null,
-      leadTime: p.leadTime ?? "",
-      orderStatus: p.orderStatus ?? "",
-    }));
-  },
+  handler: (ctx, { storageId }) => ctx.storage.getUrl(storageId),
 });

@@ -5,13 +5,17 @@ import {
   internalQuery,
   internalMutation,
   httpAction,
-  type MutationCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import type { Doc, Id } from "./_generated/dataModel";
-import { requireUserId, requireMentor, getCurrentUser } from "./lib/auth";
-import { syncTaskForIssue, deleteTaskForIssue } from "./lib/taskSync";
+import type { Doc } from "./_generated/dataModel";
+import {
+  requireUserId,
+  requireMentor,
+  getCurrentUser,
+  getActor,
+} from "./lib/auth";
+import { isLeadOrAbove } from "./lib/stages";
 import {
   derivePriority,
   normalizeIssueNode,
@@ -48,8 +52,7 @@ const vIssue = v.object({
   isPullRequest: v.boolean(),
   priority: priorityValidator,
   priorityOverride: v.optional(priorityValidator),
-  linkedTaskId: v.optional(v.id("tasks")),
-  projectId: v.optional(v.id("projects")),
+  claimedByUserId: v.optional(v.string()),
   lastSyncedAt: v.optional(v.number()),
 });
 
@@ -71,18 +74,12 @@ const SCAN_LIMIT = 2000;
 
 export const list = query({
   args: {
-    projectId: v.optional(v.id("projects")),
     state: v.optional(issueStateValidator),
   },
   returns: v.array(vIssue),
   handler: async (ctx, args) => {
     let issues: Doc<"issues">[];
-    if (args.projectId !== undefined) {
-      issues = await ctx.db
-        .query("issues")
-        .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-        .take(SCAN_LIMIT);
-    } else if (args.state !== undefined) {
+    if (args.state !== undefined) {
       issues = await ctx.db
         .query("issues")
         .withIndex("by_state", (q) => q.eq("state", args.state!))
@@ -115,21 +112,15 @@ export const listComments = query({
 
 // Counts for the dashboard widget.
 export const stats = query({
-  args: { projectId: v.optional(v.id("projects")) },
+  args: {},
   returns: v.object({
     open: v.number(),
     closed: v.number(),
     prs: v.number(),
     total: v.number(),
   }),
-  handler: async (ctx, { projectId }) => {
-    const issues =
-      projectId !== undefined
-        ? await ctx.db
-            .query("issues")
-            .withIndex("by_project", (q) => q.eq("projectId", projectId))
-            .take(SCAN_LIMIT)
-        : await ctx.db.query("issues").take(SCAN_LIMIT);
+  handler: async (ctx) => {
+    const issues = await ctx.db.query("issues").take(SCAN_LIMIT);
     let open = 0;
     let closed = 0;
     let prs = 0;
@@ -168,98 +159,12 @@ export const config = query({
   },
 });
 
-// ---- Repository → project mapping (auto-assign synced issues) ----
-
-const vRepoMapping = v.object({
-  _id: v.id("githubRepos"),
-  _creationTime: v.number(),
-  repo: v.string(),
-  projectId: v.id("projects"),
-});
-
-export const listRepoMappings = query({
-  args: {},
-  returns: v.array(vRepoMapping),
-  handler: async (ctx) => {
-    const rows = await ctx.db.query("githubRepos").collect();
-    return rows.sort((a, b) => a.repo.localeCompare(b.repo));
-  },
-});
-
-// Upsert a repo→project mapping and backfill issues from that repo that don't
-// yet have a project — manual triage (a non-null projectId) is left untouched.
-// Returns how many issues were newly assigned. Shared by the mentor mutation
-// and the import action.
-async function upsertRepoMapping(
-  ctx: MutationCtx,
-  repoInput: string,
-  projectId: Id<"projects">,
-): Promise<number> {
-  const repo = normalizeRepo(repoInput);
-  if (!/^[^/]+\/[^/]+$/.test(repo))
-    throw new Error(`Expected "owner/name", got "${repo}".`);
-
-  const existing = await ctx.db
-    .query("githubRepos")
-    .withIndex("by_repo", (q) => q.eq("repo", repo))
-    .unique();
-  if (existing) await ctx.db.patch(existing._id, { projectId });
-  else await ctx.db.insert("githubRepos", { repo, projectId });
-
-  // Prefix-scan the (repo, number) index to get every issue for this repo.
-  const issues = await ctx.db
-    .query("issues")
-    .withIndex("by_repo_and_number", (q) => q.eq("repo", repo))
-    .take(SCAN_LIMIT);
-  let assigned = 0;
-  for (const issue of issues) {
-    if (issue.projectId !== undefined) continue;
-    await ctx.db.patch(issue._id, { projectId });
-    const updated = await ctx.db.get(issue._id);
-    if (updated) await syncTaskForIssue(ctx, updated);
-    assigned += 1;
-  }
-  return assigned;
-}
-
-export const setRepoProject = mutation({
-  args: { repo: v.string(), projectId: v.id("projects") },
-  returns: v.object({ assigned: v.number() }),
-  handler: async (ctx, args) => {
-    await requireMentor(ctx);
-    return { assigned: await upsertRepoMapping(ctx, args.repo, args.projectId) };
-  },
-});
-
-// Same as setRepoProject minus the auth check — called by the import action,
-// which has already verified the caller is a mentor.
-export const applyRepoProject = internalMutation({
-  args: { repo: v.string(), projectId: v.id("projects") },
-  returns: v.object({ assigned: v.number() }),
-  handler: async (ctx, args) => ({
-    assigned: await upsertRepoMapping(ctx, args.repo, args.projectId),
-  }),
-});
-
-export const removeRepoMapping = mutation({
-  args: { id: v.id("githubRepos") },
-  returns: v.null(),
-  handler: async (ctx, { id }) => {
-    await requireMentor(ctx);
-    await ctx.db.delete(id);
-    return null;
-  },
-});
-
-// ---- Mutations ----
-
 export const createManualIssue = mutation({
   args: {
     title: v.string(),
     body: v.optional(v.string()),
     priority: v.optional(priorityValidator),
     labels: v.optional(v.array(v.string())),
-    projectId: v.optional(v.id("projects")),
   },
   returns: v.id("issues"),
   handler: async (ctx, args) => {
@@ -273,10 +178,7 @@ export const createManualIssue = mutation({
       assigneeLogins: [],
       isPullRequest: false,
       priority: args.priority ?? "medium",
-      projectId: args.projectId,
     });
-    const issue = await ctx.db.get(id);
-    if (issue) await syncTaskForIssue(ctx, issue);
     return id;
   },
 });
@@ -291,7 +193,6 @@ export const update = mutation({
     // to clear the pin and revert to the label-derived priority.
     priorityOverride: v.optional(v.union(priorityValidator, v.null())),
     labels: v.optional(v.array(v.string())),
-    projectId: v.optional(v.union(v.id("projects"), v.null())),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -300,10 +201,6 @@ export const update = mutation({
     if (!issue) throw new Error("Issue not found");
 
     const patch: Partial<Doc<"issues">> = {};
-    // Project assignment (triage) applies to any issue.
-    if (args.projectId !== undefined)
-      patch.projectId = args.projectId ?? undefined;
-
     if (issue.source === "manual") {
       // Title/body/labels/priority are set directly on manual rows.
       if (args.title !== undefined) patch.title = args.title;
@@ -321,8 +218,6 @@ export const update = mutation({
       }
     }
     await ctx.db.patch(args.id, patch);
-    const updated = await ctx.db.get(args.id);
-    if (updated) await syncTaskForIssue(ctx, updated);
     return null;
   },
 });
@@ -342,8 +237,6 @@ export const setState = mutation({
       );
     }
     await ctx.db.patch(id, { state });
-    const updated = await ctx.db.get(id);
-    if (updated) await syncTaskForIssue(ctx, updated);
     return null;
   },
 });
@@ -365,13 +258,92 @@ export const remove = mutation({
     await requireMentor(ctx);
     const issue = await ctx.db.get(id);
     if (!issue) return null;
-    await deleteTaskForIssue(ctx, id);
     const comments = await ctx.db
       .query("issueComments")
       .withIndex("by_issue", (q) => q.eq("issueId", id))
       .collect();
     for (const c of comments) await ctx.db.delete(c._id);
     await ctx.db.delete(id);
+    return null;
+  },
+});
+
+/** The issues this person picked up — the twin of My Parts and My To-dos. */
+export const listMine = query({
+  args: {},
+  returns: v.array(vIssue),
+  handler: async (ctx) => {
+    const userId = await requireUserId(ctx);
+    const mine = await ctx.db
+      .query("issues")
+      .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
+      .take(200);
+    // Open ones first — a closed issue you fixed is history, not a job.
+    return mine.sort((a, b) => {
+      const aClosed = a.state === "closed";
+      const bClosed = b.state === "closed";
+      if (aClosed !== bClosed) return aClosed ? 1 : -1;
+      return b._creationTime - a._creationTime;
+    });
+  },
+});
+
+// ---- Claiming ----
+//
+// Same three rules as parts, sub-assemblies and to-dos: anyone can pick up
+// what nobody has, only the person holding it (or a lead) can put it back,
+// and mentors can put someone else on it. A bug nobody has claimed should
+// read the same as a part nobody has claimed.
+
+export const claim = mutation({
+  args: { id: v.id("issues") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const userId = await requireUserId(ctx);
+    const issue = await ctx.db.get(id);
+    if (!issue) throw new Error("That issue is gone.");
+    if (issue.state === "closed") {
+      throw new Error("That one's closed.");
+    }
+    if (issue.claimedByUserId && issue.claimedByUserId !== userId) {
+      throw new Error("Someone else already picked this one up.");
+    }
+    await ctx.db.patch(id, { claimedByUserId: userId });
+    return null;
+  },
+});
+
+export const unclaim = mutation({
+  args: { id: v.id("issues") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    const actor = await getActor(ctx);
+    const issue = await ctx.db.get(id);
+    if (!issue) throw new Error("That issue is gone.");
+    if (issue.claimedByUserId !== actor.userId && !isLeadOrAbove(actor.role)) {
+      throw new Error("Only the person who picked it up can put it back.");
+    }
+    await ctx.db.patch(id, { claimedByUserId: undefined });
+    return null;
+  },
+});
+
+/** Put someone else on an issue. Mentors only, same as parts and to-dos. */
+export const assign = mutation({
+  args: { id: v.id("issues"), userId: v.union(v.string(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, { id, userId }) => {
+    await requireMentor(ctx);
+    const issue = await ctx.db.get(id);
+    if (!issue) throw new Error("That issue is gone.");
+    if (userId !== null) {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("authId", (q) => q.eq("authId", userId))
+        .unique();
+      if (!user) throw new Error("That person hasn't signed in yet.");
+    }
+    await ctx.db.patch(id, { claimedByUserId: userId ?? undefined });
     return null;
   },
 });
@@ -423,17 +395,9 @@ export const upsertIssueFromWebhook = internalMutation({
         priority: existing.priorityOverride ?? priority,
         lastSyncedAt: Date.now(),
       });
-      const issue = await ctx.db.get(existing._id);
-      if (issue) await syncTaskForIssue(ctx, issue);
       return existing._id;
     }
 
-    // New issues auto-inherit their repo's project mapping (if any). Existing
-    // rows keep whatever project they were triaged into (see the patch above).
-    const mapping = await ctx.db
-      .query("githubRepos")
-      .withIndex("by_repo", (q) => q.eq("repo", args.repo))
-      .unique();
     const id = await ctx.db.insert("issues", {
       source: "github",
       repo: args.repo,
@@ -448,11 +412,8 @@ export const upsertIssueFromWebhook = internalMutation({
       authorLogin: args.authorLogin,
       isPullRequest: args.isPullRequest,
       priority,
-      projectId: mapping?.projectId,
       lastSyncedAt: Date.now(),
     });
-    const issue = await ctx.db.get(id);
-    if (issue) await syncTaskForIssue(ctx, issue);
     return id;
   },
 });
@@ -468,7 +429,6 @@ export const deleteIssueFromWebhook = internalMutation({
       )
       .unique();
     if (!existing) return null;
-    await deleteTaskForIssue(ctx, existing._id);
     const comments = await ctx.db
       .query("issueComments")
       .withIndex("by_issue", (q) => q.eq("issueId", existing._id))
@@ -543,8 +503,6 @@ export const applyStateFromWriteback = internalMutation({
     const issue = await ctx.db.get(issueId);
     if (!issue) return null;
     await ctx.db.patch(issueId, { state });
-    const updated = await ctx.db.get(issueId);
-    if (updated) await syncTaskForIssue(ctx, updated);
     return null;
   },
 });
@@ -600,8 +558,7 @@ export const commentOnGitHub = action({
       `/repos/${issue.repo}/issues/${issue.number}/comments`,
       { method: "POST", token, body: JSON.stringify({ body }) },
     );
-    if (!res.ok)
-      return { ok: false, message: `GitHub error ${res.status}.` };
+    if (!res.ok) return { ok: false, message: `GitHub error ${res.status}.` };
     return { ok: true, message: "Comment posted to GitHub." };
   },
 });
@@ -624,8 +581,7 @@ export const setGitHubState = action({
       `/repos/${issue.repo}/issues/${issue.number}`,
       { method: "PATCH", token, body: JSON.stringify({ state }) },
     );
-    if (!res.ok)
-      return { ok: false, message: `GitHub error ${res.status}.` };
+    if (!res.ok) return { ok: false, message: `GitHub error ${res.status}.` };
     await ctx.runMutation(internal.github.applyStateFromWriteback, {
       issueId,
       state,
@@ -640,9 +596,9 @@ export const setGitHubState = action({
 // Mentor-triggered bulk import of a repo's existing issues (and PRs). Handy for
 // first-run population and for testing without waiting on webhook traffic.
 export const importIssues = action({
-  args: { repo: v.string(), projectId: v.optional(v.id("projects")) },
+  args: { repo: v.string() },
   returns: v.object({ imported: v.number() }),
-  handler: async (ctx, { repo, projectId }) => {
+  handler: async (ctx, { repo }) => {
     const role = await ctx.runQuery(internal.github.callerRole, {});
     if (role !== "mentor") throw new Error("Mentors only.");
     const token = process.env.GITHUB_TOKEN;
@@ -650,15 +606,6 @@ export const importIssues = action({
     const cleanRepo = normalizeRepo(repo);
     if (!/^[^/]+\/[^/]+$/.test(cleanRepo))
       throw new Error(`Expected "owner/name", got "${cleanRepo}".`);
-
-    // Persist the repo→project mapping first (if chosen) so every imported
-    // issue inherits it on insert, and future synced issues do too.
-    if (projectId) {
-      await ctx.runMutation(internal.github.applyRepoProject, {
-        repo: cleanRepo,
-        projectId,
-      });
-    }
 
     let imported = 0;
     for (let page = 1; page <= 10; page++) {

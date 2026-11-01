@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import type { Doc, Id } from "../../../convex/_generated/dataModel";
+import type { Doc } from "../../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +12,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -21,37 +20,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PRIORITIES, type TaskPriority } from "@/lib/pm";
-import { useActiveProject } from "@/lib/project";
-
-const NO_PROJECT = "__none__";
+import { PRIORITIES, type Priority } from "@/lib/priority";
 
 /**
  * Create or edit a manual (tracker-only) issue. Synced GitHub issues aren't
  * edited here — their title/body/labels are owned by GitHub.
  */
 export function IssueFormDialog({
-  trigger,
+  open,
+  onOpenChange,
   issue,
 }: {
-  trigger: ReactNode;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   issue?: Doc<"issues">;
 }) {
-  const { projects, activeProjectId } = useActiveProject();
   const createIssue = useMutation(api.github.createManualIssue);
   const updateIssue = useMutation(api.github.update);
   const isEdit = !!issue;
 
-  const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(issue?.title ?? "");
   const [body, setBody] = useState(issue?.body ?? "");
-  const [priority, setPriority] = useState<TaskPriority>(
+  const [priority, setPriority] = useState<Priority>(
     issue?.priority ?? "medium",
   );
   const [labels, setLabels] = useState((issue?.labels ?? []).join(", "));
-  const [projectId, setProjectId] = useState<string>(
-    issue?.projectId ?? activeProjectId ?? NO_PROJECT,
-  );
   const [saving, setSaving] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -61,8 +54,6 @@ export function IssueFormDialog({
       .split(",")
       .map((l) => l.trim())
       .filter(Boolean);
-    const project =
-      projectId === NO_PROJECT ? undefined : (projectId as Id<"projects">);
     setSaving(true);
     try {
       if (isEdit && issue) {
@@ -72,7 +63,6 @@ export function IssueFormDialog({
           body: body.trim() || null,
           priority,
           labels: labelList,
-          projectId: project ?? null,
         });
       } else {
         await createIssue({
@@ -80,21 +70,19 @@ export function IssueFormDialog({
           body: body.trim() || undefined,
           priority,
           labels: labelList,
-          projectId: project,
         });
         setTitle("");
         setBody("");
         setLabels("");
       }
-      setOpen(false);
+      onOpenChange(false);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit issue" : "New issue"}</DialogTitle>
@@ -131,7 +119,7 @@ export function IssueFormDialog({
               <Label>Priority</Label>
               <Select
                 value={priority}
-                onValueChange={(v) => setPriority(v as TaskPriority)}
+                onValueChange={(v) => setPriority(v as Priority)}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -140,22 +128,6 @@ export function IssueFormDialog({
                   {PRIORITIES.map((p) => (
                     <SelectItem key={p.value} value={p.value}>
                       {p.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Project</Label>
-              <Select value={projectId} onValueChange={setProjectId}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_PROJECT}>No project</SelectItem>
-                  {(projects ?? []).map((p) => (
-                    <SelectItem key={p._id} value={p._id}>
-                      {p.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

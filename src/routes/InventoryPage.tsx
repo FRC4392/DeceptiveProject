@@ -14,7 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useIsMentor } from "@/lib/roles";
-import { formatCost } from "@/lib/parts";
+import { formatCost } from "@/lib/stages";
 import { MinusIcon, PlusIcon, TrashIcon } from "@radix-ui/react-icons";
 
 export function InventoryPage() {

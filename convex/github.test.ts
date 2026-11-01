@@ -29,21 +29,6 @@ async function asUser(t: TestConvex<typeof schema>, subject = "u1") {
   });
 }
 
-async function asMentor(t: TestConvex<typeof schema>) {
-  await t.run(async (ctx) => {
-    await ctx.db.insert("users", {
-      authId: "mentor1",
-      email: "m@example.com",
-      name: "Mentor",
-      role: "mentor",
-    });
-  });
-  return t.withIdentity({
-    subject: "mentor1",
-    issuer: "https://example.clerk.accounts.dev",
-  });
-}
-
 // Args mirroring what the webhook's normalizeIssueNode produces.
 function upsertArgs(overrides: Record<string, unknown> = {}) {
   return {
@@ -59,32 +44,26 @@ function upsertArgs(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("syncTaskForIssue (via upsertIssueFromWebhook)", () => {
-  test("a synced issue creates a linked task on a Software board", async () => {
+async function firstIssueId(t: TestConvex<typeof schema>) {
+  const issues = await t.query(api.github.list, {});
+  return issues[0]._id;
+}
+
+describe("the issue sync", () => {
+  test("a synced issue lands as a GitHub-sourced issue", async () => {
     const t = convexTest(schema, modules);
     const id = await t.mutation(
       internal.github.upsertIssueFromWebhook,
       upsertArgs(),
     );
-
-    const { issue, task, board } = await t.run(async (ctx) => {
-      const issue = await ctx.db.get(id);
-      const task = issue?.linkedTaskId
-        ? await ctx.db.get(issue.linkedTaskId)
-        : null;
-      const board = task ? await ctx.db.get(task.boardId) : null;
-      return { issue, task, board };
-    });
+    const issue = await t.run((ctx) => ctx.db.get(id));
 
     expect(issue?.source).toBe("github");
-    expect(task?.source).toBe("issue");
-    expect(task?.sourceId).toBe(id);
-    expect(task?.status).toBe("todo");
-    expect(task?.title).toBe("Issue #7: Drive motor stalls");
-    expect(board?.subsystem).toBe("software");
+    expect(issue?.state).toBe("open");
+    expect(issue?.title).toBe("Drive motor stalls");
   });
 
-  test("re-sync is idempotent and updates the same task", async () => {
+  test("re-sync is idempotent and updates the same issue", async () => {
     const t = convexTest(schema, modules);
     const first = await t.mutation(
       internal.github.upsertIssueFromWebhook,
@@ -96,16 +75,12 @@ describe("syncTaskForIssue (via upsertIssueFromWebhook)", () => {
     );
     expect(second).toBe(first);
 
-    const { issueCount, tasks } = await t.run(async (ctx) => ({
-      issueCount: (await ctx.db.query("issues").collect()).length,
-      tasks: await ctx.db.query("tasks").collect(),
-    }));
-    expect(issueCount).toBe(1);
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0].title).toBe("Issue #7: Drive motor stalls intermittently");
+    const issues = await t.run((ctx) => ctx.db.query("issues").collect());
+    expect(issues).toHaveLength(1);
+    expect(issues[0].title).toBe("Drive motor stalls intermittently");
   });
 
-  test("closing an issue marks its task done with completedAt", async () => {
+  test("closing an issue closes it here too", async () => {
     const t = convexTest(schema, modules);
     const id = await t.mutation(
       internal.github.upsertIssueFromWebhook,
@@ -115,12 +90,8 @@ describe("syncTaskForIssue (via upsertIssueFromWebhook)", () => {
       internal.github.upsertIssueFromWebhook,
       upsertArgs({ state: "closed" }),
     );
-    const task = await t.run(async (ctx) => {
-      const issue = await ctx.db.get(id);
-      return issue?.linkedTaskId ? ctx.db.get(issue.linkedTaskId) : null;
-    });
-    expect(task?.status).toBe("done");
-    expect(task?.completedAt).toBeTypeOf("number");
+    const issue = await t.run((ctx) => ctx.db.get(id));
+    expect(issue?.state).toBe("closed");
   });
 
   test("priority is derived from labels", async () => {
@@ -133,18 +104,15 @@ describe("syncTaskForIssue (via upsertIssueFromWebhook)", () => {
     expect(issue?.priority).toBe("high");
   });
 
-  test("a PR is labeled and titled as a PR", async () => {
+  test("a PR is marked as one", async () => {
     const t = convexTest(schema, modules);
     const id = await t.mutation(
       internal.github.upsertIssueFromWebhook,
       upsertArgs({ number: 12, isPullRequest: true, title: "Add climber" }),
     );
-    const task = await t.run(async (ctx) => {
-      const issue = await ctx.db.get(id);
-      return issue?.linkedTaskId ? ctx.db.get(issue.linkedTaskId) : null;
-    });
-    expect(task?.title).toBe("PR #12: Add climber");
-    expect(task?.labels).toContain("pr");
+    const issue = await t.run((ctx) => ctx.db.get(id));
+    expect(issue?.isPullRequest).toBe(true);
+    expect(issue?.title).toBe("Add climber");
   });
 });
 
@@ -191,7 +159,7 @@ describe("comment mirroring", () => {
 });
 
 describe("manual issues", () => {
-  test("createManualIssue makes a to-do and setState closes it", async () => {
+  test("createManualIssue opens one, and setState closes it", async () => {
     const t = convexTest(schema, modules);
     const user = await asUser(t);
     const id = await user.mutation(api.github.createManualIssue, {
@@ -199,19 +167,14 @@ describe("manual issues", () => {
       priority: "high",
     });
 
-    let task = await t.run(async (ctx) => {
-      const issue = await ctx.db.get(id);
-      return issue?.linkedTaskId ? ctx.db.get(issue.linkedTaskId) : null;
-    });
-    expect(task?.status).toBe("todo");
-    expect(task?.priority).toBe("high");
+    let issue = await t.run((ctx) => ctx.db.get(id));
+    expect(issue?.state).toBe("open");
+    expect(issue?.priority).toBe("high");
+    expect(issue?.source).toBe("manual");
 
     await user.mutation(api.github.setState, { id, state: "closed" });
-    task = await t.run(async (ctx) => {
-      const issue = await ctx.db.get(id);
-      return issue?.linkedTaskId ? ctx.db.get(issue.linkedTaskId) : null;
-    });
-    expect(task?.status).toBe("done");
+    issue = await t.run((ctx) => ctx.db.get(id));
+    expect(issue?.state).toBe("closed");
   });
 
   test("setState rejects GitHub-sourced issues", async () => {
@@ -228,19 +191,15 @@ describe("manual issues", () => {
 });
 
 describe("delete", () => {
-  test("deleteIssueFromWebhook removes the issue and its mirror task", async () => {
+  test("deleteIssueFromWebhook removes the issue", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs());
     await t.mutation(internal.github.deleteIssueFromWebhook, {
       repo: "deceivers/robot",
       number: 7,
     });
-    const { issues, tasks } = await t.run(async (ctx) => ({
-      issues: await ctx.db.query("issues").collect(),
-      tasks: await ctx.db.query("tasks").collect(),
-    }));
+    const issues = await t.run((ctx) => ctx.db.query("issues").collect());
     expect(issues).toHaveLength(0);
-    expect(tasks).toHaveLength(0);
   });
 });
 
@@ -265,12 +224,6 @@ describe("priority override", () => {
     );
     issue = await t.run((ctx) => ctx.db.get(id));
     expect(issue?.priority).toBe("high");
-
-    const task = await t.run(async (ctx) => {
-      const i = await ctx.db.get(id);
-      return i?.linkedTaskId ? ctx.db.get(i.linkedTaskId) : null;
-    });
-    expect(task?.priority).toBe("high");
   });
 
   test("clearing the override reverts priority to the labels", async () => {
@@ -290,115 +243,160 @@ describe("priority override", () => {
   });
 });
 
-describe("repo → project mapping", () => {
-  test("a new synced issue inherits its repo's mapped project", async () => {
+describe("picking up an issue", () => {
+  test("anyone can take one nobody has", async () => {
     const t = convexTest(schema, modules);
-    const mentor = await asMentor(t);
-    const projectId = await t.run((ctx) =>
-      ctx.db.insert("projects", {
-        name: "2026",
-        tag: "26",
-        numberingMode: "auto",
-      }),
-    );
-    await mentor.mutation(api.github.setRepoProject, {
-      repo: "deceivers/robot",
-      projectId,
-    });
-
+    const dana = await asUser(t, "dana");
     const id = await t.mutation(
       internal.github.upsertIssueFromWebhook,
-      upsertArgs(),
+      upsertArgs({}),
     );
-    expect((await t.run((ctx) => ctx.db.get(id)))?.projectId).toBe(projectId);
 
-    // The mirror task inherits the project too.
-    const task = await t.run(async (ctx) => {
-      const i = await ctx.db.get(id);
-      return i?.linkedTaskId ? ctx.db.get(i.linkedTaskId) : null;
-    });
-    expect(task?.projectId).toBe(projectId);
+    await dana.mutation(api.github.claim, { id });
+    expect((await t.run((ctx) => ctx.db.get(id)))?.claimedByUserId).toBe(
+      "dana",
+    );
   });
 
-  test("mapping backfills unassigned issues but not manually triaged ones", async () => {
+  test("but not one someone else already has", async () => {
     const t = convexTest(schema, modules);
-    const mentor = await asMentor(t);
-    const { pA, pB } = await t.run(async (ctx) => ({
-      pA: await ctx.db.insert("projects", {
-        name: "A",
-        tag: "AA",
-        numberingMode: "manual",
-      }),
-      pB: await ctx.db.insert("projects", {
-        name: "B",
-        tag: "BB",
-        numberingMode: "manual",
-      }),
-    }));
-
-    const id7 = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 7 }),
-    );
-    const id8 = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 8 }),
-    );
-    // #8 is manually triaged to project B before the mapping exists.
-    await mentor.mutation(api.github.update, { id: id8, projectId: pB });
-
-    const res = await mentor.mutation(api.github.setRepoProject, {
-      repo: "deceivers/robot",
-      projectId: pA,
-    });
-    expect(res.assigned).toBe(1); // only #7 was unassigned
-
-    expect((await t.run((ctx) => ctx.db.get(id7)))?.projectId).toBe(pA);
-    expect((await t.run((ctx) => ctx.db.get(id8)))?.projectId).toBe(pB);
-  });
-
-  test("applyRepoProject (import path) maps the repo so later inserts inherit it", async () => {
-    const t = convexTest(schema, modules);
-    const projectId = await t.run((ctx) =>
-      ctx.db.insert("projects", {
-        name: "Imp",
-        tag: "IM",
-        numberingMode: "manual",
-      }),
-    );
-    // The import sets the mapping first…
-    await t.mutation(internal.github.applyRepoProject, {
-      repo: "deceivers/robot",
-      projectId,
-    });
-    // …then each imported issue upserts in and inherits it.
+    const dana = await asUser(t, "dana");
+    const sam = await asUser(t, "sam");
     const id = await t.mutation(
       internal.github.upsertIssueFromWebhook,
-      upsertArgs(),
+      upsertArgs({}),
     );
-    expect((await t.run((ctx) => ctx.db.get(id)))?.projectId).toBe(projectId);
+
+    await dana.mutation(api.github.claim, { id });
+    await expect(sam.mutation(api.github.claim, { id })).rejects.toThrow(
+      /already picked this one up/i,
+    );
   });
 
-  test("setRepoProject requires the mentor role", async () => {
+  test("a closed issue isn't work to pick up", async () => {
     const t = convexTest(schema, modules);
-    const user = await asUser(t);
-    const projectId = await t.run((ctx) =>
-      ctx.db.insert("projects", {
-        name: "X",
-        tag: "XX",
-        numberingMode: "manual",
-      }),
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ state: "closed" }),
+    );
+    await expect(dana.mutation(api.github.claim, { id })).rejects.toThrow(
+      /closed/i,
+    );
+  });
+
+  test("only the person holding it can put it back", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const sam = await asUser(t, "sam");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+    await dana.mutation(api.github.claim, { id });
+
+    await expect(sam.mutation(api.github.unclaim, { id })).rejects.toThrow(
+      /only the person/i,
+    );
+    await dana.mutation(api.github.unclaim, { id });
+    expect(
+      (await t.run((ctx) => ctx.db.get(id)))?.claimedByUserId,
+    ).toBeUndefined();
+  });
+
+  test("a GitHub re-sync leaves the claim alone", async () => {
+    // The whole point of a separate field: GitHub owns assignees, the tracker
+    // owns who on the team picked it up, and a webhook must not wipe it.
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+    await dana.mutation(api.github.claim, { id });
+
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ title: "Retitled upstream", labels: ["bug"] }),
+    );
+    const issue = await t.run((ctx) => ctx.db.get(id));
+    expect(issue?.title).toBe("Retitled upstream");
+    expect(issue?.claimedByUserId).toBe("dana");
+  });
+
+  test("a student can't put someone else on one", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
     );
     await expect(
-      user.mutation(api.github.setRepoProject, {
-        repo: "deceivers/robot",
-        projectId,
-      }),
-    ).rejects.toThrow();
+      dana.mutation(api.github.assign, { id, userId: "sam" }),
+    ).rejects.toThrow(/mentor/i);
   });
 });
 
-async function firstIssueId(t: TestConvex<typeof schema>) {
-  const issues = await t.query(api.github.list, {});
-  return issues[0]._id;
-}
+describe("my issues", () => {
+  test("lists what you picked up and nothing anyone else did", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const sam = await asUser(t, "sam");
+    const mine = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 1, title: "Mine" }),
+    );
+    const theirs = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 2, title: "Theirs" }),
+    );
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 3, title: "Nobody's" }),
+    );
+    await dana.mutation(api.github.claim, { id: mine });
+    await sam.mutation(api.github.claim, { id: theirs });
+
+    const listed = await dana.query(api.github.listMine, {});
+    expect(listed.map((i) => i.title)).toEqual(["Mine"]);
+  });
+
+  test("open ones come before ones you already closed", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const closed = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 1, title: "Already fixed", state: "closed" }),
+    );
+    const open = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ number: 2, title: "Still broken" }),
+    );
+    // Claiming a closed issue is refused, so put the claim on directly — it's
+    // what an issue you fixed after claiming looks like.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(closed, { claimedByUserId: "dana" });
+    });
+    await dana.mutation(api.github.claim, { id: open });
+
+    const listed = await dana.query(api.github.listMine, {});
+    expect(listed.map((i) => i.title)).toEqual([
+      "Still broken",
+      "Already fixed",
+    ]);
+  });
+
+  test("putting one back takes it off your list", async () => {
+    const t = convexTest(schema, modules);
+    const dana = await asUser(t, "dana");
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({}),
+    );
+    await dana.mutation(api.github.claim, { id });
+    expect(await dana.query(api.github.listMine, {})).toHaveLength(1);
+
+    await dana.mutation(api.github.unclaim, { id });
+    expect(await dana.query(api.github.listMine, {})).toHaveLength(0);
+  });
+});

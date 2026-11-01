@@ -9,8 +9,9 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { GenericMutationCtx, UserIdentity } from "convex/server";
-import type { DataModel } from "./_generated/dataModel";
+import type { DataModel, Doc } from "./_generated/dataModel";
 import { createClerkClient, type User } from "@clerk/backend";
+import { effectiveRole } from "./lib/auth";
 import type { UserJSON, WebhookEvent } from "@clerk/backend";
 import { Webhook } from "svix";
 
@@ -21,21 +22,37 @@ const USER_SYNC_PAGE_SIZE = 100;
 
 const roleValidator = v.union(v.literal("mentor"), v.literal("student"));
 
+// What the app acts on: Clerk's mentor/student flag, unless a mentor has given
+// this person a tracker role of their own (see convex/lib/auth.ts).
+const appRoleValidator = v.union(
+  v.literal("student"),
+  v.literal("lead"),
+  v.literal("mentor"),
+  v.literal("admin"),
+);
+
 const vCurrentUser = v.object({
   id: v.string(),
   email: v.string(),
   name: v.string(),
-  role: roleValidator,
+  role: appRoleValidator,
 });
 
 function roleFromValue(value: unknown): Role {
   return value === "mentor" ? "mentor" : "student";
 }
 
-function roleFromIdentity(identity: UserIdentity): Role {
-  return roleFromValue(identity.role);
+/**
+ * The role the session token claims, or undefined when it carries no `role`
+ * claim at all — which is what a Clerk JWT template that hasn't been given the
+ * claim looks like. The two cases are not the same: "no claim" must not be
+ * read as "not a mentor", or every page load would quietly demote people.
+ */
+function roleFromIdentity(identity: UserIdentity): Role | undefined {
+  return identity.role === undefined ? undefined : roleFromValue(identity.role);
 }
 
+/** The best name the session token offers, or "" when it offers none. */
 function nameFromIdentity(identity: UserIdentity): string {
   const fullName = identity.name?.trim();
   if (fullName) return fullName;
@@ -43,26 +60,56 @@ function nameFromIdentity(identity: UserIdentity): string {
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part));
   if (parts.length > 0) return parts.join(" ");
-  return identity.email ?? identity.subject;
+  return identity.email?.trim() ?? "";
 }
 
+/**
+ * Write what we know about a Clerk user.
+ *
+ * `authoritative` marks data read from the Clerk API itself (the webhook and
+ * the roster backfill), which may legitimately clear a field. Everything else
+ * comes from the session token, which only carries the claims the JWT template
+ * was configured to include — so a missing name, email or role there means
+ * "the token didn't say", not "it's empty now", and must leave what we have
+ * alone.
+ */
 async function upsertUser(
   ctx: MutationCtx,
-  user: { authId: string; email: string; name: string; role: Role },
+  user: {
+    authId: string;
+    email?: string;
+    name?: string;
+    role?: Role;
+  },
+  options: { authoritative?: boolean } = {},
 ) {
   const existing = await ctx.db
     .query("users")
     .withIndex("authId", (q) => q.eq("authId", user.authId))
     .unique();
-  if (existing) {
-    await ctx.db.patch(existing._id, {
-      email: user.email,
-      name: user.name,
-      role: user.role,
+
+  if (!existing) {
+    await ctx.db.insert("users", {
+      authId: user.authId,
+      email: user.email ?? "",
+      name: user.name || user.authId,
+      role: user.role ?? "student",
     });
-  } else {
-    await ctx.db.insert("users", user);
+    return;
   }
+
+  const authoritative = options.authoritative ?? false;
+  const patch: Partial<Doc<"users">> = {};
+  if (authoritative || (user.email ?? "").length > 0) {
+    patch.email = user.email ?? "";
+  }
+  if (authoritative || (user.name ?? "").length > 0) {
+    patch.name = user.name || user.authId;
+  }
+  if (authoritative || user.role !== undefined) {
+    patch.role = user.role ?? "student";
+  }
+  if (Object.keys(patch).length > 0) await ctx.db.patch(existing._id, patch);
 }
 
 function primaryEmailFromUserJSON(user: UserJSON): string {
@@ -119,7 +166,9 @@ export const currentUser = query({
       id: identity.subject,
       email: user?.email ?? identity.email ?? "",
       name: user?.name ?? nameFromIdentity(identity),
-      role: user?.role ?? roleFromIdentity(identity),
+      role: user
+        ? effectiveRole(user)
+        : (roleFromIdentity(identity) ?? "student"),
     };
   },
 });
@@ -133,7 +182,7 @@ export const storeCurrentUser = mutation({
 
     await upsertUser(ctx, {
       authId: identity.subject,
-      email: identity.email ?? "",
+      email: identity.email,
       name: nameFromIdentity(identity),
       role: roleFromIdentity(identity),
     });
@@ -143,7 +192,7 @@ export const storeCurrentUser = mutation({
 
 export const callerRole = internalQuery({
   args: {},
-  returns: v.union(roleValidator, v.null()),
+  returns: v.union(appRoleValidator, v.null()),
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) return null;
@@ -151,7 +200,9 @@ export const callerRole = internalQuery({
       .query("users")
       .withIndex("authId", (q) => q.eq("authId", identity.subject))
       .unique();
-    return user?.role ?? roleFromIdentity(identity);
+    return user
+      ? effectiveRole(user)
+      : (roleFromIdentity(identity) ?? "student");
   },
 });
 
@@ -164,7 +215,7 @@ export const upsertUserFromClerk = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, user) => {
-    await upsertUser(ctx, user);
+    await upsertUser(ctx, user, { authoritative: true });
     return null;
   },
 });
@@ -186,8 +237,8 @@ export const syncUsersFromClerk = action({
   args: {},
   returns: v.object({ synced: v.number() }),
   handler: async (ctx) => {
-    const role: Role | null = await ctx.runQuery(internal.auth.callerRole, {});
-    if (role !== "mentor")
+    const role = await ctx.runQuery(internal.auth.callerRole, {});
+    if (role !== "mentor" && role !== "admin")
       throw new Error("This action requires the mentor role.");
 
     const secretKey = process.env.CLERK_SECRET_KEY;

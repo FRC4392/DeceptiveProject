@@ -1,3 +1,4 @@
+import { text } from "./untrusted";
 // Pure helpers for turning an Onshape assembly definition into a de-duplicated
 // list of parts with their true quantities (how many times each part is placed).
 // Kept free of Convex/`ctx` so it can be unit-tested against sample JSON.
@@ -40,19 +41,28 @@ export type AggregatedAssemblyPart = {
   // Whether the part's source lives in the same document as the assembly, i.e.
   // whether we can enrich it (material/thumbnail) and write its number back.
   sameDocument: boolean;
+  // Onshape's own standard content — a library fastener, not something the
+  // team drew. Tagged rather than dropped, because it is hardware somebody
+  // has to buy, and the intake can now say so.
+  standardContent: boolean;
 };
 
 // Drop Onshape's per-instance " <n>" suffix (e.g. "Bracket <3>" → "Bracket").
-function stripInstanceSuffix(name?: string): string {
-  return (name ?? "").replace(/\s*<\d+>\s*$/, "").trim();
+function stripInstanceSuffix(name?: unknown): string {
+  return text(name)
+    .replace(/\s*<\d+>\s*$/, "")
+    .trim();
 }
 
 /**
  * Count each part's placements in an assembly. Instance ids are unique per
  * definition, so a flat id→instance map resolves every occurrence's leaf. Only
- * leaf `Part` occurrences count; standard content (fasteners) and suppressed
- * instances are skipped. Parts are keyed by `elementId:partId` — the same key
- * the Part Studio sync path uses — so both converge on the same tracker rows.
+ * leaf `Part` occurrences count, and suppressed instances are skipped.
+ * Standard content is counted and tagged rather than skipped — a box of bolts
+ * is a real thing to buy, and one row per distinct fastener with its placement
+ * count is what the Ordering board wants. Parts are keyed by
+ * `elementId:partId` — the same key the Part Studio sync path uses — so both
+ * converge on the same tracker rows.
  */
 export function aggregateAssemblyParts(
   def: AssemblyDefinition,
@@ -77,8 +87,8 @@ export function aggregateAssemblyParts(
     if (!path || path.length === 0) continue;
     const leaf = byId.get(path[path.length - 1]);
     if (!leaf) continue;
-    if ((leaf.type ?? "").toLowerCase() !== "part") continue;
-    if (leaf.isStandardContent || leaf.suppressed) continue;
+    if (text(leaf.type).toLowerCase() !== "part") continue;
+    if (leaf.suppressed) continue;
     if (!leaf.partId || !leaf.elementId || !leaf.documentId) continue;
 
     const key = `${leaf.elementId}:${leaf.partId}`;
@@ -93,9 +103,55 @@ export function aggregateAssemblyParts(
         name: stripInstanceSuffix(leaf.name) || "Onshape part",
         quantity: 1,
         sameDocument: leaf.documentId === assemblyDocumentId,
+        standardContent: leaf.isStandardContent === true,
       });
     }
   }
 
   return Array.from(agg.values());
+}
+
+/** A sub-assembly placed directly inside the assembly that was synced. */
+export type AssemblyChild = {
+  elementId: string;
+  documentId: string;
+  name: string;
+  /** How many times it's placed at the root. */
+  quantity: number;
+};
+
+/**
+ * The sub-assemblies placed directly in this assembly — one level, not the
+ * whole tree. `aggregateAssemblyParts` deliberately flattens sub-assemblies
+ * away to count leaf parts; this is the other half, and the two are kept
+ * separate so neither has to compromise.
+ *
+ * Direct instances are the right source here rather than occurrences: a part
+ * nested inside a child belongs to that child, and walking occurrences would
+ * list it under every ancestor.
+ */
+export function rootSubAssemblies(
+  def: AssemblyDefinition,
+  assemblyDocumentId: string,
+): AssemblyChild[] {
+  const byKey = new Map<string, AssemblyChild>();
+  for (const instance of def.rootAssembly?.instances ?? []) {
+    if (text(instance.type).toLowerCase() !== "assembly") continue;
+    if (instance.suppressed) continue;
+    const { elementId, documentId } = instance;
+    if (!elementId) continue;
+    const key = `${documentId ?? assemblyDocumentId}:${elementId}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.quantity += 1;
+      continue;
+    }
+    byKey.set(key, {
+      elementId,
+      documentId: documentId ?? assemblyDocumentId,
+      name: stripInstanceSuffix(instance.name ?? "Sub-assembly"),
+      quantity: 1,
+    });
+  }
+  return Array.from(byKey.values());
 }

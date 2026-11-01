@@ -4,15 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { useMutation } from "convex/react";
 import { getFunctionName } from "convex/server";
 import { IssueFormDialog } from "./IssueFormDialog";
-import { useActiveProject } from "@/lib/project";
 import { api } from "../../../convex/_generated/api";
 
 vi.mock("convex/react", () => ({
   useMutation: vi.fn(),
-}));
-
-vi.mock("@/lib/project", () => ({
-  useActiveProject: vi.fn(),
 }));
 
 const createIssue = vi.fn().mockResolvedValue(undefined);
@@ -33,22 +28,17 @@ beforeEach(() => {
     if (name === getFunctionName(api.github.createManualIssue)) {
       return createIssue as never;
     }
-    if (name === getFunctionName(api.github.update)) return updateIssue as never;
+    if (name === getFunctionName(api.github.update))
+      return updateIssue as never;
     return vi.fn() as never;
-  });
-  vi.mocked(useActiveProject).mockReturnValue({
-    activeProjectId: null,
-    setActiveProjectId: vi.fn(),
-    projects: [],
   });
 });
 
 describe("IssueFormDialog", () => {
   it("creates a manual issue with the entered title and default fields", async () => {
     const user = userEvent.setup();
-    render(<IssueFormDialog trigger={<button>New issue</button>} />);
+    render(<IssueFormDialog open onOpenChange={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: "New issue" }));
     await user.type(
       await screen.findByLabelText("Title"),
       "Fix drivetrain slop",
@@ -60,17 +50,14 @@ describe("IssueFormDialog", () => {
       body: undefined,
       priority: "medium",
       labels: [],
-      projectId: undefined,
     });
     expect(updateIssue).not.toHaveBeenCalled();
   });
 
   it("does not submit when the title is blank", async () => {
-    const user = userEvent.setup();
-    render(<IssueFormDialog trigger={<button>New issue</button>} />);
+    render(<IssueFormDialog open onOpenChange={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: "New issue" }));
-    expect(await screen.findByRole("button", { name: "Create issue" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create issue" })).toBeDisabled();
     expect(createIssue).not.toHaveBeenCalled();
   });
 });

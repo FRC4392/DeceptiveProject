@@ -1,235 +1,29 @@
+// The Onshape link, on the tracker's side of the line.
+//
+// Two jobs: remember which Onshape document holds which subsystem's CAD, and
+// turn a sync into a release intake for a lead to look at. Everything a
+// student does — getting a number, pasting it into Onshape — costs nothing and
+// happens without this file.
 import {
-  internalMutation,
-  internalQuery,
-  mutation,
   query,
+  mutation,
+  internalMutation,
   type MutationCtx,
-  type QueryCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireMentor, requireUserId } from "./lib/auth";
-import { syncTaskForPart } from "./lib/taskSync";
-import { inferMethodFromMaterial } from "./lib/inferMethod";
-import { methodValidator, partStatusValidator } from "./parts";
+import { requireMentor } from "./lib/auth";
+import { requireActiveSeason } from "./lib/season";
+import { classifyAssemblyLine, classifyRelease } from "./lib/intake";
+import { loadKnown } from "./lib/intakeKnown";
+import { normalizePartNumber } from "./lib/stages";
 
-const TEAM = "4392";
-
-// ---- Part numbers: 4392-<tag>-DDSSSS (tag comes from the part's project) ----
-function formatPartNumber(
-  tag: string,
-  documentNumber: string,
-  seq: number,
-): string {
-  return `${TEAM}-${tag}-${documentNumber}${String(seq).padStart(4, "0")}`;
-}
-
-// Atomic because Convex mutations are transactions; concurrent calls serialize.
-// Keyed by (tag, documentNumber) so two projects can reuse a document number.
-async function nextPartNumber(
-  ctx: MutationCtx,
-  tag: string,
-  documentNumber: string,
-): Promise<string> {
-  const counter = await ctx.db
-    .query("partNumberCounters")
-    .withIndex("by_tag_and_document", (q) =>
-      q.eq("tag", tag).eq("documentNumber", documentNumber),
-    )
-    .unique();
-  let seq: number;
-  if (counter) {
-    seq = counter.lastSequence + 1;
-    await ctx.db.patch(counter._id, { lastSequence: seq });
-  } else {
-    seq = 1;
-    await ctx.db.insert("partNumberCounters", {
-      tag,
-      documentNumber,
-      lastSequence: 1,
-    });
-  }
-  return formatPartNumber(tag, documentNumber, seq);
-}
-
-export const generatePartNumber = internalMutation({
-  args: { tag: v.string(), documentNumber: v.string() },
-  returns: v.string(),
-  handler: (ctx, { tag, documentNumber }) =>
-    nextPartNumber(ctx, tag, documentNumber),
-});
-
-// Wipe the per-(tag, document) sequence counters so numbering restarts at 0001.
-// Internal-only; run with `npx convex run onshape:resetPartNumberCounters`.
-export const resetPartNumberCounters = internalMutation({
-  args: {},
-  returns: v.object({ deleted: v.number() }),
-  handler: async (ctx) => {
-    const counters = await ctx.db.query("partNumberCounters").take(5000);
-    for (const c of counters) await ctx.db.delete(c._id);
-    return { deleted: counters.length };
-  },
-});
-
-// Resolve an Onshape document to its 2-digit number and owning project's
-// numbering config. Any field may be null if the document/project isn't set up.
-type DocProject = {
-  documentNumber: string | null;
-  projectId: Id<"projects"> | null;
-  tag: string | null;
-  mode: "auto" | "manual" | null;
-};
-
-async function resolveDocProject(
-  ctx: QueryCtx | MutationCtx,
-  onshapeDocumentId: string,
-): Promise<DocProject> {
-  const doc = await ctx.db
-    .query("onshapeDocuments")
-    .withIndex("by_onshapeDocumentId", (q) =>
-      q.eq("onshapeDocumentId", onshapeDocumentId),
-    )
-    .unique();
-  if (!doc) {
-    return { documentNumber: null, projectId: null, tag: null, mode: null };
-  }
-  const project = doc.projectId ? await ctx.db.get(doc.projectId) : null;
-  return {
-    documentNumber: doc.documentNumber,
-    projectId: doc.projectId ?? null,
-    tag: project?.tag ?? null,
-    mode: project?.numberingMode ?? null,
-  };
-}
-
-// Read-only projection of what upsert would do to each part's number, for the
-// right-panel preview. Mirrors the reconciliation in `upsertPart` WITHOUT
-// touching the database: it never advances the per-document counter, instead
-// projecting sequence numbers for new parts in list order.
-export const previewNumbers = internalQuery({
-  args: {
-    items: v.array(
-      v.object({
-        onshapeElementId: v.string(),
-        onshapeDocumentId: v.optional(v.string()),
-        onshapePartNumber: v.optional(v.string()),
-      }),
-    ),
-  },
-  returns: v.array(
-    v.object({
-      partNumber: v.union(v.string(), v.null()),
-      tracked: v.boolean(),
-      willWriteBack: v.boolean(),
-    }),
-  ),
-  handler: async (ctx, { items }) => {
-    const docCache = new Map<string, DocProject>();
-    const nextSeq = new Map<string, number>(); // `${tag}:${doc}` → seq to assign next
-    const out: Array<{
-      partNumber: string | null;
-      tracked: boolean;
-      willWriteBack: boolean;
-    }> = [];
-
-    for (const item of items) {
-      let dp: DocProject = {
-        documentNumber: null,
-        projectId: null,
-        tag: null,
-        mode: null,
-      };
-      if (item.onshapeDocumentId) {
-        const cached = docCache.get(item.onshapeDocumentId);
-        if (cached) {
-          dp = cached;
-        } else {
-          dp = await resolveDocProject(ctx, item.onshapeDocumentId);
-          docCache.set(item.onshapeDocumentId, dp);
-        }
-      }
-
-      const existing = await ctx.db
-        .query("parts")
-        .withIndex("by_onshapeElementId", (q) =>
-          q.eq("onshapeElementId", item.onshapeElementId),
-        )
-        .unique();
-      const tracked = existing !== null;
-
-      if (item.onshapePartNumber) {
-        // Onshape already has a number → adopt it, nothing to write back.
-        out.push({ partNumber: item.onshapePartNumber, tracked, willWriteBack: false });
-      } else if (existing?.partNumber) {
-        // Tracker has one, Onshape doesn't → keep ours and push it back.
-        out.push({ partNumber: existing.partNumber, tracked, willWriteBack: true });
-      } else if (dp.mode === "auto" && dp.tag !== null && dp.documentNumber !== null) {
-        // Auto project, neither side numbered → project the next number.
-        const tag = dp.tag;
-        const dn = dp.documentNumber;
-        const key = `${tag}:${dn}`;
-        let seq = nextSeq.get(key);
-        if (seq === undefined) {
-          const counter = await ctx.db
-            .query("partNumberCounters")
-            .withIndex("by_tag_and_document", (q) =>
-              q.eq("tag", tag).eq("documentNumber", dn),
-            )
-            .unique();
-          seq = (counter?.lastSequence ?? 0) + 1;
-        }
-        nextSeq.set(key, seq + 1);
-        out.push({
-          partNumber: formatPartNumber(tag, dn, seq),
-          tracked,
-          willWriteBack: true,
-        });
-      } else {
-        // Manual project, or document/project not set up → no generated number.
-        out.push({ partNumber: null, tracked, willWriteBack: false });
-      }
-    }
-    return out;
-  },
-});
-
-// When a document is (re)assigned to a project, adopt that project + document
-// number on the document's already-synced parts, and — for auto-numbering
-// projects — number any part that still lacks one. Returns how many were numbered.
-async function backfillDocument(
-  ctx: MutationCtx,
-  onshapeDocumentId: string,
-): Promise<number> {
-  const dp = await resolveDocProject(ctx, onshapeDocumentId);
-  const parts = await ctx.db.query("parts").take(5000);
-  let count = 0;
-  for (const p of parts) {
-    if (p.onshapeDocumentId !== onshapeDocumentId) continue;
-    const patch: Partial<Doc<"parts">> = {};
-    if (dp.documentNumber) patch.documentNumber = dp.documentNumber;
-    if (dp.projectId) patch.projectId = dp.projectId;
-    if (
-      !p.partNumber &&
-      dp.mode === "auto" &&
-      dp.tag !== null &&
-      dp.documentNumber !== null
-    ) {
-      patch.partNumber = await nextPartNumber(ctx, dp.tag, dp.documentNumber);
-      count++;
-    }
-    if (Object.keys(patch).length > 0) await ctx.db.patch(p._id, patch);
-  }
-  return count;
-}
-
-// ---- Documents (mentor-managed 2-digit numbers) ----
 const vOnshapeDoc = v.object({
   _id: v.id("onshapeDocuments"),
   _creationTime: v.number(),
-  documentNumber: v.string(),
   onshapeDocumentId: v.string(),
   name: v.string(),
-  projectId: v.optional(v.id("projects")),
+  subsystemId: v.optional(v.id("subsystems")),
 });
 
 export const listDocuments = query({
@@ -237,18 +31,18 @@ export const listDocuments = query({
   returns: v.array(vOnshapeDoc),
   handler: async (ctx) => {
     const docs = await ctx.db.query("onshapeDocuments").collect();
-    return docs.sort((a, b) => a.documentNumber.localeCompare(b.documentNumber));
+    return docs.sort((a, b) => a.name.localeCompare(b.name));
   },
 });
 
-export const assignDocumentNumber = mutation({
+/** Map an Onshape document to the subsystem whose parts live in it. */
+export const mapDocument = mutation({
   args: {
     onshapeDocumentId: v.string(),
-    documentNumber: v.string(),
     name: v.optional(v.string()),
-    projectId: v.optional(v.id("projects")),
+    subsystemId: v.optional(v.union(v.id("subsystems"), v.null())),
   },
-  returns: v.object({ backfilled: v.number() }),
+  returns: v.id("onshapeDocuments"),
   handler: async (ctx, args) => {
     await requireMentor(ctx);
     const existing = await ctx.db
@@ -259,30 +53,19 @@ export const assignDocumentNumber = mutation({
       .unique();
     if (existing) {
       await ctx.db.patch(existing._id, {
-        documentNumber: args.documentNumber,
         name: args.name ?? existing.name,
-        projectId: args.projectId ?? existing.projectId,
+        subsystemId:
+          args.subsystemId === undefined
+            ? existing.subsystemId
+            : (args.subsystemId ?? undefined),
       });
-    } else {
-      await ctx.db.insert("onshapeDocuments", {
-        onshapeDocumentId: args.onshapeDocumentId,
-        documentNumber: args.documentNumber,
-        name: args.name ?? args.onshapeDocumentId,
-        projectId: args.projectId,
-      });
+      return existing._id;
     }
-    // Adopt the project + number any already-synced parts from this document.
-    const backfilled = await backfillDocument(ctx, args.onshapeDocumentId);
-    // Keep linked tasks current (titles include the new part numbers).
-    if (backfilled > 0) {
-      const parts = await ctx.db.query("parts").take(5000);
-      for (const p of parts) {
-        if (p.onshapeDocumentId === args.onshapeDocumentId) {
-          await syncTaskForPart(ctx, p);
-        }
-      }
-    }
-    return { backfilled };
+    return ctx.db.insert("onshapeDocuments", {
+      onshapeDocumentId: args.onshapeDocumentId,
+      name: args.name ?? args.onshapeDocumentId,
+      subsystemId: args.subsystemId ?? undefined,
+    });
   },
 });
 
@@ -296,189 +79,596 @@ export const removeDocument = mutation({
   },
 });
 
-// ---- Core upsert from Onshape ----
-async function upsertPart(
-  ctx: MutationCtx,
-  input: {
-    onshapeElementId: string;
-    onshapeDocumentId?: string;
-    name?: string;
-    material?: string;
-    manufacturingMethod?: Doc<"parts">["manufacturingMethod"];
-    quantityNeeded?: number;
-    status?: Doc<"parts">["status"];
-    designerId?: string;
-    lastModifiedInOnshape?: number;
-    // The part's current "Part number" value in Onshape, if it has one. Drives
-    // the bidirectional reconciliation below.
-    onshapePartNumber?: string;
+/** Record an Onshape call for the budget meter. 4xx/5xx don't count. */
+export const recordApiCall = internalMutation({
+  args: {
+    method: v.string(),
+    endpoint: v.string(),
+    status: v.number(),
+    reason: v.optional(v.string()),
   },
-): Promise<{
-  partId: Id<"parts">;
-  partNumber: string | null;
-  revisionConflict: boolean;
-  // The number the caller (the sync action) should push into Onshape's
-  // part-number metadata, or null if Onshape is already authoritative.
-  writeBackPartNumber: string | null;
-}> {
-  const existing = await ctx.db
-    .query("parts")
-    .withIndex("by_onshapeElementId", (q) =>
-      q.eq("onshapeElementId", input.onshapeElementId),
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.insert("apiCalls", {
+      ...args,
+      counted: args.status >= 200 && args.status < 400,
+    });
+    return null;
+  },
+});
+
+async function subsystemForDocument(
+  ctx: MutationCtx,
+  onshapeDocumentId: string,
+): Promise<Id<"subsystems"> | undefined> {
+  const doc = await ctx.db
+    .query("onshapeDocuments")
+    .withIndex("by_onshapeDocumentId", (q) =>
+      q.eq("onshapeDocumentId", onshapeDocumentId),
     )
     .unique();
-
-  const dp: DocProject = input.onshapeDocumentId
-    ? await resolveDocProject(ctx, input.onshapeDocumentId)
-    : { documentNumber: null, projectId: null, tag: null, mode: null };
-  const documentNumber = dp.documentNumber ?? undefined;
-  const modified = input.lastModifiedInOnshape ?? Date.now();
-
-  if (existing) {
-    const patch: Partial<Doc<"parts">> = {
-      lastModifiedInOnshape: modified,
-    };
-    if (input.name !== undefined) patch.name = input.name;
-    if (input.material !== undefined) patch.material = input.material;
-    if (input.manufacturingMethod !== undefined)
-      patch.manufacturingMethod = input.manufacturingMethod;
-    if (input.quantityNeeded !== undefined)
-      patch.quantityNeeded = input.quantityNeeded;
-    if (input.designerId !== undefined) patch.designerId = input.designerId;
-    if (input.onshapeDocumentId !== undefined)
-      patch.onshapeDocumentId = input.onshapeDocumentId;
-    if (documentNumber) patch.documentNumber = documentNumber;
-    if (dp.projectId) patch.projectId = dp.projectId;
-    // Bidirectional part number reconciliation (tag + numberingMode come from
-    // the project via resolveDocProject):
-    //  - Onshape has one       → adopt it (Onshape is authoritative when set).
-    //  - else tracker has one  → push it back.
-    //  - else auto project     → generate + push; manual project → leave unset.
-    let writeBackPartNumber: string | null = null;
-    if (input.onshapePartNumber) {
-      if (existing.partNumber !== input.onshapePartNumber)
-        patch.partNumber = input.onshapePartNumber;
-    } else if (existing.partNumber) {
-      writeBackPartNumber = existing.partNumber;
-    } else if (
-      dp.mode === "auto" &&
-      dp.tag !== null &&
-      dp.documentNumber !== null
-    ) {
-      const pn = await nextPartNumber(ctx, dp.tag, dp.documentNumber);
-      patch.partNumber = pn;
-      writeBackPartNumber = pn;
-    }
-    // An Onshape edit after the design was locked (status past "designed")
-    // is a revision conflict the team needs to reconcile.
-    const passedDesign = !["needs_design", "in_design", "designed"].includes(
-      existing.status,
-    );
-    let revisionConflict = existing.revisionConflict;
-    if (passedDesign && !existing.revisionConflict) {
-      patch.revisionConflict = true;
-      revisionConflict = true;
-    }
-    await ctx.db.patch(existing._id, patch);
-    const updated = await ctx.db.get(existing._id);
-    if (updated) await syncTaskForPart(ctx, updated);
-    return {
-      partId: existing._id,
-      partNumber: updated?.partNumber ?? null,
-      revisionConflict,
-      writeBackPartNumber,
-    };
-  }
-
-  // New part: adopt Onshape's number if it has one; else, for an auto project,
-  // generate one (and ask the caller to write it back to Onshape).
-  let partNumber: string | undefined;
-  let writeBackPartNumber: string | null = null;
-  if (input.onshapePartNumber) {
-    partNumber = input.onshapePartNumber;
-  } else if (
-    dp.mode === "auto" &&
-    dp.tag !== null &&
-    dp.documentNumber !== null
-  ) {
-    partNumber = await nextPartNumber(ctx, dp.tag, dp.documentNumber);
-    writeBackPartNumber = partNumber;
-  }
-  const id = await ctx.db.insert("parts", {
-    name: input.name ?? "Untitled Onshape part",
-    // Onshape doesn't report a fab method; infer 3D-printed parts from the
-    // material, else default to mill. Inference is create-only, so a method
-    // set manually in the app afterward is preserved on re-sync.
-    manufacturingMethod:
-      input.manufacturingMethod ??
-      inferMethodFromMaterial(input.material) ??
-      "mill",
-    quantityNeeded: input.quantityNeeded ?? 1,
-    material: input.material,
-    status: input.status ?? "in_design", // synced from CAD → still in design
-    isCOTS: false,
-    blocked: false,
-    revisionConflict: false,
-    partNumber,
-    documentNumber,
-    projectId: dp.projectId ?? undefined,
-    onshapeDocumentId: input.onshapeDocumentId,
-    onshapeElementId: input.onshapeElementId,
-    lastModifiedInOnshape: modified,
-    designerId: input.designerId,
-  });
-  const part = await ctx.db.get(id);
-  if (part) await syncTaskForPart(ctx, part);
-  return {
-    partId: id,
-    partNumber: partNumber ?? null,
-    revisionConflict: false,
-    writeBackPartNumber,
-  };
+  return doc?.subsystemId;
 }
 
-export const upsertPartFromOnshape = internalMutation({
+/**
+ * Everything a sync found in one Onshape element, parked as an intake for a
+ * design lead to review on "New from Onshape". Nothing lands on the board
+ * until someone decides — a released part that nobody has numbered is a
+ * question, not a fact.
+ */
+export const receiveSync = internalMutation({
   args: {
+    onshapeDocumentId: v.string(),
     onshapeElementId: v.string(),
-    onshapeDocumentId: v.optional(v.string()),
-    name: v.optional(v.string()),
-    material: v.optional(v.string()),
-    manufacturingMethod: v.optional(methodValidator),
-    quantityNeeded: v.optional(v.number()),
-    status: v.optional(partStatusValidator),
-    designerId: v.optional(v.string()),
-    lastModifiedInOnshape: v.optional(v.number()),
-    onshapePartNumber: v.optional(v.string()),
+    documentName: v.optional(v.string()),
+    elementName: v.optional(v.string()),
+    versionId: v.optional(v.string()),
+    /** Set when the synced element is an Assembly rather than a Part Studio. */
+    assembly: v.optional(
+      v.object({
+        name: v.string(),
+        partNumber: v.optional(v.string()),
+        children: v.array(
+          v.object({
+            elementId: v.string(),
+            documentId: v.string(),
+            name: v.string(),
+            quantity: v.number(),
+          }),
+        ),
+      }),
+    ),
+    parts: v.array(
+      v.object({
+        name: v.string(),
+        partNumber: v.optional(v.string()),
+        revision: v.optional(v.string()),
+        quantity: v.optional(v.number()),
+        onshapePartId: v.optional(v.string()),
+        material: v.optional(v.string()),
+        /** Onshape library hardware, so the intake can offer Buy it first. */
+        standardContent: v.optional(v.boolean()),
+      }),
+    ),
   },
-  returns: v.object({
-    partId: v.id("parts"),
-    partNumber: v.union(v.string(), v.null()),
-    revisionConflict: v.boolean(),
-    writeBackPartNumber: v.union(v.string(), v.null()),
-  }),
-  handler: (ctx, args) => upsertPart(ctx, args),
-});
+  returns: v.object({ intakeId: v.id("releaseIntakes"), lines: v.number() }),
+  handler: async (ctx, args) => {
+    const season = await requireActiveSeason(ctx);
+    const subsystemId = await subsystemForDocument(ctx, args.onshapeDocumentId);
 
-export const backfillAll = internalMutation({
-  args: {},
-  returns: v.object({ assigned: v.number() }),
-  handler: async (ctx) => {
-    const docs = await ctx.db.query("onshapeDocuments").collect();
-    let assigned = 0;
-    for (const d of docs) {
-      assigned += await backfillDocument(ctx, d.onshapeDocumentId);
+    const { known, byNumber, bought, boughtByNumber } = await loadKnown(ctx, {
+      seasonId: season._id,
+      subsystemId: subsystemId ?? undefined,
+    });
+
+    const classified = classifyRelease(
+      args.parts.map((p) => ({
+        partNumber: p.partNumber,
+        revision: p.revision,
+        name: p.name,
+        quantity: p.quantity,
+      })),
+      known,
+      { bought },
+    );
+
+    const label = [args.documentName, args.elementName ?? args.assembly?.name]
+      .filter(Boolean)
+      .join(" · ");
+    const intakeId = await ctx.db.insert("releaseIntakes", {
+      source: "onshape",
+      label: label || "Onshape sync",
+      receivedAt: Date.now(),
+      status: "read",
+      payload: {
+        onshapeDocumentId: args.onshapeDocumentId,
+        onshapeElementId: args.onshapeElementId,
+        versionId: args.versionId,
+      },
+    });
+
+    for (const [index, line] of classified.entries()) {
+      const match = line.partNumber
+        ? byNumber.get(normalizePartNumber(line.partNumber))
+        : undefined;
+      // By index, not by name: two parts can share a name, and matching on it
+      // would cross-wire their Onshape ids. `classifyRelease` preserves order,
+      // and anything it appends past the input runs off the end harmlessly.
+      const source = args.parts[index];
+      // Which collection matched is the classifier's answer, read back rather
+      // than worked out again here.
+      const boughtMatch =
+        line.target === "cotsItem" && line.partNumber
+          ? boughtByNumber.get(normalizePartNumber(line.partNumber))
+          : undefined;
+      await ctx.db.insert("releaseIntakeLines", {
+        intakeId,
+        partNumber: line.partNumber,
+        revision: line.revision,
+        name: line.name,
+        quantity: line.quantity,
+        kind: line.kind,
+        target: boughtMatch ? "cotsItem" : undefined,
+        partId: match?._id,
+        cotsItemId: boughtMatch?._id,
+        standardContent: source?.standardContent,
+        subsystemId:
+          match?.subsystemId ?? boughtMatch?.subsystemId ?? subsystemId,
+        onshapeDocumentId: args.onshapeDocumentId,
+        onshapeElementId: args.onshapeElementId,
+        onshapePartId: source?.onshapePartId,
+        onshapeVersionId: args.versionId,
+        note: line.explanation,
+      });
+      // Keep the CAD links on parts we already know current, so deep links and
+      // thumbnails don't go stale while the lead works through the queue.
+      if (match) {
+        await ctx.db.patch(match._id, {
+          onshapeDocumentId: args.onshapeDocumentId,
+          onshapeElementId: args.onshapeElementId,
+          onshapePartId: source?.onshapePartId ?? match.onshapePartId,
+          onshapeVersionId: args.versionId ?? match.onshapeVersionId,
+          material: source?.material ?? match.material,
+          lastSyncedAt: Date.now(),
+        });
+      }
     }
-    return { assigned };
+
+    let lines = classified.length;
+    if (args.assembly) {
+      lines += await recordAssemblyLine(ctx, {
+        intakeId,
+        subsystemId,
+        onshapeDocumentId: args.onshapeDocumentId,
+        onshapeElementId: args.onshapeElementId,
+        versionId: args.versionId,
+        assembly: args.assembly,
+      });
+    }
+
+    return { intakeId, lines };
   },
 });
 
-// ---- Revision conflict (UI-facing) ----
-export const clearRevisionConflict = mutation({
-  args: { partId: v.id("parts") },
+/**
+ * Record what the sync found about the assembly element itself, and about the
+ * sub-assemblies placed directly inside it.
+ *
+ * Identity is settled element id first, then part number. A match has its CAD
+ * ids refreshed — that is what keeps the derived deep link working for free.
+ * Anything unrecognised becomes a line for a lead: nothing restructures a
+ * hand-built tree on its own.
+ */
+async function recordAssemblyLine(
+  ctx: MutationCtx,
+  args: {
+    intakeId: Id<"releaseIntakes">;
+    subsystemId?: Id<"subsystems">;
+    onshapeDocumentId: string;
+    onshapeElementId: string;
+    versionId?: string;
+    assembly: {
+      name: string;
+      partNumber?: string;
+      children: Array<{
+        elementId: string;
+        documentId: string;
+        name: string;
+        quantity: number;
+      }>;
+    };
+  },
+): Promise<number> {
+  const now = Date.now();
+
+  const match = await findSubAssembly(
+    ctx,
+    args.onshapeElementId,
+    args.assembly.partNumber,
+  );
+  const line = classifyAssemblyLine(
+    {
+      partNumber: args.assembly.partNumber ?? match?.partNumber,
+      name: args.assembly.name,
+    },
+    match
+      ? {
+          partNumber: match.partNumber,
+          revision: match.revision,
+          built: match.completedAt !== undefined,
+        }
+      : undefined,
+  );
+
+  await ctx.db.insert("releaseIntakeLines", {
+    intakeId: args.intakeId,
+    target: "subAssembly",
+    partNumber: line.partNumber,
+    name: line.name,
+    kind: line.kind,
+    subAssemblyId: match?._id,
+    subsystemId: match?.subsystemId ?? args.subsystemId,
+    onshapeDocumentId: args.onshapeDocumentId,
+    onshapeElementId: args.onshapeElementId,
+    onshapeVersionId: args.versionId,
+    note: line.explanation,
+  });
+
+  if (match) {
+    await ctx.db.patch(match._id, {
+      onshapeDocumentId: args.onshapeDocumentId,
+      onshapeElementId: args.onshapeElementId,
+      onshapeVersionId: args.versionId ?? match.onshapeVersionId,
+      lastSyncedAt: now,
+    });
+  }
+
+  let count = 1;
+  for (const child of args.assembly.children) {
+    const childMatch = await findSubAssembly(ctx, child.elementId, undefined);
+    await ctx.db.insert("releaseIntakeLines", {
+      intakeId: args.intakeId,
+      target: "subAssembly",
+      partNumber: childMatch?.partNumber,
+      name: child.name,
+      quantity: child.quantity,
+      kind: childMatch ? "matched" : "unknown",
+      subAssemblyId: childMatch?._id,
+      subsystemId: childMatch?.subsystemId ?? args.subsystemId,
+      onshapeDocumentId: child.documentId,
+      onshapeElementId: child.elementId,
+      note: childMatch
+        ? `Inside ${args.assembly.name} in the CAD.`
+        : `Inside ${args.assembly.name} in the CAD, but not on the board yet.`,
+    });
+    count++;
+  }
+  return count;
+}
+
+async function findSubAssembly(
+  ctx: MutationCtx,
+  onshapeElementId: string | undefined,
+  partNumber: string | undefined,
+): Promise<Doc<"subAssemblies"> | null> {
+  const byElement = onshapeElementId
+    ? await ctx.db
+        .query("subAssemblies")
+        .withIndex("by_onshapeElementId", (q) =>
+          q.eq("onshapeElementId", onshapeElementId),
+        )
+        .unique()
+    : null;
+  if (byElement) return byElement;
+  if (!partNumber) return null;
+  return ctx.db
+    .query("subAssemblies")
+    .withIndex("by_partNumberKey", (q) =>
+      q.eq("partNumberKey", normalizePartNumber(partNumber)),
+    )
+    .unique();
+}
+
+// ---- Releases, arriving on their own ----
+
+const vReleaseItem = v.object({
+  partNumber: v.optional(v.string()),
+  revision: v.optional(v.string()),
+  name: v.string(),
+  documentId: v.optional(v.string()),
+  elementId: v.optional(v.string()),
+  versionId: v.optional(v.string()),
+  partId: v.optional(v.string()),
+  isAssembly: v.boolean(),
+});
+
+/**
+ * A whole release package, taken in as one intake.
+ *
+ * The difference from `receiveSync` is where the data came from and how much
+ * it cost: a release names every item it contains along with its number and
+ * revision, so one API call replaces the per-part metadata walk the panel does.
+ * What it produces is deliberately identical — the same `releaseIntakeLines`,
+ * reviewed on the same screen. A release still changes nothing on the board on
+ * its own.
+ *
+ * Returns null when this package has already been taken in. Onshape retries a
+ * notification it isn't sure landed, and a package can transition more than
+ * once, so arriving twice is normal rather than exceptional.
+ */
+export const receiveRelease = internalMutation({
+  args: {
+    releasePackageId: v.string(),
+    label: v.string(),
+    state: v.string(),
+    messageId: v.optional(v.string()),
+    /** The raw package, kept so the first real one can be read by a human. */
+    raw: v.optional(v.any()),
+    /** What Onshape posted — the notification itself, not the package. */
+    notification: v.optional(v.any()),
+    items: v.array(vReleaseItem),
+    /** What each released assembly contains, when the BOM could be read. */
+    assemblyContents: v.optional(
+      v.array(
+        v.object({
+          elementId: v.string(),
+          children: v.array(
+            v.object({
+              elementId: v.string(),
+              documentId: v.string(),
+              name: v.string(),
+              quantity: v.number(),
+            }),
+          ),
+        }),
+      ),
+    ),
+    /** At least one assembly's contents went unread — say so on the line. */
+    bomUnread: v.optional(v.boolean()),
+  },
+  returns: v.union(
+    v.object({ intakeId: v.id("releaseIntakes"), lines: v.number() }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const already = await ctx.db
+      .query("releaseIntakes")
+      .withIndex("by_package", (q) =>
+        q.eq("onshapeReleasePackageId", args.releasePackageId),
+      )
+      .first();
+    // A queued row is a release we were told about but couldn't afford to
+    // read. Reconcile is finishing that job, so fill it in rather than
+    // treating it as a duplicate and dropping the release on the floor.
+    if (already && already.status !== "queued") return null;
+
+    const season = await requireActiveSeason(ctx);
+    const now = Date.now();
+    const parts = args.items.filter((i) => !i.isAssembly);
+    const assemblies = args.items.filter((i) => i.isAssembly);
+
+    // A release can span subsystems, so the comparison set is the season
+    // rather than one document's subsystem the way a panel sync does it.
+    const { known, byNumber, bought, boughtByNumber } = await loadKnown(ctx, {
+      seasonId: season._id,
+    });
+
+    const classified = classifyRelease(
+      parts.map((p) => ({
+        partNumber: p.partNumber,
+        revision: p.revision,
+        name: p.name,
+      })),
+      known,
+      { bought },
+    );
+
+    const fields = {
+      source: "onshape" as const,
+      onshapeReleasePackageId: args.releasePackageId,
+      label: args.label,
+      status: "read" as const,
+      payload: {
+        releasePackageId: args.releasePackageId,
+        state: args.state,
+        messageId: args.messageId,
+        raw: args.raw,
+        notification: args.notification,
+      },
+    };
+    let intakeId;
+    if (already) {
+      await ctx.db.patch(already._id, fields);
+      intakeId = already._id;
+    } else {
+      intakeId = await ctx.db.insert("releaseIntakes", {
+        ...fields,
+        receivedAt: now,
+      });
+    }
+
+    // One lookup per document, not per item: a release of forty parts out of
+    // one document shouldn't be forty reads of the same row.
+    const subsystemCache = new Map<string, Id<"subsystems"> | undefined>();
+    const subsystemFor = async (documentId: string | undefined) => {
+      if (!documentId) return undefined;
+      if (subsystemCache.has(documentId)) return subsystemCache.get(documentId);
+      const found = await subsystemForDocument(ctx, documentId);
+      subsystemCache.set(documentId, found);
+      return found;
+    };
+
+    for (const [index, line] of classified.entries()) {
+      // By index, not by name: `classifyRelease` preserves order and two parts
+      // can share a name, which matching on it would cross-wire.
+      const source = parts[index];
+      const match = line.partNumber
+        ? byNumber.get(normalizePartNumber(line.partNumber))
+        : undefined;
+      // Which collection matched is the classifier's answer, read back rather
+      // than worked out again here.
+      const boughtMatch =
+        line.target === "cotsItem" && line.partNumber
+          ? boughtByNumber.get(normalizePartNumber(line.partNumber))
+          : undefined;
+      await ctx.db.insert("releaseIntakeLines", {
+        intakeId,
+        partNumber: line.partNumber,
+        revision: line.revision,
+        name: line.name,
+        kind: line.kind,
+        target: boughtMatch ? "cotsItem" : undefined,
+        partId: match?._id,
+        cotsItemId: boughtMatch?._id,
+        subsystemId:
+          match?.subsystemId ??
+          boughtMatch?.subsystemId ??
+          (await subsystemFor(source?.documentId)),
+        // Kept on the line, not just patched onto a part we already knew:
+        // a line the board doesn't recognise is the one case that has
+        // nowhere else to hold them, and it is also the only kind a lead
+        // turns into something new.
+        onshapeDocumentId: source?.documentId,
+        onshapeElementId: source?.elementId,
+        onshapePartId: source?.partId,
+        onshapeVersionId: source?.versionId,
+        note: line.explanation,
+      });
+      // Keep the CAD links current on parts we recognise, so the derived deep
+      // link still opens the right thing while the lead works the queue.
+      if (match && source) {
+        await ctx.db.patch(match._id, {
+          onshapeDocumentId: source.documentId ?? match.onshapeDocumentId,
+          onshapeElementId: source.elementId ?? match.onshapeElementId,
+          onshapePartId: source.partId ?? match.onshapePartId,
+          onshapeVersionId: source.versionId ?? match.onshapeVersionId,
+          lastReleasePackageId: args.releasePackageId,
+          lastSyncedAt: now,
+        });
+      }
+    }
+
+    for (const item of assemblies) {
+      const match = await findSubAssembly(ctx, item.elementId, item.partNumber);
+      const line = classifyAssemblyLine(
+        {
+          partNumber: item.partNumber ?? match?.partNumber,
+          revision: item.revision,
+          name: item.name,
+        },
+        match
+          ? {
+              partNumber: match.partNumber,
+              revision: match.revision,
+              built: match.completedAt !== undefined,
+            }
+          : undefined,
+      );
+      await ctx.db.insert("releaseIntakeLines", {
+        intakeId,
+        target: "subAssembly",
+        partNumber: line.partNumber,
+        revision: line.revision,
+        name: line.name,
+        kind: line.kind,
+        subAssemblyId: match?._id,
+        subsystemId:
+          match?.subsystemId ?? (await subsystemFor(item.documentId)),
+        onshapeDocumentId: item.documentId,
+        onshapeElementId: item.elementId,
+        onshapeVersionId: item.versionId,
+        note: args.bomUnread
+          ? `${line.explanation} What it contains wasn't read.`
+          : line.explanation,
+      });
+
+      // One line per thing placed directly inside it, with the CAD's own
+      // count — the same lines the Onshape panel produces, so a lead reads
+      // one screen either way. Nothing is written to the assembly's members:
+      // a sync never rearranges a tree someone built by hand.
+      const contents = (args.assemblyContents ?? []).find(
+        (a) => a.elementId === item.elementId,
+      );
+      for (const child of contents?.children ?? []) {
+        const childMatch = await findSubAssembly(
+          ctx,
+          child.elementId,
+          undefined,
+        );
+        await ctx.db.insert("releaseIntakeLines", {
+          intakeId,
+          target: "subAssembly",
+          partNumber: childMatch?.partNumber,
+          name: child.name,
+          quantity: child.quantity,
+          kind: childMatch ? "matched" : "unknown",
+          subAssemblyId: childMatch?._id,
+          subsystemId:
+            childMatch?.subsystemId ?? (await subsystemFor(child.documentId)),
+          onshapeDocumentId: child.documentId,
+          onshapeElementId: child.elementId,
+          note: childMatch
+            ? `Inside ${line.name} in the CAD.`
+            : `Inside ${line.name} in the CAD, but not on the board yet.`,
+        });
+      }
+      if (match) {
+        await ctx.db.patch(match._id, {
+          onshapeDocumentId: item.documentId ?? match.onshapeDocumentId,
+          onshapeElementId: item.elementId ?? match.onshapeElementId,
+          onshapeVersionId: item.versionId ?? match.onshapeVersionId,
+          lastReleasePackageId: args.releasePackageId,
+          lastSyncedAt: now,
+        });
+      }
+    }
+
+    return { intakeId, lines: classified.length + assemblies.length };
+  },
+});
+
+/**
+ * Park a release we were told about but can't afford to read.
+ *
+ * The notification was free and arrives once; losing it because the budget is
+ * spent would mean losing the release entirely. So the id is kept, and
+ * Reconcile reads it when there's allowance again.
+ */
+export const queueRelease = internalMutation({
+  args: {
+    releasePackageId: v.string(),
+    reason: v.string(),
+    /** The package, when it was read but couldn't be understood. */
+    raw: v.optional(v.any()),
+    /** What Onshape posted, so the notification's own shape can be checked. */
+    notification: v.optional(v.any()),
+  },
   returns: v.null(),
-  handler: async (ctx, { partId }) => {
-    await requireUserId(ctx);
-    await ctx.db.patch(partId, { revisionConflict: false });
+  handler: async (ctx, args) => {
+    const already = await ctx.db
+      .query("releaseIntakes")
+      .withIndex("by_package", (q) =>
+        q.eq("onshapeReleasePackageId", args.releasePackageId),
+      )
+      .first();
+    if (already) return null;
+    await ctx.db.insert("releaseIntakes", {
+      source: "onshape",
+      onshapeReleasePackageId: args.releasePackageId,
+      label: `Release ${args.releasePackageId}`,
+      receivedAt: Date.now(),
+      status: "queued",
+      payload: {
+        releasePackageId: args.releasePackageId,
+        queuedBecause: args.reason,
+        // Only set when the read succeeded and the parse didn't: without it
+        // the one failure worth debugging is the one that leaves no trace.
+        ...(args.raw === undefined ? {} : { raw: args.raw }),
+        ...(args.notification === undefined
+          ? {}
+          : { notification: args.notification }),
+      },
+    });
     return null;
   },
 });

@@ -10,6 +10,14 @@ const vUser = v.object({
   email: v.string(),
   name: v.string(),
   role: v.optional(v.union(v.literal("mentor"), v.literal("student"))),
+  appRole: v.optional(
+    v.union(
+      v.literal("student"),
+      v.literal("lead"),
+      v.literal("mentor"),
+      v.literal("admin"),
+    ),
+  ),
 });
 
 // The team roster, used to render assignee pickers and resolve Clerk user ids

@@ -5,9 +5,9 @@ import {
   oauthCallback,
   ext,
   panel,
-  previewSelected,
   syncSelected,
 } from "./onshapeOAuth";
+import { onshapeWebhook } from "./onshapeWebhook";
 import { githubWebhook } from "./github";
 
 const http = httpRouter();
@@ -26,18 +26,22 @@ http.route({
   handler: oauthCallback,
 });
 http.route({ path: "/onshape/ext", method: "GET", handler: ext });
-// Right-panel app: GET renders the part picker, POST /preview-selected returns
-// a read-only preview, POST /sync-selected commits the selected parts.
+// Right-panel app: GET renders the part picker, POST /sync-selected sends the
+// selected parts to the tracker's "New from Onshape" queue.
 http.route({ path: "/onshape/panel", method: "GET", handler: panel });
-http.route({
-  path: "/onshape/preview-selected",
-  method: "POST",
-  handler: previewSelected,
-});
 http.route({
   path: "/onshape/sync-selected",
   method: "POST",
   handler: syncSelected,
+});
+// Release webhook. Onshape doesn't sign notifications, so the callback URL
+// carries a secret (ONSHAPE_WEBHOOK_SECRET) the way the panel URL does. The
+// payload is only an id — everything else is read back from the API — so a
+// forged call costs at most one wasted read.
+http.route({
+  path: "/onshape/webhook",
+  method: "POST",
+  handler: onshapeWebhook,
 });
 
 // GitHub issue/PR sync webhook — verified via the HMAC signature GitHub sends

@@ -1,0 +1,605 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
+import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { Chip } from "@/components/tracker/PartChips";
+import { BoughtItemDetail } from "@/components/tracker/BoughtItem";
+import { SubAssemblyCard } from "@/components/tracker/SubAssemblyCard";
+import { CLAIM_COPY } from "@/components/tracker/ClaimLine";
+import { cotsChipClass, cotsStatusLabel } from "@/lib/cots";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useIsLead } from "@/lib/roles";
+import { useActor } from "@/lib/tracker";
+import { isMentorOrAbove } from "@/lib/stages";
+import {
+  STAGE_UI,
+  asStage,
+  isClaimableStage,
+  madeLabel,
+  stageLabel,
+} from "@/lib/stages";
+import {
+  READY_STAGE,
+  computeAssemblyStatuses,
+  type AssemblyInput,
+} from "../../convex/lib/assembly";
+import {
+  buildAssemblyTree,
+  type TreeNode,
+} from "../../convex/lib/assemblyTree";
+import { useProcessMap, useSubsystems } from "@/lib/tracker";
+import { useRosterMap } from "@/lib/users";
+import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
+
+type RowFilter = "all" | "coming";
+
+/** "Can we build it yet?" — the question a subsystem lead actually asks. */
+export function SubsystemsPage() {
+  const [params, setParams] = useSearchParams();
+  const subsystems = useSubsystems();
+  const progress = useQuery(api.subsystems.progress, {});
+  const roster = useRosterMap();
+  const processes = useProcessMap();
+  const [filter, setFilter] = useState<RowFilter>("all");
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  // Held as an id, not a doc: the dialog has to show the move it just made.
+  const [openBoughtId, setOpenBoughtId] = useState<Id<"cotsItems"> | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const isLead = useIsLead();
+  const actor = useActor();
+  const navigate = useNavigate();
+  const createAssembly = useMutation(api.subAssemblies.create);
+
+  const selectedId = (params.get("s") ??
+    subsystems?.[0]?._id ??
+    null) as Id<"subsystems"> | null;
+
+  useEffect(() => {
+    if (!params.get("s") && subsystems?.[0]) {
+      setParams({ s: subsystems[0]._id }, { replace: true });
+    }
+  }, [params, subsystems, setParams]);
+
+  const parts = useQuery(
+    api.parts.list,
+    selectedId ? { subsystemId: selectedId } : "skip",
+  );
+  const cots = useQuery(
+    api.cots.list,
+    selectedId ? { subsystemId: selectedId } : "skip",
+  );
+  const demand = useQuery(
+    api.subAssemblies.demand,
+    selectedId ? { subsystemId: selectedId } : "skip",
+  );
+  const rows = useQuery(
+    api.subAssemblies.list,
+    selectedId ? { subsystemId: selectedId } : "skip",
+  );
+
+  const selected = subsystems?.find((s) => s._id === selectedId);
+  // Looked up rather than kept: the dialog takes a doc and can't refresh
+  // itself, so it has to come off the live query every render.
+  const openBought =
+    (cots ?? []).find((item) => item._id === openBoughtId) ?? null;
+  const myProgress = progress?.find((p) => p.subsystemId === selectedId);
+
+  const partById = useMemo(
+    () => new Map((parts ?? []).map((p) => [p._id, p])),
+    [parts],
+  );
+  const cotsById = useMemo(
+    () => new Map((cots ?? []).map((c) => [c._id, c])),
+    [cots],
+  );
+  // What the sub-assembly tree doesn't account for, by part or bought item.
+  const looseByRef = useMemo(
+    () => new Map((demand?.loose ?? []).map((l) => [l.refId, l])),
+    [demand],
+  );
+
+  if (subsystems !== undefined && subsystems.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No subsystems yet — a mentor sets them up in tracker settings.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Subsystem picker, scrollable on a phone. */}
+      <div className="-mx-4 overflow-x-auto px-4">
+        <div className="flex gap-2">
+          {(subsystems ?? []).map((s) => {
+            const row = progress?.find((p) => p.subsystemId === s._id);
+            return (
+              <button
+                key={s._id}
+                type="button"
+                onClick={() => setParams({ s: s._id })}
+                className={cn(
+                  "min-h-11 shrink-0 rounded-full border px-4 text-sm transition-colors",
+                  s._id === selectedId
+                    ? "border-transparent bg-foreground text-background"
+                    : "bg-card hover:bg-accent",
+                )}
+              >
+                {s.name}
+                {row && ` · ${row.ready}/${row.total}`}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {selected && (
+        <header>
+          <h1 className="brand-title text-3xl">{selected.name}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {selected.leadUserId && roster[selected.leadUserId]
+              ? `Lead: ${roster[selected.leadUserId].name} · `
+              : ""}
+            {myProgress
+              ? myProgress.installed
+                ? "On the robot"
+                : `${myProgress.ready} of ${myProgress.total} ready`
+              : ""}
+          </p>
+        </header>
+      )}
+
+      {demand && demand.loose.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+          <h2 className="font-semibold">
+            Not in an assembly · {demand.loose.length}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            No sub-assembly has spoken for these, or not for all of them — so
+            nothing is waiting on them and they won't hold anything up.
+          </p>
+          <ul className="mt-3 space-y-1 text-sm">
+            {demand.loose.map((item) => (
+              <li key={item.refId} className="flex flex-wrap gap-x-2">
+                <span className="font-medium">{item.label}</span>
+                <span className="text-muted-foreground">
+                  {item.claimed === 0
+                    ? `none of ${item.planned} assigned`
+                    : `${item.planned - item.claimed} of ${item.planned} unassigned`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {demand && demand.underbuilt.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+          <h2 className="font-semibold">
+            Not building enough · {demand.underbuilt.length}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            These are placed more often than they're set to be built. Raise "on
+            the robot" on each, or place fewer of them.
+          </p>
+          <ul className="mt-3 space-y-1 text-sm">
+            {demand.underbuilt.map((under) => (
+              <li key={under.id} className="flex flex-wrap gap-x-2">
+                <span className="font-medium">{under.label}</span>
+                <span className="text-muted-foreground">
+                  placed {under.placed}, building {under.building}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {demand && demand.shortfalls.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+          <h2 className="font-semibold">
+            Not enough planned · {demand.shortfalls.length}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Once the tree is multiplied out, the robot needs more of these than
+            anyone has set out to make.
+          </p>
+          <ul className="mt-3 space-y-1 text-sm">
+            {demand.shortfalls.map((short) => (
+              <li key={short.label} className="flex flex-wrap gap-x-2">
+                <span className="font-medium">{short.label}</span>
+                <span className="text-muted-foreground">
+                  needs {short.needed}, set to {short.planned}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-semibold">Can we build it yet?</h2>
+          {isLead && selectedId && (
+            <Button
+              onClick={() => {
+                setNewName("");
+                setError(null);
+                setAdding(true);
+              }}
+            >
+              Add sub-assembly
+            </Button>
+          )}
+        </div>
+
+        {rows === undefined || rows.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Nothing set up yet.
+          </p>
+        ) : (
+          (() => {
+            const inputs: AssemblyInput[] = rows.map(
+              ({ assembly, partIds, cotsItemIds, childIds }) => ({
+                id: assembly._id,
+                number: assembly.partNumber,
+                name: assembly.name,
+                order: assembly.order,
+                completed: assembly.completedAt !== undefined,
+                childIds,
+                members: [
+                  ...partIds
+                    .map((id) => partById.get(id))
+                    .filter((p): p is Doc<"parts"> => Boolean(p))
+                    .map((part) => ({
+                      kind: "part" as const,
+                      label: part.partNumber,
+                      stageLabel: stageLabel(asStage(part.stage)).toLowerCase(),
+                      ready: part.stage >= READY_STAGE,
+                    })),
+                  ...cotsItemIds
+                    .map((id) => cotsById.get(id))
+                    .filter((c): c is Doc<"cotsItems"> => Boolean(c))
+                    .map((item) => ({
+                      kind: "cots" as const,
+                      label: item.name,
+                      stageLabel: item.status,
+                      ready: item.status === "arrived",
+                    })),
+                ],
+              }),
+            );
+            const statuses = computeAssemblyStatuses(inputs);
+            const statusById = new Map(statuses.map((s) => [s.id, s]));
+            const rowById = new Map(
+              rows.map((r) => [r.assembly._id as string, r]),
+            );
+
+            // Installing is the subsystem lead's or a mentor's call, the same
+            // rule a single part follows going from stage 5 to 6.
+            const canComplete =
+              isMentorOrAbove(actor.role) ||
+              (selectedId !== null &&
+                actor.ledSubsystemIds.includes(selectedId));
+
+            const tree = buildAssemblyTree(
+              rows.map((r) => ({
+                id: r.assembly._id as string,
+                isDefault: r.assembly.isDefault,
+                childIds: r.childIds as string[],
+                quantities: r.quantities,
+              })),
+            );
+
+            const renderNodes = (nodes: TreeNode[]) => (
+              <ul className="space-y-2">
+                {nodes.map((node) => {
+                  const row = rowById.get(node.id);
+                  if (!row) return null;
+                  return (
+                    <li key={node.path}>
+                      <div className="flex items-start gap-2">
+                        {node.quantity !== undefined && node.quantity > 1 && (
+                          <span className="mt-3 shrink-0 font-mono text-xs text-muted-foreground">
+                            × {node.quantity}
+                          </span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <SubAssemblyCard
+                            assembly={row.assembly}
+                            to={`/assemblies/${row.assembly._id}`}
+                            status={
+                              statusById.get(row.assembly._id) ?? {
+                                id: row.assembly._id,
+                                ready: false,
+                                done: false,
+                                blocking: [],
+                              }
+                            }
+                            claimantName={
+                              row.assembly.claimedByUserId
+                                ? roster[row.assembly.claimedByUserId]?.name
+                                : undefined
+                            }
+                            canComplete={canComplete}
+                            completeReason="The subsystem lead or a mentor marks it installed."
+                            isLead={isLead}
+                            units={
+                              demand?.units.find(
+                                (u) => u.id === row.assembly._id,
+                              )?.units
+                            }
+                          />
+                          {node.orphan && (
+                            <p className="mt-1 text-xs text-warning">
+                              Not inside anything, so nothing is waiting on it.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      {node.children.length > 0 && (
+                        // The border is the tree: an indent on its own reads
+                        // as a slightly wonky list once you're a level deep.
+                        <div className="ml-3 mt-2 border-l pl-3 sm:ml-4 sm:pl-4">
+                          {renderNodes(node.children)}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            );
+
+            return <div className="mt-3">{renderNodes(tree)}</div>;
+          })()
+        )}
+      </section>
+
+      <section className="rounded-lg border bg-card shadow-sm">
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+          <h2 className="font-semibold">Parts list</h2>
+          <div className="flex gap-1 rounded-md border p-1">
+            {(["all", "coming"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setFilter(value)}
+                className={cn(
+                  "rounded px-3 py-1 text-sm",
+                  filter === value
+                    ? "bg-foreground text-background"
+                    : "hover:bg-accent",
+                )}
+              >
+                {value === "all" ? "All parts" : "Still coming"}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        {/* A table on a laptop; stacked cards on a phone. */}
+        <div className="hidden sm:block">
+          <table className="w-full text-sm">
+            <thead className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-4 py-2 font-medium">Part</th>
+                <th className="px-4 py-2 text-right font-medium">Need</th>
+                <th className="px-4 py-2 font-medium">Made on</th>
+                <th className="px-4 py-2 font-medium">Where it is</th>
+                <th className="px-4 py-2 font-medium">Who</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {(parts ?? [])
+                .filter((p) => (filter === "coming" ? p.stage < 5 : true))
+                .map((part) => {
+                  const stage = asStage(part.stage);
+                  return (
+                    <tr key={part._id}>
+                      <td className="px-4 py-2.5">
+                        <Link
+                          to={`/parts/${part._id}`}
+                          className="font-medium hover:underline"
+                        >
+                          {part.name}
+                        </Link>
+                        <span className="block font-mono text-xs text-muted-foreground">
+                          {part.partNumber}
+                        </span>
+                        <LooseNote loose={looseByRef.get(part._id)} />
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {part.qtyNeeded}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground">
+                        {processes.get(part.processTypeId)?.name ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <Chip className={STAGE_UI[stage].chip}>
+                          {stage}. {stageLabel(stage)}
+                        </Chip>
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground">
+                        {part.claimedByUserId
+                          ? (roster[part.claimedByUserId]?.name ?? "—")
+                          : isClaimableStage(stage)
+                            ? CLAIM_COPY.nobody
+                            : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              {(cots ?? [])
+                .filter((c) =>
+                  filter === "coming" ? c.status !== "arrived" : true,
+                )
+                .map((item) => (
+                  <tr key={item._id}>
+                    <td className="px-4 py-2.5">
+                      <button
+                        type="button"
+                        className="font-medium hover:underline"
+                        onClick={() => setOpenBoughtId(item._id)}
+                      >
+                        {item.name}
+                      </button>
+                      <span className="block text-xs text-muted-foreground">
+                        Bought
+                      </span>
+                      <LooseNote loose={looseByRef.get(item._id)} />
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {item.qtyNeeded}
+                      {item.unit ? ` ${item.unit}` : ""}
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">
+                      {item.vendor ?? "Bought"}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Chip className={cotsChipClass(item.status)}>
+                        {cotsStatusLabel(item)}
+                      </Chip>
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">—</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="divide-y sm:hidden">
+          {(parts ?? [])
+            .filter((p) => (filter === "coming" ? p.stage < 5 : true))
+            .map((part) => {
+              const stage = asStage(part.stage);
+              return (
+                <Link
+                  key={part._id}
+                  to={`/parts/${part._id}`}
+                  className="block px-4 py-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium">{part.name}</span>
+                    <Chip className={STAGE_UI[stage].chip}>
+                      {stage}. {stageLabel(stage)}
+                    </Chip>
+                  </div>
+                  <p className="mt-1 font-mono text-xs text-muted-foreground">
+                    {part.partNumber} · need {part.qtyNeeded} ·{" "}
+                    {madeLabel(part)} made
+                  </p>
+                  <LooseNote loose={looseByRef.get(part._id)} />
+                </Link>
+              );
+            })}
+          {(cots ?? [])
+            .filter((c) =>
+              filter === "coming" ? c.status !== "arrived" : true,
+            )
+            .map((item) => (
+              <button
+                key={item._id}
+                type="button"
+                className="block w-full px-4 py-3 text-left"
+                onClick={() => setOpenBoughtId(item._id)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-medium">{item.name}</span>
+                  <Chip className={cotsChipClass(item.status)}>
+                    {cotsStatusLabel(item)}
+                  </Chip>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Bought · need {item.qtyNeeded}
+                  {item.unit ? ` ${item.unit}` : ""}
+                  {item.vendor ? ` · ${item.vendor}` : ""}
+                </p>
+                <LooseNote loose={looseByRef.get(item._id)} />
+              </button>
+            ))}
+        </div>
+      </section>
+
+      <Dialog open={adding} onOpenChange={setAdding}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add a sub-assembly</DialogTitle>
+          </DialogHeader>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!selectedId || newName.trim().length === 0) return;
+              setError(null);
+              createAssembly({ subsystemId: selectedId, name: newName })
+                .then((made) => {
+                  setAdding(false);
+                  void navigate(`/assemblies/${made.id}`);
+                })
+                .catch((err: unknown) =>
+                  setError(errorText(err, "That didn't work.")),
+                );
+            }}
+          >
+            <Input
+              value={newName}
+              autoFocus
+              placeholder="Frame assembly"
+              aria-label="New sub-assembly"
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              It takes the next number in this subsystem. You'll land on its
+              page to say what it's made of.
+            </p>
+            {error && <p className="text-sm text-danger">{error}</p>}
+            <Button type="submit" disabled={newName.trim().length === 0}>
+              Add it
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {openBought && (
+        <BoughtItemDetail
+          item={openBought}
+          subsystemName={selected?.name}
+          open
+          onOpenChange={(next) => !next && setOpenBoughtId(null)}
+          canEdit={isLead}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * How much of something no sub-assembly has spoken for. Nothing at all is
+ * worth saying plainly; a part-covered one is the easier mistake to miss.
+ */
+function LooseNote({
+  loose,
+}: {
+  loose?: { planned: number; claimed: number };
+}) {
+  if (!loose) return null;
+  return (
+    <span className="mt-0.5 block text-xs text-warning">
+      {loose.claimed === 0
+        ? "Not in an assembly"
+        : `${loose.planned - loose.claimed} of ${loose.planned} unassigned`}
+    </span>
+  );
+}

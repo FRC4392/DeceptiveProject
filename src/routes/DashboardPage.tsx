@@ -1,231 +1,338 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { StatusBadge } from "@/components/pm/TaskMeta";
-import { daysUntil, formatDate } from "@/lib/pm";
-import { formatCost } from "@/lib/parts";
-import { useProjectArg } from "@/lib/project";
+import { daysUntil, formatDate } from "@/lib/dates";
+import { cn } from "@/lib/utils";
 
 function pct(done: number, total: number): number {
   return total === 0 ? 0 : Math.round((done / total) * 100);
 }
 
+/**
+ * Three numbers across the top — what's left, what's on you, how long you
+ * have — then one card per thing the app tracks.
+ */
 export function DashboardPage() {
-  const projectArg = useProjectArg();
-  const summary = useQuery(api.dashboard.summary, projectArg);
-  const overdue = useQuery(api.tasks.listOverdue, projectArg);
-  const cost = useQuery(api.parts.costRollup, projectArg);
-  const issues = useQuery(api.github.stats, projectArg);
+  const summary = useQuery(api.dashboard.summary, {});
+  const progress = useQuery(api.subsystems.progress, {});
 
   return (
     <div className="space-y-6">
-      <div>
+      <header>
         <h1 className="brand-title text-3xl">Dashboard</h1>
         <p className="text-sm text-muted-foreground">
-          Team progress at a glance.
+          Where the robot is, and what's waiting on somebody.
         </p>
+      </header>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Headline
+          title="Still to do"
+          value={summary ? summary.outstanding.total : undefined}
+          caption="across parts, sub-assemblies, to-dos and issues"
+        >
+          {summary && (
+            <Breakdown
+              items={[
+                {
+                  label: "Parts",
+                  value: summary.outstanding.parts,
+                  to: "/parts",
+                },
+                {
+                  label: "Sub-assemblies",
+                  value: summary.outstanding.subAssemblies,
+                  to: "/subsystems",
+                },
+                {
+                  label: "To-dos",
+                  value: summary.outstanding.todos,
+                  to: "/todos",
+                },
+                {
+                  label: "Issues",
+                  value: summary.outstanding.issues,
+                  to: "/issues",
+                },
+              ]}
+            />
+          )}
+        </Headline>
+
+        <Headline
+          title="On you"
+          value={summary ? summary.mine.total : undefined}
+          caption={
+            summary && summary.mine.total === 0
+              ? "nothing picked up — the boards show what's going spare"
+              : "picked up and not finished"
+          }
+          accent
+        >
+          {summary && (
+            <Breakdown
+              items={[
+                { label: "Parts", value: summary.mine.parts, to: "/my-parts" },
+                {
+                  label: "Sub-assemblies",
+                  value: summary.mine.subAssemblies,
+                  to: "/subsystems",
+                },
+                { label: "To-dos", value: summary.mine.todos, to: "/my-todos" },
+              ]}
+            />
+          )}
+        </Headline>
+
+        <Headline
+          title="Next event"
+          value={
+            summary?.nextCompetition
+              ? daysUntil(summary.nextCompetition.date)
+              : undefined
+          }
+          caption={
+            summary?.nextCompetition
+              ? `days until ${summary.nextCompetition.name} · ${formatDate(
+                  summary.nextCompetition.date,
+                )}`
+              : "nothing on the calendar"
+          }
+        />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card accent>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Overall progress
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="brand-title text-4xl">
-              {summary ? pct(summary.doneTasks, summary.totalTasks) : "—"}%
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {summary
-                ? `${summary.doneTasks} of ${summary.totalTasks} tasks done`
-                : "Loading…"}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card accent>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Overdue
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="brand-title text-4xl text-danger">
-
-              {summary ? summary.overdueCount : "—"}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              tasks past their due date
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card accent>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Next competition
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {summary?.nextCompetition ? (
-              <>
-                <div className="brand-title text-4xl">
-                  {Math.max(daysUntil(summary.nextCompetition.date), 0)}
-                  <span className="ml-1 font-sans text-base font-normal normal-case not-italic text-muted-foreground">
-                    days
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {summary.nextCompetition.name} ·{" "}
-                  {formatDate(summary.nextCompetition.date)}
-                </p>
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No competition scheduled.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Progress by subsystem</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {summary === undefined ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : summary.subsystems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No boards yet. Create a board to start tracking progress.
-            </p>
-          ) : (
-            summary.subsystems.map((s) => {
-              const percent = pct(s.done, s.total);
-              return (
-                <div key={s.subsystem} className="space-y-1">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium capitalize">
-                      {s.subsystem}
-                    </span>
-                    <span className="text-muted-foreground">
-                      {s.done}/{s.total} · {percent}%
-                    </span>
-                  </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all"
-                      style={{ width: `${percent}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Software issues</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {issues === undefined ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : issues.total === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No issues tracked yet.{" "}
-              <Link to="/issues" className="underline hover:text-foreground">
-                Open the issue tracker →
-              </Link>
-            </p>
-          ) : (
-            <div className="flex flex-wrap items-end gap-6">
-              <div>
-                <div className="brand-title text-4xl">{issues.open}</div>
-                <p className="text-xs text-muted-foreground">open</p>
-              </div>
-              <div>
-                <div className="brand-title text-4xl text-muted-foreground">
-                  {issues.closed}
-                </div>
-                <p className="text-xs text-muted-foreground">closed</p>
-              </div>
-              <div>
-                <div className="brand-title text-4xl">{issues.prs}</div>
-                <p className="text-xs text-muted-foreground">pull requests</p>
-              </div>
-              <Link
-                to="/issues"
-                className="ml-auto text-sm text-primary hover:underline"
-              >
-                View all →
-              </Link>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Cost estimate</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1">
-          {cost === undefined ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : (
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card
+          title="Sub-assemblies"
+          to="/subsystems"
+          linkLabel="Open subsystems →"
+        >
+          {summary && (
             <>
-              <div className="brand-title text-4xl">
-                {formatCost(cost.total)}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Parts {formatCost(cost.partsTotal)} · Inventory{" "}
-                {formatCost(cost.inventoryTotal)} · COTS{" "}
-                {formatCost(cost.cotsTotal)}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Estimate only — {cost.partsMissingCost} part
-                {cost.partsMissingCost === 1 ? "" : "s"} missing a cost.
+              <Stat
+                value={`${summary.subAssemblies.built} / ${summary.subAssemblies.total}`}
+                caption="built and on the robot"
+              />
+              <Bar
+                done={summary.subAssemblies.built}
+                total={summary.subAssemblies.total}
+              />
+              <p className="mt-3 text-sm">
+                {summary.subAssemblies.readyToBuild > 0 ? (
+                  <span className="font-medium text-success">
+                    {summary.subAssemblies.readyToBuild} ready to go together
+                    now
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    Nothing's ready to go together yet.
+                  </span>
+                )}
               </p>
             </>
           )}
-        </CardContent>
-      </Card>
-
-      {overdue && overdue.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Overdue tasks</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="divide-y">
-              {overdue.map((t) => (
-                <li
-                  key={t._id}
-                  className="flex items-center justify-between gap-2 py-2"
-                >
-                  <Link
-                    to={`/tasks/${t._id}`}
-                    className="text-sm font-medium hover:underline"
-                  >
-                    {t.title}
-                  </Link>
-                  <div className="flex items-center gap-3">
-                    <StatusBadge status={t.status} />
-                    <span className="text-xs font-medium text-danger">
-                      {formatDate(t.dueDate)}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
         </Card>
+
+        <Card title="Parts" to="/parts" linkLabel="Open the parts board →">
+          {summary && (
+            <>
+              <Stat
+                value={`${summary.parts.ready} / ${summary.parts.total}`}
+                caption="in the bin or on the robot"
+              />
+              <Bar done={summary.parts.ready} total={summary.parts.total} />
+              <div className="mt-3 space-y-1.5">
+                {(progress ?? []).map((row) => (
+                  <div key={row.subsystemId} className="text-sm">
+                    <div className="flex justify-between gap-2">
+                      <span>{row.name}</span>
+                      <span className="text-muted-foreground">
+                        {row.installed
+                          ? "On the robot"
+                          : `${row.ready} / ${row.total}`}
+                      </span>
+                    </div>
+                    {/* Installed means the whole thing is on the robot, so a
+                        part-full bar underneath would contradict the label. */}
+                    <Bar
+                      done={row.installed ? row.total : row.ready}
+                      total={row.total}
+                      thin
+                    />
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </Card>
+
+        <Card title="To-dos" to="/todos" linkLabel="Open the to-do list →">
+          {summary && (
+            <>
+              <Stat
+                value={`${summary.todos.done} / ${summary.todos.total}`}
+                caption={`done · ${pct(summary.todos.done, summary.todos.total)}%`}
+              />
+              <Bar done={summary.todos.done} total={summary.todos.total} />
+              <p className="mt-3 text-sm">
+                {summary.todos.unclaimed > 0 ? (
+                  <span className="font-medium text-primary">
+                    {summary.todos.unclaimed} nobody's on
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    Everything left is picked up.
+                  </span>
+                )}
+              </p>
+            </>
+          )}
+        </Card>
+
+        <Card title="Issues" to="/issues" linkLabel="Open issues →">
+          {summary && (
+            <>
+              <Stat value={summary.issues.open} caption="open" />
+              <p className="mt-3 text-sm text-muted-foreground">
+                {summary.issues.closed} closed · {summary.issues.prs} pull
+                request{summary.issues.prs === 1 ? "" : "s"}
+              </p>
+            </>
+          )}
+        </Card>
+
+        <Card title="Ordering" to="/ordering" linkLabel="Open ordering →">
+          {summary && (
+            <>
+              {/* Two numbers, because they're two different jobs: one needs
+                  somebody to go and buy it, the other needs the post. */}
+              <div className="flex flex-wrap gap-6">
+                <Stat value={summary.bought.toOrder} caption="still to order" />
+                <Stat
+                  value={summary.bought.ordered}
+                  caption="ordered, not here"
+                />
+              </div>
+              <p className="mt-3 text-sm text-muted-foreground">
+                {summary.bought.arrived} of {summary.bought.total} arrived
+              </p>
+            </>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function Headline({
+  title,
+  value,
+  caption,
+  accent,
+  children,
+}: {
+  title: string;
+  value?: number;
+  caption: string;
+  accent?: boolean;
+  children?: React.ReactNode;
+}) {
+  return (
+    <section
+      className={cn(
+        "rounded-lg border bg-card p-4 shadow-sm",
+        accent && "border-primary",
       )}
+    >
+      <h2 className="font-semibold">{title}</h2>
+      {value === undefined ? (
+        <p className="mt-3 text-sm text-muted-foreground">Loading…</p>
+      ) : (
+        <>
+          <p className="brand-title mt-2 text-5xl">{value}</p>
+          <p className="text-xs text-muted-foreground">{caption}</p>
+        </>
+      )}
+      {children}
+    </section>
+  );
+}
+
+function Breakdown({
+  items,
+}: {
+  items: { label: string; value: number; to: string }[];
+}) {
+  return (
+    <div className="mt-4 space-y-1 border-t pt-3">
+      {items.map((item) => (
+        <Link
+          key={item.label}
+          to={item.to}
+          className="flex items-center justify-between rounded px-1 py-0.5 text-sm transition-colors hover:bg-accent"
+        >
+          <span className="text-muted-foreground">{item.label}</span>
+          <span className="font-medium">{item.value}</span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function Card({
+  title,
+  to,
+  linkLabel,
+  children,
+}: {
+  title: string;
+  to: string;
+  linkLabel: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex flex-col rounded-lg border bg-card p-4 shadow-sm">
+      <h2 className="font-semibold">{title}</h2>
+      <div className="grow">{children}</div>
+      <Link
+        to={to}
+        className="mt-4 text-sm text-primary underline-offset-4 hover:underline"
+      >
+        {linkLabel}
+      </Link>
+    </section>
+  );
+}
+
+function Stat({ value, caption }: { value: string | number; caption: string }) {
+  return (
+    <>
+      <p className="brand-title mt-2 text-4xl">{value}</p>
+      <p className="text-xs text-muted-foreground">{caption}</p>
+    </>
+  );
+}
+
+function Bar({
+  done,
+  total,
+  thin,
+}: {
+  done: number;
+  total: number;
+  thin?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "mt-2 w-full rounded-full bg-muted",
+        thin ? "h-1.5" : "h-2",
+      )}
+    >
+      <div
+        className={cn("rounded-full bg-primary", thin ? "h-1.5" : "h-2")}
+        style={{ width: `${pct(done, total)}%` }}
+      />
     </div>
   );
 }
