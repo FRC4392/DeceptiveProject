@@ -234,8 +234,6 @@ export function SubsystemsPage() {
           <h2 className="font-semibold">Can we build it yet?</h2>
           {isLead && selectedId && (
             <Button
-              variant="outline"
-              size="sm"
               onClick={() => {
                 setNewName("");
                 setError(null);

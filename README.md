@@ -167,7 +167,7 @@ bought item it needs is still on order.
 
 **The app issues part numbers**, `{YY}-{SUB}-{NNN}` (e.g. `27-INT-104`), from a
 counter per season and subsystem. Convex runs each mutation as a transaction,
-so two students pressing "Get a part number" at the same moment can't be given
+so two students pressing "Add a part" at the same moment can't be given
 the same one, and a number is never reused. `{YY}-{SUB}-000` is reserved for a
 subsystem's top-level assembly. Searching for a part forgives how it's typed:
 `27-INT-104`, `int-104`, `INT104` and `104` all find it.
@@ -372,7 +372,7 @@ duplicate would mean two different things both answering to `27-DRV-000`.
 **Switching is team-wide.** _Make this the current season_ moves every screen,
 for everyone — there is no per-person view of an old year. It asks twice,
 because a part created while an old season is current gets that old year's
-number: switch back to 2027, press _Get a part number_, and you get a 2027
+number: switch back to 2027, press _Add a part_, and you get a 2027
 number. The app bar says **not the newest season** whenever the team is working
 in a year it has since moved past.
 

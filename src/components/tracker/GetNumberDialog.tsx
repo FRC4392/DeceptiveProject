@@ -26,9 +26,10 @@ import { useProcessTypes, useSubsystems } from "@/lib/tracker";
 import { errorText } from "@/lib/errors";
 
 /**
- * "Get a part number" — the student's way in. The app issues the number; the
- * student pastes it into Onshape's Part number field, which costs the team
- * nothing and works whether or not Onshape is connected.
+ * "Add a part" — the student's way in. It creates the part on the board and
+ * issues its number in one go; the student pastes that into Onshape's Part
+ * number field, which costs the team nothing and works whether or not
+ * Onshape is connected.
  */
 export function GetNumberDialog({
   open,
@@ -116,10 +117,10 @@ export function GetNumberDialog({
         {issued === null ? (
           <>
             <DialogHeader>
-              <DialogTitle>Get a part number</DialogTitle>
+              <DialogTitle>Add a part</DialogTitle>
               <DialogDescription>
-                The tracker hands out the number. Paste it into the part's Part
-                number field in Onshape.
+                It goes on the board straight away, and the tracker gives it its
+                number. Paste that into the part's Part number field in Onshape.
               </DialogDescription>
             </DialogHeader>
 
@@ -211,14 +212,14 @@ export function GetNumberDialog({
                 Cancel
               </Button>
               <Button onClick={() => void submit()} disabled={saving}>
-                {saving ? "Getting one…" : "Get the number"}
+                {saving ? "Adding…" : "Add it"}
               </Button>
             </DialogFooter>
           </>
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>Here's your number</DialogTitle>
+              <DialogTitle>Added — here's its number</DialogTitle>
               <DialogDescription>
                 Paste it into the part's <strong>Part number</strong> property
                 in Onshape, then release the Part Studio when the design is

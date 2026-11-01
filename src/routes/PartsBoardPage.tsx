@@ -76,7 +76,7 @@ export function PartsBoardPage() {
           <Button variant="outline" asChild>
             <Link to="/manufacturing">Find a part</Link>
           </Button>
-          <Button onClick={() => setNumberOpen(true)}>Get a part number</Button>
+          <Button onClick={() => setNumberOpen(true)}>Add a part</Button>
         </div>
       </header>
 

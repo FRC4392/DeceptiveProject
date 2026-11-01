@@ -11,7 +11,7 @@ export const DEFAULT_PAD = 3;
 
 /**
  * The next number for a subsystem, taken inside the mutation's transaction so
- * two students pressing "Get a part number" at the same moment can't be handed
+ * two students pressing "Add a part" at the same moment can't be handed
  * the same one. A number is never reused — not even one belonging to a part
  * that was deleted.
  *

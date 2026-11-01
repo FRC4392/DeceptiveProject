@@ -1,7 +1,7 @@
 # What's left
 
-Written 1 November 2026, on the `new-tracker` branch. Build, lint and all 459
-tests pass; the working tree is clean. Everything below is either
+Written 1 November 2026, on the `new-tracker` branch, which is pushed. Build,
+lint and all 459 tests pass; the working tree is clean. Everything below is either
 configuration nobody has done yet, a rough edge worth knowing about, or a
 question whose answer would change the code.
 
@@ -18,23 +18,12 @@ README under the release webhook.
       Issue sync reads fine without it. A classic PAT with `repo` scope, or a
       fine-grained one with Issues: read and write on the repos you sync:
       `npx convex env set GITHUB_TOKEN <token>`.
-- [ ] **Push `new-tracker`.** Thirty-two commits ahead of `main`, no remote
-      branch, no PR.
+- [ ] **Open a PR for `new-tracker`.** The branch is pushed; nothing has been
+      merged to `main` yet.
 - [ ] **Deploy to production**, which is still on the old schema. It needs
       the same two steps dev had: push, then
       `npx convex run competitions:backfillSeason` — the backfill is
       per-deployment, and running it on dev did nothing for prod.
-- [ ] **Delete the `rp_verify_2` intake** from dev. A synthetic row left over
-      from verification; it is the one whose payload looks wrong, because it
-      never had a real package attached.
-
-## Watch on the next release
-
-- [ ] **The assembly BOM read has still never run against Onshape.** Until
-      now the misclassification meant it was never reached, so the extra
-      `/api/assemblies` call has only ever met a stubbed fetch. The next
-      assembly release exercises it for the first time — watch the budget
-      meter, which should show one call plus one per assembly.
 
 ## Rough edges
 
@@ -48,10 +37,24 @@ README under the release webhook.
       Note `src/e2e/app-smoke.test.tsx` mounts routes synchronously, so
       `Suspense` boundaries would need those cases reworked.
 
-## Questions whose answers would change the code
+## The BOM CSV, now that we've seen one
 
-**Onshape's to answer:**
+The team's export heads `Item, Quantity, Name, Vendor, Part Number`. Three of
+those map (quantity, name, partNumber); `Item` and `Vendor` are ignored
+harmlessly, since unknown columns are skipped by position. So it imports. Two
+things that follow:
 
-- [ ] **What are the real BOM CSV column names?** The importer matches
-      loosely and ignores what it doesn't recognise, but it has never seen a
-      real export.
+- [ ] **No Revision column, so no rework detection.** Every imported line
+      arrives with no revision, which means the tracker can't tell a
+      re-release from a first one — a part already made never reads as
+      _changed_, and the Fix them / Remake all / They're fine as-is decision
+      never appears. Adding a `Revision` or `Rev` column to the export is
+      enough; both already map, no code change.
+- [ ] **A CSV can't create a bought item.** The `Vendor` column implies the
+      export mixes made and bought, but `parseBomCsv` only ever produces part
+      lines — there is no route from a CSV to the Ordering board, and the
+      vendor name is dropped. A bought row imports as an unknown part and,
+      once accepted, becomes a `parts` row with a tracker number rather than
+      a `cotsItems` row. Worth deciding whether the importer should learn
+      about bought items or whether those rows should be filtered out of the
+      export.

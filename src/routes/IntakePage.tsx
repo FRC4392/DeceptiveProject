@@ -100,7 +100,7 @@ export function IntakePage() {
             <h2 className="font-semibold">How parts get here</h2>
             <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
               <li>
-                1. Press <strong>Get a part number</strong> in the tracker.
+                1. Press <strong>Add a part</strong> in the tracker.
               </li>
               <li>
                 2. Paste it into the part's <strong>Part number</strong> field
