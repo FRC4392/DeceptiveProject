@@ -5,6 +5,16 @@ Written 1 November 2026, against the `new-tracker` branch at `3e01d87`.
 Everything below was checked against the live production deployment rather
 than assumed, and the checks are named so you can re-run them yourself.
 
+Production is the Convex deployment **`neat-alligator-295`**:
+
+|                |                                           |
+| -------------- | ----------------------------------------- |
+| Client URL     | `https://neat-alligator-295.convex.cloud` |
+| HTTP endpoints | `https://neat-alligator-295.convex.site`  |
+
+Every URL below is spelled out against it, so the Clerk, Onshape and GitHub
+fields can be filled in by copying rather than by assembling.
+
 ## The good news first
 
 **Production is empty.** Every table is empty except `users`, which holds
@@ -53,7 +63,7 @@ dashboard, under Settings → Environment Variables, Production:
 | ---------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CONVEX_DEPLOY_KEY`          | Production deploy key, from the Convex dashboard → Settings → Deploy keys | Without it the build's `convex deploy` has no credentials and the whole deploy fails                                                                       |
 | `VITE_CLERK_PUBLISHABLE_KEY` | The **production** Clerk key, `pk_live_…`                                 | A `pk_test_…` here points the live site at your Clerk development instance                                                                                 |
-| `VITE_CONVEX_SITE_URL`       | Production's `https://<name>.convex.site`                                 | Only used to render the setup URLs on the admin pages. Wrong or missing, and Admin → Onshape shows you a template instead of the URL to paste into Onshape |
+| `VITE_CONVEX_SITE_URL`       | `https://neat-alligator-295.convex.site`                                  | Only used to render the setup URLs on the admin pages. Wrong or missing, and Admin → Onshape shows you a template instead of the URL to paste into Onshape |
 
 Do **not** set `VITE_CONVEX_URL` by hand. The build command injects it, and a
 hand-set value will fight it.
@@ -88,6 +98,29 @@ npx convex env set --prod ONSHAPE_WEBHOOK_SECRET "$(openssl rand -hex 32)"
 npx convex env set --prod GITHUB_TOKEN <PAT>
 npx convex env set --prod GITHUB_WEBHOOK_SECRET "$(openssl rand -hex 32)"
 ```
+
+The four generated ones can go in as one block — written this way the values
+are made and consumed inside the shell, so they never appear on screen or in
+your terminal history:
+
+```bash
+npx convex env set --prod ONSHAPE_TOKEN_ENC_KEY "$(openssl rand -base64 32)" && npx convex env set --prod ONSHAPE_SYNC_SECRET "$(openssl rand -hex 32)" && npx convex env set --prod ONSHAPE_WEBHOOK_SECRET "$(openssl rand -hex 32)" && npx convex env set --prod GITHUB_WEBHOOK_SECRET "$(openssl rand -hex 32)"
+```
+
+Two of those you will need to read back later, when you paste them into
+Onshape and GitHub:
+
+```bash
+npx convex env get ONSHAPE_SYNC_SECRET --prod
+```
+
+```bash
+npx convex env get GITHUB_WEBHOOK_SECRET --prod
+```
+
+The other two are only ever read by the server — the app builds the webhook
+callback URL itself, and the encryption key is never shown to anyone — so
+there is no reason to look at them.
 
 Three of those deserve a note:
 
@@ -128,7 +161,7 @@ is only there for an alternate Onshape host.
   anyone signing in for the first time lands as a student.
 
 - **Add the webhook**: `user.created`, `user.updated`, `user.deleted`,
-  pointing at `https://<prod>.convex.site/clerk/webhook`. Put its signing
+  pointing at `https://neat-alligator-295.convex.site/clerk/webhook`. Put its signing
   secret in `CLERK_WEBHOOK_SECRET` (already set — confirm it belongs to the
   _production_ instance's webhook, not dev's).
 
@@ -141,12 +174,12 @@ is only there for an alternate Onshape host.
 Every URL Onshape calls is deployment-specific, so the app registration in
 the Onshape dev portal needs production's alongside dev's.
 
-- **Redirect URI**: add `https://<prod>.convex.site/onshape/oauth/callback`.
+- **Redirect URI**: add `https://neat-alligator-295.convex.site/onshape/oauth/callback`.
   OAuth will fail at the callback without it.
 - **Right-panel extension**: point an _element right panel_ extension at
 
   ```
-  https://<prod>.convex.site/onshape/panel?secret=<ONSHAPE_SYNC_SECRET>&documentId={$documentId}&wv={$workspaceOrVersion}&wvid={$workspaceOrVersionId}&elementId={$elementId}
+  https://neat-alligator-295.convex.site/onshape/panel?secret=<ONSHAPE_SYNC_SECRET>&documentId={$documentId}&wv={$workspaceOrVersion}&wvid={$workspaceOrVersionId}&elementId={$elementId}
   ```
 
   with production's sync secret, keeping the `{$…}` placeholders verbatim.
@@ -165,7 +198,7 @@ from inside the app, in step 7.
 ## 6. The GitHub webhook
 
 Add a repository webhook with payload URL
-`https://<prod>.convex.site/github/webhook`, content type JSON, events
+`https://neat-alligator-295.convex.site/github/webhook`, content type JSON, events
 **Issues**, **Issue comments** and **Pull requests**, and the secret you set
 as `GITHUB_WEBHOOK_SECRET`. Admin → GitHub in the app shows the exact URL.
 
@@ -174,11 +207,12 @@ as `GITHUB_WEBHOOK_SECRET`. Admin → GitHub in the app shows the exact URL.
 The order matters — two of these depend on earlier ones.
 
 1. **Sign in** at the production site. That creates your `users` row.
-2. **Create the season.** Settings → Seasons, add the year. This has to happen
+2. **Create the season.** Settings shows a **Set up this season** panel while
+   there isn't one; after that it's the **Seasons** panel on the same page. This has to happen
    in the app, not from the CLI: it requires a signed-in mentor, and
    `convex run` has no identity. It also seeds the subsystems, machines and
    process types, including `Bought (COTS)`.
-3. **Pull the Clerk roster in**: Admin → People → sync. This reads the Clerk
+3. **Pull the Clerk roster in**: Settings → **People** → sync. This reads the Clerk
    API directly, so it fills in names and emails for people who haven't signed
    in yet.
 4. **Connect Onshape**: Admin → Onshape → Connect. Must be after
