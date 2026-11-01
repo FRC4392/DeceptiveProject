@@ -278,6 +278,48 @@ Then release something small in Onshape and watch it arrive under **New from
 Onshape**, and watch the budget meter on that page move by one. That is the
 end-to-end check.
 
+## 7a. If nobody can reach Settings
+
+This happened, and it cost an afternoon, so it is written down.
+
+**The symptom:** you sign in, the app loads, and Settings isn't there. The
+console is clean, the Clerk token is valid, and `grantRole` reports success.
+
+**The cause:** the session token claims in step 4. Before they are configured,
+a token carries no `email`, `name` or `role`, so `storeCurrentUser`
+(`convex/auth.ts`) inserts a row with an empty email, a name equal to the
+Clerk user id, and the role `student`. Sign in from a second context and you
+can end up with **two rows for the same person**, neither of them obviously
+yours, because neither carries an email.
+
+`grantRole` matches on email, and those rows have none — so granting by email
+silently lands on whichever row does have it, which may be an old one that no
+longer matches the id you are actually signing in with. Everything reports
+success and nothing changes.
+
+**How to tell:** list the users and look for rows whose `name` equals their
+`authId` and whose `email` is empty. Those are claimless sign-ins.
+
+```bash
+npx convex data --prod users --limit 50
+```
+
+**The fix:** grant the role by `authId` rather than email, targeting the row
+whose id matches the `sub` in your own token —
+
+```js
+window.Clerk.session
+  .getToken()
+  .then((t) => console.log(JSON.parse(atob(t.split(".")[1]))));
+```
+
+— then run the roster sync from Settings → People, which reads the Clerk API
+directly and is authoritative, so it fills in every empty email and name.
+Delete the leftover duplicate afterwards.
+
+**The real fix is step 4.** Configure the session token claims and none of
+this arises: people land with their name, email and role the first time.
+
 ## 8. Cleanup on production
 
 **Four dead environment variables.** Production carries `WORKOS_API_KEY`,

@@ -19,9 +19,13 @@ README under the release webhook.
 - [ ] **Finish the production first run** — the season, the Clerk roster, the
       Onshape connection, the release webhook and the document mapping are all
       still to do, in the app. `DEPLOY-PROD.md` has the order and the reasons.
-- [ ] **Set the Clerk session token template** on the production instance. It
-      needs the email, name and role claims, or every new sign-in lands as a
-      nameless student. The three existing mentors are unaffected.
+- [ ] **Set the Clerk session token claims** on the production instance —
+      `email`, `name` and `role`. This is not cosmetic: without them a
+      sign-in writes a row with no email and a name equal to the Clerk user
+      id, which is how production ended up with two rows for one person and
+      nobody able to reach Settings. The roster sync repairs the rows after
+      the fact; the claims stop it happening. `DEPLOY-PROD.md` §7a has the
+      symptoms.
 - [ ] **Delete eight orphaned tables** on production, left from the old
       schema. One `boards` row is junk from a webhook that fired against the
       old code mid-deploy; the rest are empty.
