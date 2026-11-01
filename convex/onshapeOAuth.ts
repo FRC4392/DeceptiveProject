@@ -447,6 +447,7 @@ export const syncElement = internalAction({
         quantity: part.quantity,
         onshapePartId: part.partId,
         material: part.material ?? undefined,
+        standardContent: part.standardContent || undefined,
       });
     }
 

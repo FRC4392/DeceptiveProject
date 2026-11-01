@@ -305,3 +305,243 @@ describe("an assembly a release mentioned", () => {
     ).rejects.toThrow(/is a part/);
   });
 });
+
+describe("a bought item a release mentioned", () => {
+  const BOM =
+    "Item,Quantity,Name,Vendor,Part Number,Revision\n" +
+    "1,4,Compliant wheel,AndyMark,am-3104,B";
+
+  /** Import the team's BOM and hand back the one line it produced. */
+  async function imported(t: ReturnType<typeof convexTest>) {
+    const ctx = await setup(t);
+    await ctx.mentor.mutation(api.intake.importCsv, {
+      label: "BOM",
+      csv: BOM,
+      subsystemId: ctx.intake._id,
+    });
+    const [listed] = await ctx.mentor.query(api.intake.list, {});
+    return { ...ctx, line: listed.lines[0], intakeId: listed.intake._id };
+  }
+
+  test("the vendor comes off the BOM so nobody retypes it", async () => {
+    const t = convexTest(schema, modules);
+    const { line } = await imported(t);
+    expect(line.kind).toBe("unknown");
+    expect(line.vendor).toBe("AndyMark");
+  });
+
+  test("it lands on the Ordering board as something still to buy", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, line } = await imported(t);
+
+    await mentor.mutation(api.intake.createCotsItemFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+
+    const [item] = await mentor.query(api.cots.list, {});
+    expect(item.name).toBe("Compliant wheel");
+    expect(item.qtyNeeded).toBe(4);
+    expect(item.vendor).toBe("AndyMark");
+    expect(item.vendorPartNumber).toBe("am-3104");
+    // A release says the design is settled, not that anybody bought it.
+    expect(item.status).toBe("needed");
+  });
+
+  test("it takes no part number, so the next part still gets 001", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router, line } = await imported(t);
+
+    await mentor.mutation(api.intake.createCotsItemFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+    expect(await mentor.query(api.parts.list, {})).toEqual([]);
+
+    // The counter never moved, which is the whole point of not issuing one.
+    const { partNumber } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: intake._id,
+      name: "Side plate",
+      processTypeId: router._id,
+      qtyNeeded: 1,
+    });
+    expect(partNumber).toBe("27-INT-001");
+  });
+
+  test("answering the last line finishes the intake on its own", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, line, intakeId } = await imported(t);
+
+    await mentor.mutation(api.intake.createCotsItemFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+    const row = await t.run((ctx) => ctx.db.get(intakeId));
+    expect(row?.status).toBe("processed");
+  });
+
+  test("it won't be added twice", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, line } = await imported(t);
+    await mentor.mutation(api.intake.createCotsItemFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+    await expect(
+      mentor.mutation(api.intake.createCotsItemFromLine, {
+        lineId: line._id,
+        subsystemId: intake._id,
+      }),
+    ).rejects.toThrow(/already/);
+  });
+
+  test("the same BOM again recognises it instead of offering it twice", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, line } = await imported(t);
+    await mentor.mutation(api.intake.createCotsItemFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+
+    // This is the duplicate generator the vendor-number key exists to close.
+    await mentor.mutation(api.intake.importCsv, {
+      label: "BOM again",
+      csv: BOM,
+      subsystemId: intake._id,
+    });
+    const [again] = await mentor.query(api.intake.list, {});
+    expect(again.lines).toHaveLength(1);
+    expect(again.lines[0].kind).toBe("matched");
+    expect(again.lines[0].target).toBe("cotsItem");
+    expect(again.lines[0].cotsItemId).toBeDefined();
+
+    // And still exactly one item on the Ordering board.
+    expect(await mentor.query(api.cots.list, {})).toHaveLength(1);
+  });
+
+  test("a matched bought line closes its intake without moving anything", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, line } = await imported(t);
+    await mentor.mutation(api.intake.createCotsItemFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+    await mentor.mutation(api.intake.importCsv, {
+      label: "BOM again",
+      csv: BOM,
+      subsystemId: intake._id,
+    });
+    const [again] = await mentor.query(api.intake.list, {});
+
+    const { moved } = await mentor.mutation(api.intake.applyMatched, {
+      intakeId: again.intake._id,
+    });
+    expect(moved).toBe(0);
+    const row = await t.run((ctx) => ctx.db.get(again.intake._id));
+    expect(row?.status).toBe("processed");
+  });
+
+  test("a hand-entered item is matchable, with no import involved", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    // The key comes off the number a human typed, so the Ordering board the
+    // team already built is recognised too.
+    await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Compliant wheel",
+      qtyNeeded: 4,
+      vendorPartNumber: "AM 3104",
+    });
+
+    await mentor.mutation(api.intake.importCsv, {
+      label: "BOM",
+      csv: BOM,
+      subsystemId: intake._id,
+    });
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.lines[0].kind).toBe("matched");
+    expect(listed.lines[0].target).toBe("cotsItem");
+  });
+
+  test("clearing the vendor number stops it matching that number", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const id = await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Compliant wheel",
+      qtyNeeded: 4,
+      vendorPartNumber: "am-3104",
+    });
+    await mentor.mutation(api.cots.update, {
+      id,
+      vendorPartNumber: null,
+    });
+
+    await mentor.mutation(api.intake.importCsv, {
+      label: "BOM",
+      csv: BOM,
+      subsystemId: intake._id,
+    });
+    const [listed] = await mentor.query(api.intake.list, {});
+    expect(listed.lines[0].kind).toBe("unknown");
+  });
+
+  test("a sub-assembly line is refused by it", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    await t.run(async (ctx) => {
+      const intakeId = await ctx.db.insert("releaseIntakes", {
+        source: "onshape",
+        label: "Release",
+        receivedAt: Date.now(),
+        status: "read",
+      });
+      await ctx.db.insert("releaseIntakeLines", {
+        intakeId,
+        name: "Roller assembly",
+        kind: "unknown",
+        target: "subAssembly",
+      });
+    });
+    const [listed] = await mentor.query(api.intake.list, {});
+
+    await expect(
+      mentor.mutation(api.intake.createCotsItemFromLine, {
+        lineId: listed.lines[0]._id,
+        subsystemId: intake._id,
+      }),
+    ).rejects.toThrow(/not something the team buys/);
+  });
+
+  test("a bought line can be waved through, but not turned into a part", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router, line } = await imported(t);
+    await mentor.mutation(api.intake.createCotsItemFromLine, {
+      lineId: line._id,
+      subsystemId: intake._id,
+    });
+    await mentor.mutation(api.intake.importCsv, {
+      label: "BOM again",
+      csv: BOM,
+      subsystemId: intake._id,
+    });
+    const [again] = await mentor.query(api.intake.list, {});
+    const lineId = again.lines[0]._id;
+
+    await expect(
+      mentor.mutation(api.intake.applyLine, {
+        lineId,
+        decision: "created",
+        subsystemId: intake._id,
+        processTypeId: router._id,
+      }),
+    ).rejects.toThrow(/bought item, not a part/i);
+
+    await mentor.mutation(api.intake.applyLine, {
+      lineId,
+      decision: "ignored",
+    });
+    const row = await t.run((ctx) => ctx.db.get(again.intake._id));
+    expect(row?.status).toBe("processed");
+  });
+});

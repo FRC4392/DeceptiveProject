@@ -24,6 +24,7 @@ import type * as lib_github from "../lib/github.js";
 import type * as lib_githubRest from "../lib/githubRest.js";
 import type * as lib_githubWebhookAuth from "../lib/githubWebhookAuth.js";
 import type * as lib_intake from "../lib/intake.js";
+import type * as lib_intakeKnown from "../lib/intakeKnown.js";
 import type * as lib_numbering from "../lib/numbering.js";
 import type * as lib_onshapeAssembly from "../lib/onshapeAssembly.js";
 import type * as lib_onshapeAuth from "../lib/onshapeAuth.js";
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   "lib/githubRest": typeof lib_githubRest;
   "lib/githubWebhookAuth": typeof lib_githubWebhookAuth;
   "lib/intake": typeof lib_intake;
+  "lib/intakeKnown": typeof lib_intakeKnown;
   "lib/numbering": typeof lib_numbering;
   "lib/onshapeAssembly": typeof lib_onshapeAssembly;
   "lib/onshapeAuth": typeof lib_onshapeAuth;

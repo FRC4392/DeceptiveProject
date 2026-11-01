@@ -1,7 +1,7 @@
 # What's left
 
 Written 1 November 2026, on the `new-tracker` branch, which is pushed. Build,
-lint and all 459 tests pass; the working tree is clean. Everything below is
+lint and all 491 tests pass; the working tree is clean. Everything below is
 either configuration nobody has done yet, a rough edge we've decided to live
 with, or a decision worth taking deliberately.
 
@@ -45,23 +45,34 @@ ignored harmlessly, since unknown columns are skipped by position.
       They're fine as-is decision appears. `revision` and `rev` both map, so
       this needed no code change.
 
-## The one real decision left
+## Decided and done
 
-- [ ] **Nothing can import a bought item** — not the CSV, not the panel sync,
-      not the release webhook. `cotsItems` rows are only ever inserted by
-      `convex/cots.ts`, from the Ordering board, by hand. Every import path
-      ends in a `parts` row with a tracker number, because the release path
-      classifies each item as assembly-or-part and has no third branch, and
-      the CSV's `Vendor` column is dropped on the floor.
+- [x] **Bought items import from every path.** A line the tracker has no
+      number for now asks **We make it** or **We buy it**, once, on the one
+      queue all three paths already shared. Buy it goes to the Ordering board
+      at _Needed_ with its vendor, takes no tracker number, and is recognised
+      on the next release by the vendor's own number — including the items the
+      team had already entered by hand, since the key comes off the number a
+      human types.
 
-      In practice this mostly doesn't bite, for a reason worth knowing: a
-      fastener inserted from Onshape's standard content library isn't an
-      element in the document, so it has nothing to release and never reaches
-      a release package at all. What does come through as a part is a vendor
-      component someone imported into their own Part Studio — a gearbox, a
-      bearing block — if they put it in the release.
+      It also closed a bug nobody had noticed: accepting a line with the
+      `Bought (COTS)` process made a part at stage 5, **Ready to assemble** —
+      in the bin, as far as "Can we build it yet?" was concerned, before
+      anyone had ordered it. That process is no longer offered on the intake
+      screen. It still exists everywhere else, so nothing needed migrating.
 
-      So the choice is whether bought items should stay hand-entered on the
-      Ordering board (fine, and what happens today), or whether the importers
-      should learn to route a vendor row to `cotsItems`. Worth deciding
-      before the team builds a habit around the wrong one.
+## Watch on the next release
+
+- [ ] **Standard content now arrives.** The panel sync used to drop Onshape's
+      library fasteners; it now brings them in as lines to buy, one row per
+      distinct fastener with its placement count. Worth watching the first
+      real assembly sync to see whether that is a useful Ordering list or more
+      rows than a lead wants to clear. If it's too much, the tag is already on
+      the line — `standardContent` — so filtering is a one-line change.
+- [ ] **Prod needs the schema push.** `cotsItems` gained
+      `vendorPartNumberKey` and the CAD-link fields, and
+      `releaseIntakeLines` gained `target: "cotsItem"`, `cotsItemId`,
+      `vendor`, `standardContent` and `onshapePartId`. All optional, so
+      nothing needs backfilling — but existing hand-entered bought items only
+      become matchable once someone edits them and their vendor number is
+      re-saved, or has one typed in for the first time.

@@ -5,6 +5,18 @@ import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { requireUserId, requireLead } from "./lib/auth";
 import { activeSeason, requireActiveSeason } from "./lib/season";
+import { normalizePartNumber } from "./lib/stages";
+
+/**
+ * The match key for a vendor's own number, kept in step with the number
+ * itself everywhere it is written — the same discipline `parts.partNumberKey`
+ * follows. A blank number has no key rather than an empty-string one, so it
+ * can't collide with every other blank.
+ */
+function vendorKey(vendorPartNumber?: string | null): string | undefined {
+  const trimmed = vendorPartNumber?.trim();
+  return trimmed ? normalizePartNumber(trimmed) : undefined;
+}
 
 const statusValidator = v.union(
   v.literal("needed"),
@@ -27,6 +39,13 @@ const vCots = v.object({
   orderedAt: v.optional(v.number()),
   arrivedAt: v.optional(v.number()),
   cost: v.optional(v.number()),
+  vendorPartNumberKey: v.optional(v.string()),
+  onshapeDocumentId: v.optional(v.string()),
+  onshapeElementId: v.optional(v.string()),
+  onshapePartId: v.optional(v.string()),
+  onshapeVersionId: v.optional(v.string()),
+  lastReleasePackageId: v.optional(v.string()),
+  lastSyncedAt: v.optional(v.number()),
 });
 
 export const list = query({
@@ -72,6 +91,7 @@ export const create = mutation({
       unit: args.unit?.trim() || undefined,
       vendor: args.vendor?.trim() || undefined,
       vendorPartNumber: args.vendorPartNumber?.trim() || undefined,
+      vendorPartNumberKey: vendorKey(args.vendorPartNumber),
       cost: args.cost,
       status: args.status ?? "needed",
     });
@@ -152,8 +172,12 @@ export const update = mutation({
       patch.qtyNeeded = Math.max(1, Math.round(rest.qtyNeeded));
     if (rest.unit !== undefined) patch.unit = rest.unit ?? undefined;
     if (rest.vendor !== undefined) patch.vendor = rest.vendor ?? undefined;
-    if (rest.vendorPartNumber !== undefined)
+    if (rest.vendorPartNumber !== undefined) {
       patch.vendorPartNumber = rest.vendorPartNumber ?? undefined;
+      // Clearing the number clears the key with it, or the item stays
+      // matchable by a number it no longer claims.
+      patch.vendorPartNumberKey = vendorKey(rest.vendorPartNumber);
+    }
     if (rest.cost !== undefined) patch.cost = rest.cost ?? undefined;
     if (rest.subsystemId !== undefined) patch.subsystemId = rest.subsystemId;
     await ctx.db.patch(id, patch);

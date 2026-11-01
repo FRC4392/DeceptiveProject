@@ -165,6 +165,22 @@ vendor, and a lead can delete one. The subsystem's own parts list still shows
 where each item is up to, read-only. A sub-assembly won't complete while a
 bought item it needs is still on order.
 
+**Bought items can be imported as well as typed in.** Every way into the
+tracker — the release webhook, the Onshape panel sync, a BOM CSV — ends up on
+the same **New from Onshape** queue, so the question is asked in one place: a
+line the tracker has no number for offers **We make it** or **We buy it**.
+Make it is the part path. Buy it puts the thing on the Ordering board at
+_Needed_, with its vendor and the vendor's own part number, and draws **no**
+tracker number — nothing is made, so there is nothing for a
+`{YY}-{SUB}-{NNN}` to label, and the subsystem's counter never moves.
+
+Buy it is the answer already filled in when the row names a vendor, or when
+it came out of Onshape's standard content library. A bought item carries the
+vendor's number as its identity, so the next release recognises it and says so
+instead of offering to create a second one — and because that key comes off
+the number a human types on the Ordering board, the items the team entered by
+hand are recognised too.
+
 **The app issues part numbers**, `{YY}-{SUB}-{NNN}` (e.g. `27-INT-104`), from a
 counter per season and subsystem. Convex runs each mutation as a transaction,
 so two students pressing "Add a part" at the same moment can't be given
@@ -514,7 +530,15 @@ The sub-assemblies placed directly inside it come back as lines too.
 
 Nothing lands on the board unasked — an assembly the tracker doesn't know
 becomes an _unknown_ line in **New from Onshape** for a lead to confirm, and a
-sync never rearranges a tree someone built by hand.
+sync never rearranges a tree someone built by hand. That still holds for a
+bought item: Buy it lands it at _Needed_, which is the one place somebody has
+to act on it, rather than anywhere that would read as already dealt with.
+
+A sync does bring in **standard content** — the fasteners placed from
+Onshape's library — as lines a lead can buy, counted one row per distinct
+fastener with its placement count rather than one row per bolt. A release
+package never contains them, because library parts aren't released, so this is
+the panel path only.
 
 One thing genuinely isn't reachable on this path:
 

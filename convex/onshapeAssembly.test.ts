@@ -77,7 +77,7 @@ describe("aggregateAssemblyParts", () => {
     expect(parts[0].sourceElementId).toBe("psGear");
   });
 
-  test("skips standard content (fasteners) and suppressed instances", () => {
+  test("tags standard content and still skips suppressed instances", () => {
     const def: AssemblyDefinition = {
       rootAssembly: {
         instances: [
@@ -105,8 +105,46 @@ describe("aggregateAssemblyParts", () => {
       },
     };
     const parts = aggregateAssemblyParts(def, DOC);
+    // The bolt comes through now — it's hardware somebody has to buy, and the
+    // intake offers Buy it for exactly this. The suppressed part still never
+    // existed as far as the assembly is concerned.
+    expect(parts).toHaveLength(2);
+    expect(parts.map((p) => p.partId)).toEqual(["P1", "BOLT"]);
+    expect(parts.find((p) => p.partId === "BOLT")?.standardContent).toBe(true);
+    expect(parts.find((p) => p.partId === "P1")?.standardContent).toBe(false);
+    expect(parts.some((p) => p.partId === "OLD")).toBe(false);
+  });
+
+  test("counts every placement of one fastener as a single line", () => {
+    // A box of bolts is one thing to buy, not forty. The aggregator already
+    // keys on elementId:partId, so this falls out of counting placements.
+    const def: AssemblyDefinition = {
+      rootAssembly: {
+        instances: [
+          {
+            id: "bolt",
+            type: "Part",
+            name: "M4 Bolt <1>",
+            partId: "BOLT",
+            documentId: "other-doc",
+            elementId: "std",
+            isStandardContent: true,
+          },
+        ],
+        occurrences: [
+          { path: ["bolt"] },
+          { path: ["bolt"] },
+          { path: ["bolt"] },
+        ],
+      },
+    };
+    const parts = aggregateAssemblyParts(def, DOC);
     expect(parts).toHaveLength(1);
-    expect(parts[0].partId).toBe("P1");
+    expect(parts[0].quantity).toBe(3);
+    expect(parts[0].standardContent).toBe(true);
+    // Library content lives in Onshape's documents, so there is nothing of
+    // ours to enrich it from.
+    expect(parts[0].sameDocument).toBe(false);
   });
 
   test("flags parts sourced from another document as cross-document", () => {

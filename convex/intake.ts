@@ -10,12 +10,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireLead } from "./lib/auth";
 import { requireActiveSeason } from "./lib/season";
 import { assertNumberFree, takePartNumber } from "./lib/numbering";
+import { loadKnown } from "./lib/intakeKnown";
 import {
   classifyRelease,
   parseBomCsv,
   parseManualNumbers,
   type IntakeLineInput,
-  type KnownPart,
 } from "./lib/intake";
 import { normalizePartNumber, nextStage, type Stage } from "./lib/stages";
 
@@ -65,12 +65,19 @@ const vLine = v.object({
   decision: v.optional(decisionValidator),
   partId: v.optional(v.id("parts")),
   // Absent means the line is about a part, which is the common case. A sync
-  // or a release can also tell us about the assembly itself.
-  target: v.optional(v.union(v.literal("part"), v.literal("subAssembly"))),
+  // or a release can also tell us about the assembly itself, or about
+  // something the Ordering board already has.
+  target: v.optional(
+    v.union(v.literal("part"), v.literal("subAssembly"), v.literal("cotsItem")),
+  ),
   subAssemblyId: v.optional(v.id("subAssemblies")),
+  cotsItemId: v.optional(v.id("cotsItems")),
   subsystemId: v.optional(v.id("subsystems")),
+  vendor: v.optional(v.string()),
+  standardContent: v.optional(v.boolean()),
   onshapeDocumentId: v.optional(v.string()),
   onshapeElementId: v.optional(v.string()),
+  onshapePartId: v.optional(v.string()),
   onshapeVersionId: v.optional(v.string()),
   note: v.optional(v.string()),
 });
@@ -131,33 +138,16 @@ async function insertIntake(
 ): Promise<{ intakeId: Id<"releaseIntakes">; lines: number }> {
   const season = await requireActiveSeason(ctx);
 
-  // Compare against the parts we already hold — the whole season, or just one
+  // Compare against what we already hold — the whole season, or just one
   // subsystem when the lead said which assembly this release came from.
-  const existing =
-    args.subsystemId !== undefined
-      ? await ctx.db
-          .query("parts")
-          .withIndex("by_subsystem", (q) =>
-            q.eq("subsystemId", args.subsystemId!),
-          )
-          .take(5000)
-      : await ctx.db
-          .query("parts")
-          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
-          .take(5000);
-  const live = existing.filter((p) => !p.isArchived);
-  const known: KnownPart[] = live.map((p) => ({
-    partNumber: p.partNumber,
-    stage: p.stage,
-    qtyMade: p.qtyMade,
-    revision: p.revision,
-  }));
-  const byNumber = new Map(
-    live.map((p) => [normalizePartNumber(p.partNumber), p]),
-  );
+  const { known, byNumber, bought, boughtByNumber } = await loadKnown(ctx, {
+    seasonId: season._id,
+    subsystemId: args.subsystemId,
+  });
 
   const classified = classifyRelease(args.lines, known, {
     detectRemoved: args.detectRemoved,
+    bought,
   });
 
   const intakeId = await ctx.db.insert("releaseIntakes", {
@@ -173,6 +163,12 @@ async function insertIntake(
     const match = line.partNumber
       ? byNumber.get(normalizePartNumber(line.partNumber))
       : undefined;
+    // Which collection matched is the classifier's answer, read back rather
+    // than worked out again here.
+    const boughtMatch =
+      line.target === "cotsItem" && line.partNumber
+        ? boughtByNumber.get(normalizePartNumber(line.partNumber))
+        : undefined;
     await ctx.db.insert("releaseIntakeLines", {
       intakeId,
       partNumber: line.partNumber,
@@ -180,8 +176,12 @@ async function insertIntake(
       name: line.name,
       quantity: line.quantity,
       kind: line.kind,
+      target: boughtMatch ? "cotsItem" : undefined,
       partId: match?._id,
-      subsystemId: match?.subsystemId ?? args.subsystemId,
+      cotsItemId: boughtMatch?._id,
+      vendor: line.vendor,
+      subsystemId:
+        match?.subsystemId ?? boughtMatch?.subsystemId ?? args.subsystemId,
       note: line.explanation,
     });
   }
@@ -252,7 +252,7 @@ export const importCsv = mutation({
     const lines = parseBomCsv(args.csv);
     if (lines.length === 0) {
       throw new Error(
-        "No part numbers found. The BOM needs a column called Part number.",
+        "Nothing to import. The BOM needs a Part number column, or a Name and a Vendor for the things the team buys.",
       );
     }
     return insertIntake(ctx, {
@@ -286,9 +286,15 @@ export const applyLine = mutation({
     // quantity already made, a process that decides where it starts. None of
     // those mean anything for an assembly, so rather than do something
     // plausible to the wrong record, say so.
-    if (line.target === "subAssembly" && args.decision !== "ignored") {
+    if (
+      line.target !== undefined &&
+      line.target !== "part" &&
+      args.decision !== "ignored"
+    ) {
       throw new Error(
-        "That line is a sub-assembly, not a part. Set it up on the subsystem page and ignore it here.",
+        line.target === "subAssembly"
+          ? "That line is a sub-assembly, not a part. Set it up on the subsystem page and ignore it here."
+          : "That line is a bought item, not a part. It's on the Ordering board; ignore it here.",
       );
     }
     const season = await requireActiveSeason(ctx);
@@ -352,6 +358,13 @@ export const applyLine = mutation({
           stageSince: now,
           isArchived: false,
           revision: line.revision,
+          // The line's CAD ids, so a part added from a release has a working
+          // deep link straight away instead of waiting for a later sync to
+          // find it by number.
+          onshapeDocumentId: line.onshapeDocumentId,
+          onshapeElementId: line.onshapeElementId,
+          onshapePartId: line.onshapePartId,
+          onshapeVersionId: line.onshapeVersionId,
           lastSyncedAt: now,
           lastReleasePackageId: fromRelease,
           flags: [],
@@ -539,6 +552,98 @@ export const createSubAssemblyFromLine = mutation({
   },
 });
 
+/**
+ * Put something the team buys onto the Ordering board.
+ *
+ * Its own mutation for the same reason `createSubAssemblyFromLine` is one:
+ * every decision `applyLine` offers is about a part — a stage to move, a
+ * quantity already made, a process that decides where it starts — and a
+ * bought item has none of those. It has a vendor and a status instead.
+ *
+ * It lands at `needed`, never further on. A release says the design is
+ * settled, not that anybody has bought the thing, and the Ordering board is
+ * where somebody has to act on it.
+ */
+export const createCotsItemFromLine = mutation({
+  args: {
+    lineId: v.id("releaseIntakeLines"),
+    subsystemId: v.id("subsystems"),
+    name: v.optional(v.string()),
+    qtyNeeded: v.optional(v.number()),
+    unit: v.optional(v.string()),
+    vendor: v.optional(v.string()),
+    vendorPartNumber: v.optional(v.string()),
+    cost: v.optional(v.number()),
+  },
+  returns: v.id("cotsItems"),
+  handler: async (ctx, args) => {
+    // Stricter than `cots.create`, which any signed-in student may call:
+    // this one also closes an intake, and that is a lead's job everywhere
+    // else in this file.
+    const lead = await requireLead(ctx);
+    const line = await ctx.db.get(args.lineId);
+    if (!line) throw new Error("That line is gone.");
+    if (line.target === "subAssembly") {
+      throw new Error(
+        "That line is a sub-assembly, not something the team buys. Add it as a sub-assembly instead.",
+      );
+    }
+    if (line.cotsItemId) {
+      throw new Error("That's already on the Ordering board.");
+    }
+    if (line.decision) {
+      throw new Error("That line has already been answered.");
+    }
+    const season = await requireActiveSeason(ctx);
+    const subsystem = await ctx.db.get(args.subsystemId);
+    if (!subsystem) throw new Error("That subsystem is gone.");
+
+    // No number is taken. A bought item is never made, so there is nothing
+    // for a {YY}-{SUB}-{NNN} to label, and numbers are never reused — burning
+    // one on something that will never show it leaves a permanent gap in the
+    // sequence.
+    //
+    // The released number is kept under the inverse of the rule a
+    // sub-assembly follows: that one adopts the number when it looks like
+    // ours, and this one keeps it when it doesn't, because a number we never
+    // issued sitting on a bought part is the vendor's own.
+    const released =
+      line.partNumber &&
+      !normalizePartNumber(line.partNumber).startsWith(
+        normalizePartNumber(`${season.year}${subsystem.code}`),
+      )
+        ? line.partNumber
+        : undefined;
+    const vendorPartNumber = args.vendorPartNumber?.trim() || released;
+
+    const intake = await ctx.db.get(line.intakeId);
+    const cotsItemId = await ctx.db.insert("cotsItems", {
+      seasonId: season._id,
+      subsystemId: args.subsystemId,
+      name: (args.name ?? line.name).trim() || "Bought item",
+      qtyNeeded: Math.max(1, Math.round(args.qtyNeeded ?? line.quantity ?? 1)),
+      unit: args.unit?.trim() || undefined,
+      status: "needed",
+      vendor: args.vendor?.trim() || line.vendor,
+      vendorPartNumber,
+      vendorPartNumberKey: vendorPartNumber
+        ? normalizePartNumber(vendorPartNumber)
+        : undefined,
+      cost: args.cost,
+      onshapeDocumentId: line.onshapeDocumentId,
+      onshapeElementId: line.onshapeElementId,
+      onshapePartId: line.onshapePartId,
+      onshapeVersionId: line.onshapeVersionId,
+      lastReleasePackageId: intake?.onshapeReleasePackageId,
+      lastSyncedAt: Date.now(),
+    });
+
+    await ctx.db.patch(line._id, { decision: "created", cotsItemId });
+    await maybeFinish(ctx, line.intakeId, lead.authId);
+    return cotsItemId;
+  },
+});
+
 export const applyMatched = mutation({
   args: { intakeId: v.id("releaseIntakes") },
   returns: v.object({ moved: v.number() }),
@@ -577,6 +682,19 @@ export const applyMatched = mutation({
         continue;
       }
 
+      if (line.target === "cotsItem") {
+        // Nothing to move — it's on the Ordering board and its status is
+        // whoever buys it's business. The line is marked so the intake can
+        // close, the same reason the assembly branch above exists.
+        if (line.cotsItemId) {
+          await ctx.db.patch(line.cotsItemId, {
+            lastSyncedAt: now,
+            lastReleasePackageId: fromRelease,
+          });
+        }
+        await ctx.db.patch(line._id, { decision: "keep" });
+        continue;
+      }
       if (!line.partId) continue;
       const part = await ctx.db.get(line.partId);
       if (!part) continue;

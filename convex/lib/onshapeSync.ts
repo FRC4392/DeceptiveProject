@@ -119,6 +119,7 @@ type NormalizedPart = {
   sourceElementId: string;
   sameDocument: boolean;
   quantity: number;
+  standardContent: boolean;
 };
 
 // The stable key a part is tracked under (also its `onshapeElementId`). Composite
@@ -201,6 +202,7 @@ export async function resolveSyncParts(
         sourceElementId: p.sourceElementId,
         sameDocument: p.sameDocument,
         quantity: p.quantity,
+        standardContent: p.standardContent,
       };
     });
     return { elementType, elementName, children, parts };
@@ -223,6 +225,9 @@ export async function resolveSyncParts(
       sourceElementId: elementId,
       sameDocument: true,
       quantity: 1,
+      // A Part Studio holds what the team drew; library content lives in an
+      // assembly, not here.
+      standardContent: false,
     }),
   );
   return { elementType, elementName, children: [], parts };

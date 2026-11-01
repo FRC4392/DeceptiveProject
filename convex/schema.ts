@@ -220,8 +220,9 @@ export default defineSchema({
     .index("by_part", ["partId"])
     .index("by_resolved", ["resolvedAt"]),
 
-  // Bought items get no part number. Tracked by name per subsystem, and
-  // "arrived" counts as ready to assemble.
+  // Bought items draw no tracker number — nothing is made, so there is no
+  // {YY}-{SUB}-{NNN} to issue and the subsystem counter never moves. Tracked
+  // by name per subsystem, and "arrived" counts as ready to assemble.
   cotsItems: defineTable({
     seasonId: v.id("seasons"),
     subsystemId: v.id("subsystems"),
@@ -243,9 +244,29 @@ export default defineSchema({
     orderedAt: v.optional(v.number()),
     arrivedAt: v.optional(v.number()),
     cost: v.optional(v.number()),
+    // `normalizePartNumber(vendorPartNumber)`, so a release naming the
+    // vendor's own number finds this item instead of offering to create a
+    // second one. Deliberately derived from the number a human already types
+    // on the Ordering board rather than from a field only the importer sets:
+    // that way the items the team entered by hand are matchable too.
+    //
+    // Unlike `parts.partNumberKey` this is nobody's guarantee of uniqueness.
+    // The same gearbox is legitimately two rows under two subsystems, so a
+    // lookup here takes what it finds rather than expecting one.
+    vendorPartNumberKey: v.optional(v.string()),
+    // Where it came from in CAD, when it came from CAD at all. A bought item
+    // somebody typed onto the Ordering board has none of this.
+    onshapeDocumentId: v.optional(v.string()),
+    onshapeElementId: v.optional(v.string()),
+    onshapePartId: v.optional(v.string()),
+    onshapeVersionId: v.optional(v.string()),
+    lastReleasePackageId: v.optional(v.string()),
+    lastSyncedAt: v.optional(v.number()),
   })
     .index("by_subsystem", ["subsystemId"])
-    .index("by_season", ["seasonId"]),
+    .index("by_season", ["seasonId"])
+    .index("by_vendorPartNumberKey", ["vendorPartNumberKey"])
+    .index("by_onshapeElementId", ["onshapeElementId"]),
 
   // A sub-assembly: a named, numbered thing that goes together, mirroring the
   // CAD. It holds parts, bought items and *other sub-assemblies*, so an intake
@@ -387,14 +408,28 @@ export default defineSchema({
     ),
     partId: v.optional(v.id("parts")),
     // Absent means the line is about a part, which is the common case.
-    target: v.optional(v.union(v.literal("part"), v.literal("subAssembly"))),
+    target: v.optional(
+      v.union(
+        v.literal("part"),
+        v.literal("subAssembly"),
+        v.literal("cotsItem"),
+      ),
+    ),
     subAssemblyId: v.optional(v.id("subAssemblies")),
+    cotsItemId: v.optional(v.id("cotsItems")),
     subsystemId: v.optional(v.id("subsystems")),
-    // Where it came from in CAD. Kept on the line because an assembly the
-    // board doesn't know yet has nowhere else to put them, and creating a
-    // sub-assembly from the line needs them to build its deep link.
+    // The vendor a BOM row named, carried so the lead doesn't retype it and
+    // so a row that plainly describes something bought can default that way.
+    vendor: v.optional(v.string()),
+    // Onshape's own standard content — library hardware. Same purpose as
+    // `vendor` above: a reason to offer Buy it before Make it.
+    standardContent: v.optional(v.boolean()),
+    // Where it came from in CAD. Kept on the line because something the
+    // board doesn't know yet has nowhere else to put them, and whatever the
+    // lead turns the line into needs them to build its deep link.
     onshapeDocumentId: v.optional(v.string()),
     onshapeElementId: v.optional(v.string()),
+    onshapePartId: v.optional(v.string()),
     onshapeVersionId: v.optional(v.string()),
     note: v.optional(v.string()),
   }).index("by_intake", ["intakeId"]),

@@ -11,6 +11,8 @@ export type IntakeLineInput = {
   revision?: string;
   name: string;
   quantity?: number;
+  /** Whoever a BOM row said sells it. Only the CSV path knows this. */
+  vendor?: string;
 };
 
 export type KnownPart = {
@@ -26,6 +28,20 @@ export type ClassifiedLine = IntakeLineInput & {
   kind: LineKind;
   /** Why it landed in this bucket, shown to the lead verbatim. */
   explanation: string;
+  /**
+   * Which collection the number was found in. Written here so the insert
+   * loops can read the answer rather than working it out a second time and
+   * risking a different one.
+   */
+  target?: "part" | "cotsItem";
+};
+
+/** What the tracker already holds about something the team buys. */
+export type KnownBoughtItem = {
+  /** The vendor's own number, which is the only number a bought item has. */
+  vendorPartNumber: string;
+  name: string;
+  status: "needed" | "ordered" | "arrived";
 };
 
 function isNewRevision(line: IntakeLineInput, part: KnownPart): boolean {
@@ -111,24 +127,67 @@ export function findRemoved(
     }));
 }
 
+const BOUGHT_STATE: Record<KnownBoughtItem["status"], string> = {
+  needed: "nobody has bought it yet",
+  ordered: "it's on order",
+  arrived: "it's in the shop",
+};
+
+/**
+ * Classify a released item the Ordering board already holds.
+ *
+ * Separate from `classifyLine` for the same reason `classifyAssemblyLine` is:
+ * that one branches on a part's stage and how many were made, and a bought
+ * item has neither. The only cases that apply are known and unknown — there
+ * is no revision for a bought item to have moved on from, so it can never be
+ * `changed`.
+ */
+export function classifyBoughtLine(
+  line: IntakeLineInput,
+  item: KnownBoughtItem,
+): ClassifiedLine {
+  return {
+    ...line,
+    kind: "matched",
+    target: "cotsItem",
+    explanation: `Already on the Ordering board — ${BOUGHT_STATE[item.status]}.`,
+  };
+}
+
 export function classifyRelease(
   lines: IntakeLineInput[],
   known: KnownPart[],
-  options: { detectRemoved?: boolean } = {},
+  options: { detectRemoved?: boolean; bought?: KnownBoughtItem[] } = {},
 ): ClassifiedLine[] {
   const byNumber = new Map<string, KnownPart>();
   for (const part of known) {
     byNumber.set(normalizePartNumber(part.partNumber), part);
   }
-  const classified = lines.map((line) =>
-    classifyLine(
-      line,
-      line.partNumber
-        ? byNumber.get(normalizePartNumber(line.partNumber))
-        : undefined,
-    ),
-  );
+  // A vendor number is nobody's guarantee of uniqueness — the same gearbox is
+  // legitimately two rows under two subsystems — so the first one found wins
+  // and the lead can move it afterwards.
+  const boughtByNumber = new Map<string, KnownBoughtItem>();
+  for (const item of options.bought ?? []) {
+    const key = normalizePartNumber(item.vendorPartNumber);
+    if (key && !boughtByNumber.has(key)) boughtByNumber.set(key, item);
+  }
+
+  const classified = lines.map((line) => {
+    const key = line.partNumber ? normalizePartNumber(line.partNumber) : "";
+    // Parts are looked up first, so nothing about how a part classifies
+    // changes. A collision can only be a vendor number that happens to look
+    // like one of ours, where the part is still the right answer.
+    const part = key ? byNumber.get(key) : undefined;
+    if (part) return { ...classifyLine(line, part), target: "part" as const };
+    const item = key ? boughtByNumber.get(key) : undefined;
+    if (item) return classifyBoughtLine(line, item);
+    return classifyLine(line, undefined);
+  });
   if (options.detectRemoved) {
+    // Parts only, deliberately. Most bought items aren't in the CAD at all —
+    // a library fastener is not an element and never reaches a release — so a
+    // release not naming one is the normal case rather than a deletion. A
+    // `removed` line also offers "Archive it", which only a part has.
     classified.push(...findRemoved(lines, known));
   }
   return classified;
@@ -151,6 +210,10 @@ const HEADER_ALIASES: Record<string, keyof IntakeLineInput> = {
   quantity: "quantity",
   qty: "quantity",
   "quantity per": "quantity",
+  vendor: "vendor",
+  supplier: "vendor",
+  manufacturer: "vendor",
+  "vendor name": "vendor",
 };
 
 /** Split one CSV line, honouring quoted fields with commas inside them. */
@@ -197,7 +260,11 @@ export function parseBomCsv(text: string): IntakeLineInput[] {
 
   const headers = splitCsvLine(rows[0]).map((h) => h.toLowerCase());
   const columns = headers.map((h) => HEADER_ALIASES[h]);
-  if (!columns.includes("partNumber")) return [];
+  // Either a number to match on, or enough to describe something bought.
+  const usable =
+    columns.includes("partNumber") ||
+    (columns.includes("name") && columns.includes("vendor"));
+  if (!usable) return [];
 
   const lines: IntakeLineInput[] = [];
   for (const row of rows.slice(1)) {
@@ -213,8 +280,12 @@ export function parseBomCsv(text: string): IntakeLineInput[] {
         line[key] = cell;
       }
     });
-    if (!line.partNumber) continue;
-    if (!line.name) line.name = line.partNumber;
+    // A row with no number is kept when it says what it is and who sells it:
+    // that is what a piece of hardware looks like in a BOM, and dropping it
+    // meant the one kind of row the team can only buy never arrived at all.
+    // Anything with neither a number nor a vendor is a blank or a subtotal.
+    if (!line.partNumber && !(line.vendor && line.name)) continue;
+    if (!line.name) line.name = line.partNumber ?? "";
     lines.push(line);
   }
   return lines;

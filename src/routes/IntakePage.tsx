@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UnknownLine } from "@/components/tracker/UnknownLine";
 import { useProcessTypes, useSubsystems } from "@/lib/tracker";
 import { cn } from "@/lib/utils";
 import { errorText } from "@/lib/errors";
@@ -269,7 +270,10 @@ function IntakeCard({
   // Assemblies come out first: the four buckets below are all about parts,
   // and none of their actions would mean anything applied to an assembly.
   const assemblies = undecided.filter((l) => l.target === "subAssembly");
-  const parts = undecided.filter((l) => l.target !== "subAssembly");
+  const bought = undecided.filter((l) => l.target === "cotsItem");
+  const parts = undecided.filter(
+    (l) => l.target !== "subAssembly" && l.target !== "cotsItem",
+  );
   const matched = parts.filter((l) => l.kind === "matched");
   const changed = parts.filter((l) => l.kind === "changed");
   const unknown = parts.filter((l) => l.kind === "unknown");
@@ -334,10 +338,11 @@ function IntakeCard({
       {unknown.length > 0 && (
         <div>
           <h3 className="text-sm font-semibold">
-            New parts · {unknown.length}
+            New to the tracker · {unknown.length}
           </h3>
           <p className="text-xs text-muted-foreground">
-            Numbers the tracker hasn't issued. Set each one up once.
+            Numbers the tracker hasn't issued. Say whether the team makes each
+            one or buys it.
           </p>
           <div className="mt-2 space-y-2">
             {unknown.map((line) => (
@@ -371,6 +376,22 @@ function IntakeCard({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {bought.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold">
+            Bought items · {bought.length}
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            Already on the Ordering board. Nothing to set up.
+          </p>
+          <div className="mt-2 space-y-2">
+            {bought.map((line) => (
+              <BoughtLine key={line._id} line={line} />
+            ))}
+          </div>
         </div>
       )}
 
@@ -486,91 +507,28 @@ function AssemblyLine({ line }: { line: Line }) {
   );
 }
 
-function UnknownLine({ line }: { line: Line }) {
-  const subsystems = useSubsystems();
-  const processes = useProcessTypes();
+/**
+ * Something the release named that the Ordering board already holds. There is
+ * nothing to decide — it exists, somebody is buying it — so the row is here
+ * to be seen and waved past.
+ */
+function BoughtLine({ line }: { line: Line }) {
   const applyLine = useMutation(api.intake.applyLine);
-  const [subsystemId, setSubsystemId] = useState<string>(
-    (line.subsystemId as string | undefined) ?? "",
-  );
-  const [processTypeId, setProcessTypeId] = useState("");
-  const [qtyNeeded, setQtyNeeded] = useState(String(line.quantity ?? 1));
-  const [qtySpares, setQtySpares] = useState("0");
-  const [error, setError] = useState<string | null>(null);
-
   return (
-    <div className="rounded-lg border p-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-medium">{line.name}</span>
-        <span className="font-mono text-xs text-muted-foreground">
-          {line.partNumber ?? "no number"}
-        </span>
-      </div>
-
-      <div className="mt-3 grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <Select value={subsystemId} onValueChange={setSubsystemId}>
-          <SelectTrigger aria-label="Subsystem">
-            <SelectValue placeholder="Subsystem" />
-          </SelectTrigger>
-          <SelectContent>
-            {(subsystems ?? []).map((s) => (
-              <SelectItem key={s._id} value={s._id}>
-                {s.code} · {s.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={processTypeId} onValueChange={setProcessTypeId}>
-          <SelectTrigger aria-label="Made on">
-            <SelectValue placeholder="Made on" />
-          </SelectTrigger>
-          <SelectContent>
-            {(processes ?? []).map((p) => (
-              <SelectItem key={p._id} value={p._id}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex gap-2">
-          <label className="grow text-xs text-muted-foreground">
-            On robot
-            <Input
-              type="number"
-              min={1}
-              className="mt-1"
-              value={qtyNeeded}
-              onChange={(e) => setQtyNeeded(e.target.value)}
-            />
-          </label>
-          <label className="grow text-xs text-muted-foreground">
-            Spares
-            <Input
-              type="number"
-              min={0}
-              className="mt-1"
-              value={qtySpares}
-              onChange={(e) => setQtySpares(e.target.value)}
-            />
-          </label>
-        </div>
-        <Button
-          onClick={() => {
-            setError(null);
-            applyLine({
-              lineId: line._id,
-              decision: "created",
-              subsystemId: subsystemId as Id<"subsystems">,
-              processTypeId: processTypeId as Id<"processTypes">,
-              qtyNeeded: Number(qtyNeeded) || 1,
-              qtySpares: Number(qtySpares) || 0,
-            }).catch((err: unknown) => setError(errorText(err, "No luck.")));
-          }}
-        >
-          Add to the board
-        </Button>
-      </div>
-      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+      <span className="min-w-0">
+        <span className="block font-medium">{line.name}</span>
+        <span className="block text-xs text-muted-foreground">{line.note}</span>
+      </span>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() =>
+          void applyLine({ lineId: line._id, decision: "ignored" })
+        }
+      >
+        Got it
+      </Button>
     </div>
   );
 }

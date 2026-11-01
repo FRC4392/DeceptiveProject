@@ -279,6 +279,60 @@ describe("taking a release in", () => {
     expect(parts.some((p) => p.partNumber === "99-XXX-001")).toBe(false);
   });
 
+  test("a vendor number the Ordering board holds is matched, not offered", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Compliant wheel",
+      qtyNeeded: 4,
+      vendorPartNumber: "AM-3104",
+    });
+    stubOnshape(
+      releasePackage([
+        { properties: [{ name: "Part number", value: "am 3104" }] },
+      ]),
+    );
+    await deliver(t);
+
+    const [{ lines }] = await mentor.query(api.intake.list, {});
+    expect(lines[0].kind).toBe("matched");
+    expect(lines[0].target).toBe("cotsItem");
+    expect(lines[0].cotsItemId).toBeDefined();
+    // And no second item, which is the whole point.
+    expect(await mentor.query(api.cots.list, {})).toHaveLength(1);
+  });
+
+  test("a part created from a release keeps its CAD link", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router } = await setup(t);
+    stubOnshape(
+      releasePackage([
+        {
+          documentId: "doc_1",
+          elementId: "el_1",
+          versionId: "v_1",
+          partId: "JHD",
+          properties: [{ name: "Part number", value: "99-XXX-001" }],
+        },
+      ]),
+    );
+    await deliver(t);
+
+    const [{ lines }] = await mentor.query(api.intake.list, {});
+    const partId = await mentor.mutation(api.intake.applyLine, {
+      lineId: lines[0]._id,
+      decision: "created",
+      subsystemId: intake._id,
+      processTypeId: router._id,
+    });
+    const part = await mentor.query(api.parts.get, { id: partId! });
+    // Without these the deep link is dead until a later sync finds it by
+    // number, which is a long time to have no way back to the CAD.
+    expect(part?.onshapeElementId).toBe("el_1");
+    expect(part?.onshapePartId).toBe("JHD");
+  });
+
   test("a package that isn't released yet puts nothing on the board", async () => {
     const t = convexTest(schema, modules);
     const { mentor } = await setup(t);

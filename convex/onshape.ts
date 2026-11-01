@@ -14,11 +14,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireMentor } from "./lib/auth";
 import { requireActiveSeason } from "./lib/season";
-import {
-  classifyAssemblyLine,
-  classifyRelease,
-  type KnownPart,
-} from "./lib/intake";
+import { classifyAssemblyLine, classifyRelease } from "./lib/intake";
+import { loadKnown } from "./lib/intakeKnown";
 import { normalizePartNumber } from "./lib/stages";
 
 const vOnshapeDoc = v.object({
@@ -149,6 +146,8 @@ export const receiveSync = internalMutation({
         quantity: v.optional(v.number()),
         onshapePartId: v.optional(v.string()),
         material: v.optional(v.string()),
+        /** Onshape library hardware, so the intake can offer Buy it first. */
+        standardContent: v.optional(v.boolean()),
       }),
     ),
   },
@@ -157,25 +156,10 @@ export const receiveSync = internalMutation({
     const season = await requireActiveSeason(ctx);
     const subsystemId = await subsystemForDocument(ctx, args.onshapeDocumentId);
 
-    const existing = subsystemId
-      ? await ctx.db
-          .query("parts")
-          .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
-          .take(5000)
-      : await ctx.db
-          .query("parts")
-          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
-          .take(5000);
-    const live = existing.filter((p) => !p.isArchived);
-    const known: KnownPart[] = live.map((p) => ({
-      partNumber: p.partNumber,
-      stage: p.stage,
-      qtyMade: p.qtyMade,
-      revision: p.revision,
-    }));
-    const byNumber = new Map(
-      live.map((p) => [normalizePartNumber(p.partNumber), p]),
-    );
+    const { known, byNumber, bought, boughtByNumber } = await loadKnown(ctx, {
+      seasonId: season._id,
+      subsystemId: subsystemId ?? undefined,
+    });
 
     const classified = classifyRelease(
       args.parts.map((p) => ({
@@ -185,6 +169,7 @@ export const receiveSync = internalMutation({
         quantity: p.quantity,
       })),
       known,
+      { bought },
     );
 
     const label = [args.documentName, args.elementName ?? args.assembly?.name]
@@ -210,6 +195,12 @@ export const receiveSync = internalMutation({
       // would cross-wire their Onshape ids. `classifyRelease` preserves order,
       // and anything it appends past the input runs off the end harmlessly.
       const source = args.parts[index];
+      // Which collection matched is the classifier's answer, read back rather
+      // than worked out again here.
+      const boughtMatch =
+        line.target === "cotsItem" && line.partNumber
+          ? boughtByNumber.get(normalizePartNumber(line.partNumber))
+          : undefined;
       await ctx.db.insert("releaseIntakeLines", {
         intakeId,
         partNumber: line.partNumber,
@@ -217,8 +208,16 @@ export const receiveSync = internalMutation({
         name: line.name,
         quantity: line.quantity,
         kind: line.kind,
+        target: boughtMatch ? "cotsItem" : undefined,
         partId: match?._id,
-        subsystemId: match?.subsystemId ?? subsystemId,
+        cotsItemId: boughtMatch?._id,
+        standardContent: source?.standardContent,
+        subsystemId:
+          match?.subsystemId ?? boughtMatch?.subsystemId ?? subsystemId,
+        onshapeDocumentId: args.onshapeDocumentId,
+        onshapeElementId: args.onshapeElementId,
+        onshapePartId: source?.onshapePartId,
+        onshapeVersionId: args.versionId,
         note: line.explanation,
       });
       // Keep the CAD links on parts we already know current, so deep links and
@@ -450,21 +449,9 @@ export const receiveRelease = internalMutation({
 
     // A release can span subsystems, so the comparison set is the season
     // rather than one document's subsystem the way a panel sync does it.
-    const live = (
-      await ctx.db
-        .query("parts")
-        .withIndex("by_season", (q) => q.eq("seasonId", season._id))
-        .take(5000)
-    ).filter((p) => !p.isArchived);
-    const known: KnownPart[] = live.map((p) => ({
-      partNumber: p.partNumber,
-      stage: p.stage,
-      qtyMade: p.qtyMade,
-      revision: p.revision,
-    }));
-    const byNumber = new Map(
-      live.map((p) => [normalizePartNumber(p.partNumber), p]),
-    );
+    const { known, byNumber, bought, boughtByNumber } = await loadKnown(ctx, {
+      seasonId: season._id,
+    });
 
     const classified = classifyRelease(
       parts.map((p) => ({
@@ -473,6 +460,7 @@ export const receiveRelease = internalMutation({
         name: p.name,
       })),
       known,
+      { bought },
     );
 
     const fields = {
@@ -517,15 +505,33 @@ export const receiveRelease = internalMutation({
       const match = line.partNumber
         ? byNumber.get(normalizePartNumber(line.partNumber))
         : undefined;
+      // Which collection matched is the classifier's answer, read back rather
+      // than worked out again here.
+      const boughtMatch =
+        line.target === "cotsItem" && line.partNumber
+          ? boughtByNumber.get(normalizePartNumber(line.partNumber))
+          : undefined;
       await ctx.db.insert("releaseIntakeLines", {
         intakeId,
         partNumber: line.partNumber,
         revision: line.revision,
         name: line.name,
         kind: line.kind,
+        target: boughtMatch ? "cotsItem" : undefined,
         partId: match?._id,
+        cotsItemId: boughtMatch?._id,
         subsystemId:
-          match?.subsystemId ?? (await subsystemFor(source?.documentId)),
+          match?.subsystemId ??
+          boughtMatch?.subsystemId ??
+          (await subsystemFor(source?.documentId)),
+        // Kept on the line, not just patched onto a part we already knew:
+        // a line the board doesn't recognise is the one case that has
+        // nowhere else to hold them, and it is also the only kind a lead
+        // turns into something new.
+        onshapeDocumentId: source?.documentId,
+        onshapeElementId: source?.elementId,
+        onshapePartId: source?.partId,
+        onshapeVersionId: source?.versionId,
         note: line.explanation,
       });
       // Keep the CAD links current on parts we recognise, so the derived deep
