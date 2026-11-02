@@ -1,6 +1,8 @@
 # Moving this to production
 
-Written 1 November 2026, against the `new-tracker` branch at `3e01d87`.
+Written 1 November 2026. **This deployment is done** — production is on the
+new schema and in use. The file stays as the record of what was set and why,
+and as the runbook for the next deployment.
 
 Everything below was checked against the live production deployment rather
 than assumed, and the checks are named so you can re-run them yourself.
@@ -38,9 +40,11 @@ like — both are safe to re-run — but neither is a blocker.
 
 So this is a configuration job, not a migration.
 
-**Deployed 1 November 2026.** Production is running the new code; steps 1
-through 6 are done. What is left is step 7, the in-app first run, plus the
-Clerk session token template in step 4 and the cleanup in step 8.
+**Deployed 1 November 2026.** Steps 1 through 8 are done, bar two things
+deferred on purpose: the Onshape document mapping in step 7, which waits on
+there being CAD to map at kickoff, and the Clerk session token claims in
+step 4, which are being handled as people sign in. §7a is what the second one
+costs when it isn't done first.
 
 ## 1. Merge the PR
 
@@ -320,9 +324,10 @@ Delete the leftover duplicate afterwards.
 **The real fix is step 4.** Configure the session token claims and none of
 this arises: people land with their name, email and role the first time.
 
-## 8. Cleanup on production
+## 8. Cleanup on production — done
 
-**Four dead environment variables.** Production carries `WORKOS_API_KEY`,
+**Four dead environment variables — removed.** Production carried
+`WORKOS_API_KEY`,
 `WORKOS_CLIENT_ID`, `WORKOS_WEBHOOK_SECRET` and `WORKOS_ACTION_SECRET`, left
 over from a previous auth provider. Nothing in this codebase reads them — a
 case-insensitive search for `workos` across the repo returns nothing:
@@ -337,8 +342,8 @@ npx convex env remove --prod WORKOS_ACTION_SECRET
 If WorkOS is still wired up anywhere outside this repo, leave them; otherwise
 they are credentials sitting in an environment for no reason.
 
-**Eight orphaned tables.** These exist on production and are no longer in the
-schema. `boards` holds one row — a "Software" board the old GitHub sync
+**Eight orphaned tables — removed.** These existed on production and were no
+longer in the schema. `boards` holds one row — a "Software" board the old GitHub sync
 created during the webhook mishap above; the `issues` and `tasks` rows from
 that same delivery have been deleted. The rest are
 empty: `githubRepos`, `partComments`, `projects`, `qcChecks`,

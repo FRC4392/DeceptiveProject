@@ -1,85 +1,68 @@
 # What's left
 
-Written 1 November 2026, on the `new-tracker` branch, which is pushed. Build,
-lint and all 493 tests pass; the working tree is clean. Everything below is
-either configuration nobody has done yet, a rough edge we've decided to live
-with, or a decision worth taking deliberately.
+Written 1 November 2026. Production is deployed and running on `main`; build,
+lint and all 493 tests pass. Everything below is either a decision taken
+deliberately, something waiting on kickoff, or a rough edge worth knowing
+about. Nothing here blocks the team using the tracker.
 
-## Blocking: nothing, now
+## One real code item
 
-The webhook is registered and a real Classroom release has been through end
-to end. What that turned up — numeric `elementType`, nested `children`, and
-the confirmation that the state really is `RELEASED` — is written up in the
-README under the release webhook.
+- [ ] **A new season will recreate the `Bought (COTS)` process type.**
+      `DEFAULT_PROCESSES` in `convex/seasons.ts` still seeds it, so the
+      process deleted from production comes back the next time
+      `seedDefaults` runs for a new year. Nothing breaks if it does — the
+      intake filters bought processes out of _Made on_, so it can no longer
+      create a part at _Ready to assemble_ that nobody ordered — but it's a
+      dead option in every other process picker. One line to remove, and
+      worth doing before kickoff rather than explaining it afterwards.
 
-## Housekeeping on the deployment
+## Waiting on kickoff, on purpose
 
-- [x] **`GITHUB_TOKEN` is set**, so issue commenting and bulk import work.
-- [x] **Merged to `main`** as `1ca6305`, and production is running it.
-- [ ] **Finish the production first run** — the season, the Clerk roster, the
-      Onshape connection, the release webhook and the document mapping are all
-      still to do, in the app. `DEPLOY-PROD.md` has the order and the reasons.
-- [ ] **Set the Clerk session token claims** on the production instance —
-      `email`, `name` and `role`. This is not cosmetic: without them a
-      sign-in writes a row with no email and a name equal to the Clerk user
-      id, which is how production ended up with two rows for one person and
-      nobody able to reach Settings. The roster sync repairs the rows after
-      the fact; the claims stop it happening. `DEPLOY-PROD.md` §7a has the
-      symptoms.
-- [ ] **Delete eight orphaned tables** on production, left from the old
-      schema. One `boards` row is junk from a webhook that fired against the
-      old code mid-deploy; the rest are empty.
+- [ ] **Map the Onshape documents to subsystems**, in Admin → Onshape.
+      Without it a release still arrives on New from Onshape; its lines just
+      come in with no subsystem filled in, so a lead picks one per line.
+      There is one subsystem (Drivetrain) and no CAD yet, so there is
+      nothing to map until the season starts.
 
-## Decided to live with
+## Known, and left alone
 
-- [x] **682 kB JS bundle**, past Vite's 500 kB warning. Accepted as-is: it
-      gzips to 197 kB, it's `convex` + `@clerk/react` + `react-dom` + Radix
-      rather than anything of ours, and the pit crew loads the app once on a
-      field laptop. If it ever does need to come down, the two moves are
-      `manualChunks` for the vendors and lazy-loading `LoginPage` — the only
-      consumer of Clerk's `SignIn`, sitting outside `RequireAuth`, so every
-      signed-in user downloads a sign-in screen they never render. Note
-      `src/e2e/app-smoke.test.tsx` mounts routes synchronously, so `Suspense`
-      boundaries would need those cases reworked.
+- [ ] **The Clerk session token carries no `email`, `name` or `role`
+      claims**, so a first sign-in writes a row with an empty email and a
+      name equal to the Clerk user id. Being handled as people log in rather
+      than fixed up front. The cost is on the record: it is what produced
+      two rows for one person on production and locked everyone out of
+      Settings for an afternoon. `DEPLOY-PROD.md` §7a has the symptoms and
+      the way out. Setting the claims stops it arising at all.
+- [ ] **682 kB JS bundle**, past Vite's 500 kB warning. Accepted: it gzips to
+      197 kB, it's `convex` + `@clerk/react` + `react-dom` + Radix rather
+      than anything of ours, and the pit crew loads the app once on a field
+      laptop. If it ever needs to come down, the two moves are `manualChunks`
+      for the vendors and lazy-loading `LoginPage` — the only consumer of
+      Clerk's `SignIn`, sitting outside `RequireAuth`, so every signed-in
+      user downloads a sign-in screen they never render. Note
+      `src/e2e/app-smoke.test.tsx` mounts routes synchronously, so
+      `Suspense` boundaries would need those cases reworked.
 
-## The BOM CSV
-
-The export heads `Item, Quantity, Name, Vendor, Part Number, Revision`.
-Quantity, name, part number and revision all map; `Item` and `Vendor` are
-ignored harmlessly, since unknown columns are skipped by position.
-
-- [x] **Revision is in the export**, so rework detection works: a
-      re-released part now reads as _changed_ and the Fix them / Remake all /
-      They're fine as-is decision appears. `revision` and `rev` both map, so
-      this needed no code change.
-
-## Decided and done
-
-- [x] **Bought items import from every path.** A line the tracker has no
-      number for now asks **We make it** or **We buy it**, once, on the one
-      queue all three paths already shared. Buy it goes to the Ordering board
-      at _Needed_ with its vendor, takes no tracker number, and is recognised
-      on the next release by the vendor's own number — including the items the
-      team had already entered by hand, since the key comes off the number a
-      human types.
-
-      It also closed a bug nobody had noticed: accepting a line with the
-      `Bought (COTS)` process made a part at stage 5, **Ready to assemble** —
-      in the bin, as far as "Can we build it yet?" was concerned, before
-      anyone had ordered it. That process is no longer offered on the intake
-      screen. It still exists everywhere else, so nothing needed migrating.
-
-## Watch on the next release
+## Watch on the first real assembly sync
 
 - [ ] **Standard content now arrives.** The panel sync used to drop Onshape's
       library fasteners; it now brings them in as lines to buy, one row per
-      distinct fastener with its placement count. Worth watching the first
-      real assembly sync to see whether that is a useful Ordering list or more
-      rows than a lead wants to clear. If it's too much, the tag is already on
-      the line — `standardContent` — so filtering is a one-line change.
-- [ ] **Prod needs the schema push**, but no backfill for this. `cotsItems`
-      gained the CAD-link fields and `releaseIntakeLines` gained
-      `target: "cotsItem"`, `cotsItemId`, `vendor`, `standardContent` and
-      `onshapePartId` — all optional. A bought item is matched on the vendor
-      number itself, normalized at match time, so the items the team typed in
-      by hand are recognised as they stand.
+      distinct fastener with its placement count rather than one per bolt. A
+      release package never contains them, so this is the panel path only.
+      Worth seeing whether that is a useful Ordering list or more rows than a
+      lead wants to clear. If it's too much, the lines are tagged
+      `standardContent`, so filtering them back out is a one-line change.
+
+## Done
+
+Production is on the new schema and verified against the live deployment: all
+ten environment variables set, the four `WORKOS_*` leftovers and the eight
+orphaned tables from the old schema removed, Onshape connected, the release
+webhook registered and pinged back, GitHub issue sync running, the roster
+synced, and the 2027 season created with Drivetrain and its `27-DRV-000`
+default sub-assembly. Two of 2,500 Onshape calls used.
+
+The BOM export heads `Item, Quantity, Name, Vendor, Part Number, Revision`.
+Quantity, name, part number, revision and vendor all map; `Item` is ignored
+harmlessly. A row with a vendor and no part number — what hardware looks like
+in an export — is kept rather than dropped, and answers _We buy it_ first.

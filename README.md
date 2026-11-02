@@ -152,9 +152,9 @@ the robot. Six stages, left to right:
 
 A part's **process** decides which stages it skips: a 3D print needs no
 drawing, and a part with no finishing goes from the machine straight to the
-bin. Bought (COTS) items get no part number at all — they're tracked per
-subsystem as _Needed → Ordered → Arrived_, and _Arrived_ counts as ready to
-assemble. They live on their own **Ordering** board, laid out like the parts
+bin. Bought items aren't parts and have no process at all: they take no
+tracker number, and are tracked per subsystem as
+_Needed → Ordered → Arrived_, where _Arrived_ counts as ready to assemble. They live on their own **Ordering** board, laid out like the parts
 board with a column per state — ordering is one person's job for an afternoon,
 and doing it from five subsystem pages meant opening five subsystem pages. The
 card opens the item, the way a part card opens a part, with one big button
@@ -353,8 +353,10 @@ src/
   components/ui/     shadcn/ui primitives
 ```
 
-Outstanding work, configuration nobody has done yet, and the Onshape
-assumptions still unverified are listed in [TODO.md](TODO.md).
+Outstanding work is listed in [TODO.md](TODO.md). Moving a deployment to
+production — the environment variables, the three dashboards whose URLs are
+per-deployment, and the order the first run has to happen in — is written up
+in [DEPLOY-PROD.md](DEPLOY-PROD.md).
 
 ## First run
 
