@@ -1,6 +1,8 @@
 # Moving this to production
 
-Written 1 November 2026, against the `new-tracker` branch at `3e01d87`.
+Written 1 November 2026. **This deployment is done** — production is on the
+new schema and in use. The file stays as the record of what was set and why,
+and as the runbook for the next deployment.
 
 Everything below was checked against the live production deployment rather
 than assumed, and the checks are named so you can re-run them yourself.
@@ -37,6 +39,12 @@ only matters for subsystems created outside the season seeder. Run them if you
 like — both are safe to re-run — but neither is a blocker.
 
 So this is a configuration job, not a migration.
+
+**Deployed 1 November 2026.** Steps 1 through 8 are done, bar two things
+deferred on purpose: the Onshape document mapping in step 7, which waits on
+there being CAD to map at kickoff, and the Clerk session token claims in
+step 4, which are being handled as people sign in. §7a is what the second one
+costs when it isn't done first.
 
 ## 1. Merge the PR
 
@@ -197,13 +205,23 @@ from inside the app, in step 7.
 
 ## 6. The GitHub webhook
 
-**This one can be done and verified before the merge.** `main` already serves
-`/github/webhook` with the same signature check and the same `ping` → `pong`
-reply, so a green first delivery is a real result today. That is not true of
-the Onshape release webhook: `/onshape/webhook` **does not exist on `main`**,
-so registering it before the merge would point Onshape at a 404. It is
-registered from inside the app in step 7, after the deploy, which is why it
-sits there and not here.
+**Do this after the deploy, not before it.** An earlier version of this file
+said the opposite, on the grounds that `main` already served `/github/webhook`
+with the same signature check and the same `ping` → `pong` reply — which is
+true, and beside the point. The ping is safe. The _first real delivery_ is
+not: it is handled by whatever code is live, and the old code wrote an
+`issues` row carrying `linkedTaskId`, a field the new schema has no validator
+for. That one row then failed schema validation and aborted the production
+deploy.
+
+It is worth stating as a rule, because it is not specific to GitHub: **while
+the old code is still live, any webhook that writes data can block the new
+schema.** Point webhooks at production only once production is running the
+code whose schema they will be writing against.
+
+The Onshape release webhook has the same ordering for a different reason:
+`/onshape/webhook` does not exist on `main` at all, so registering it early
+points Onshape at a 404. It is registered from inside the app in step 7.
 
 | Field            | Value                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------------- |
@@ -227,8 +245,8 @@ from GitHub's own delivery log:
 | `400 Bad JSON`               | Content type is form-encoded instead of JSON                          |
 | `200 pong`                   | Working. GitHub signs the ping too, so this proves the secret matches |
 
-Issues carry no `seasonId`, so none of this waits on a season existing —
-GitHub sync is the one piece that works on a completely fresh deployment.
+Issues carry no `seasonId`, so this doesn't wait on a season existing. It does
+wait on the deploy, for the reason above.
 
 ## 7. First run, in this order
 
@@ -264,9 +282,52 @@ Then release something small in Onshape and watch it arrive under **New from
 Onshape**, and watch the budget meter on that page move by one. That is the
 end-to-end check.
 
-## 8. Cleanup on production
+## 7a. If nobody can reach Settings
 
-**Four dead environment variables.** Production carries `WORKOS_API_KEY`,
+This happened, and it cost an afternoon, so it is written down.
+
+**The symptom:** you sign in, the app loads, and Settings isn't there. The
+console is clean, the Clerk token is valid, and `grantRole` reports success.
+
+**The cause:** the session token claims in step 4. Before they are configured,
+a token carries no `email`, `name` or `role`, so `storeCurrentUser`
+(`convex/auth.ts`) inserts a row with an empty email, a name equal to the
+Clerk user id, and the role `student`. Sign in from a second context and you
+can end up with **two rows for the same person**, neither of them obviously
+yours, because neither carries an email.
+
+`grantRole` matches on email, and those rows have none — so granting by email
+silently lands on whichever row does have it, which may be an old one that no
+longer matches the id you are actually signing in with. Everything reports
+success and nothing changes.
+
+**How to tell:** list the users and look for rows whose `name` equals their
+`authId` and whose `email` is empty. Those are claimless sign-ins.
+
+```bash
+npx convex data --prod users --limit 50
+```
+
+**The fix:** grant the role by `authId` rather than email, targeting the row
+whose id matches the `sub` in your own token —
+
+```js
+window.Clerk.session
+  .getToken()
+  .then((t) => console.log(JSON.parse(atob(t.split(".")[1]))));
+```
+
+— then run the roster sync from Settings → People, which reads the Clerk API
+directly and is authoritative, so it fills in every empty email and name.
+Delete the leftover duplicate afterwards.
+
+**The real fix is step 4.** Configure the session token claims and none of
+this arises: people land with their name, email and role the first time.
+
+## 8. Cleanup on production — done
+
+**Four dead environment variables — removed.** Production carried
+`WORKOS_API_KEY`,
 `WORKOS_CLIENT_ID`, `WORKOS_WEBHOOK_SECRET` and `WORKOS_ACTION_SECRET`, left
 over from a previous auth provider. Nothing in this codebase reads them — a
 case-insensitive search for `workos` across the repo returns nothing:
@@ -281,11 +342,15 @@ npx convex env remove --prod WORKOS_ACTION_SECRET
 If WorkOS is still wired up anywhere outside this repo, leave them; otherwise
 they are credentials sitting in an environment for no reason.
 
-**Eight orphaned tables.** These exist on production, are all empty, and are
-no longer in the schema: `boards`, `githubRepos`, `partComments`, `projects`,
-`qcChecks`, `taskAttachments`, `taskComments`, `tasks`. Being empty, they
-won't block the deploy and the app will ignore them. Delete them from the
-Convex dashboard when you want the table list to match the code.
+**Eight orphaned tables — removed.** These existed on production and were no
+longer in the schema. `boards` holds one row — a "Software" board the old GitHub sync
+created during the webhook mishap above; the `issues` and `tasks` rows from
+that same delivery have been deleted. The rest are
+empty: `githubRepos`, `partComments`, `projects`, `qcChecks`,
+`taskAttachments`, `taskComments`, `tasks`. None of them block anything —
+Convex validates the tables the schema declares, and these aren't among them —
+and the app ignores them. Delete them from the Convex dashboard when you want
+the table list to match the code.
 
 **Never run the sample-data seeder on production.** `seed:sampleParts` and
 `seed:wipeParts` are internal mutations with no production guard beyond not
