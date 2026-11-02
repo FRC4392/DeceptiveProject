@@ -236,15 +236,20 @@ const DEFAULT_MACHINES = [
 ];
 
 // [process name, machine name or null, needsDrawing, needsFinishing]
-const DEFAULT_PROCESSES: [string, string | null, boolean, boolean, boolean][] =
-  [
-    ["CNC router", "CNC router", true, true, false],
-    ["Mill", "Mill", true, true, false],
-    ["Lathe", "Lathe", true, true, false],
-    ["Bandsaw + drill", "Bandsaw", true, true, false],
-    ["3D print", "3D printer", false, false, false],
-    ["Bought (COTS)", null, false, false, true],
-  ];
+//
+// No bought process is seeded. Something the team buys isn't a part and takes
+// no tracker number — it goes on the Ordering board, which is where the
+// intake sends it. A seeded "Bought (COTS)" was worse than nothing: picking
+// it made a part at stage 5, Ready to assemble, which counts as in the bin
+// before anyone has ordered the thing. `processTypes.isBought` still exists,
+// so a mentor who wants one can add it in Settings.
+const DEFAULT_PROCESSES: [string, string | null, boolean, boolean][] = [
+  ["CNC router", "CNC router", true, true],
+  ["Mill", "Mill", true, true],
+  ["Lathe", "Lathe", true, true],
+  ["Bandsaw + drill", "Bandsaw", true, true],
+  ["3D print", "3D printer", false, false],
+];
 
 export const seedDefaults = mutation({
   args: { year: v.string(), name: v.string() },
@@ -290,14 +295,12 @@ export const seedDefaults = mutation({
         machineName,
         needsDrawing,
         needsFinishing,
-        isBought,
       ] of DEFAULT_PROCESSES) {
         await ctx.db.insert("processTypes", {
           name: pName,
           machineId: machineName ? machineIds.get(machineName) : undefined,
           needsDrawing,
           needsFinishing,
-          isBought,
           order: pOrder++,
         });
       }

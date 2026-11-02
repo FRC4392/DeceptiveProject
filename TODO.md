@@ -1,20 +1,9 @@
 # What's left
 
 Written 1 November 2026. Production is deployed and running on `main`; build,
-lint and all 493 tests pass. Everything below is either a decision taken
+lint and all 494 tests pass. Everything below is either a decision taken
 deliberately, something waiting on kickoff, or a rough edge worth knowing
 about. Nothing here blocks the team using the tracker.
-
-## One real code item
-
-- [ ] **A new season will recreate the `Bought (COTS)` process type.**
-      `DEFAULT_PROCESSES` in `convex/seasons.ts` still seeds it, so the
-      process deleted from production comes back the next time
-      `seedDefaults` runs for a new year. Nothing breaks if it does — the
-      intake filters bought processes out of _Made on_, so it can no longer
-      create a part at _Ready to assemble_ that nobody ordered — but it's a
-      dead option in every other process picker. One line to remove, and
-      worth doing before kickoff rather than explaining it afterwards.
 
 ## Waiting on kickoff, on purpose
 
@@ -54,6 +43,12 @@ about. Nothing here blocks the team using the tracker.
       `standardContent`, so filtering them back out is a one-line change.
 
 ## Done
+
+A season no longer seeds a bought process. Something the team buys isn't a
+part and takes no tracker number; it belongs on the Ordering board, which is
+where the intake sends it. `processTypes.isBought` still exists, so a mentor
+who wants one can add it in Settings — it just isn't there by default, and a
+test pins that.
 
 Production is on the new schema and verified against the live deployment: all
 ten environment variables set, the four `WORKOS_*` leftovers and the eight

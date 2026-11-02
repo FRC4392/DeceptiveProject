@@ -38,6 +38,27 @@ async function makePart(mentor: Mentor, code: string, name: string) {
   return partNumber;
 }
 
+describe("what a season is seeded with", () => {
+  test("no bought process, so nothing can be made Ready to assemble unbought", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const processes = await mentor.query(api.shop.listProcessTypes, {});
+
+    // A bought process used to be seeded, and picking it put a part straight
+    // at stage 5 — in the bin, as far as "Can we build it yet?" was
+    // concerned, before anybody had ordered the thing. Bought items go to the
+    // Ordering board now.
+    expect(processes.some((p) => p.isBought)).toBe(false);
+    expect(processes.map((p) => p.name)).toEqual([
+      "CNC router",
+      "Mill",
+      "Lathe",
+      "Bandsaw + drill",
+      "3D print",
+    ]);
+  });
+});
+
 describe("adding a season", () => {
   test("a new year starts with Drivetrain and its 000 assembly, and nothing else", async () => {
     const t = convexTest(schema, modules);
