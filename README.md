@@ -304,7 +304,8 @@ convex/
                      problems), partNumberCounters, machines, processTypes,
                      training, cotsItems, assembly steps, release intakes,
                      apiCalls, appSettings, onshape*, todos/todoTags/
-                     todoNotes, issues/issueComments, inventoryItems
+                     todoNotes, issues/issueComments/githubRepos,
+                     inventoryItems
   lib/stages.ts      the stage model: what comes next and who may move it.
                      Imported by the React screens too
   lib/numbering.ts   {YY}-{SUB}-{NNN}, taken inside the mutation transaction
@@ -332,7 +333,10 @@ convex/
   dashboard.ts       aggregate dashboard/countdown stats
   competitions.ts    competition dates, per season
   inventory.ts       stocked-inventory items
-  github.ts          GitHub issue/PR queries, mutations, repo mapping
+  github.ts          GitHub issue/PR queries, mutations, the repo registry
+                     and the write-back actions
+  lib/githubRepos.ts which repos the issue list is about: this season's,
+                     every season's, or ignored
 src/
   main.tsx           ClerkProvider + ConvexProviderWithClerk + router
   Layout.tsx         authenticated shell
@@ -349,7 +353,7 @@ src/
                      GetNumberDialog, ProblemDialog, PartChips,
                      SubAssemblies, SubAssemblyCard, TodoCard,
                      TodoFormDialog
-  components/pm/     IssueFormDialog, PriorityBadge
+  components/pm/     IssueFormDialog, PriorityBadge, MarkdownBody
   components/ui/     shadcn/ui primitives
 ```
 
@@ -398,6 +402,12 @@ Events belong to a season too, so last year's regionals stop counting down the
 moment you move on. Machines, process types, to-do tags, inventory, issues and
 the roster are team-wide and outlive a season — a bandsaw doesn't change in
 April.
+
+Issues are the one of those with a season-shaped **view**. An issue carries no
+season — an issue on the tracker's own repo belongs to no year — but the repo it
+came from does, so Issues shows this season's repos by default and last year's
+leave on their own when the team moves on. Nothing to switch, nothing to
+backfill; see [the issue tracker](#the-issue-tracker) below.
 
 There is no way to delete a season, on purpose. Its parts, assemblies, numbers,
 to-dos and bought items are the record of that robot, and looking back is the
@@ -652,6 +662,42 @@ sub-lists — built to read like the parts board:
 
 Only a lead or mentor can delete a to-do; anyone can add, edit, claim and
 finish one.
+
+## The issue tracker
+
+Software bugs and the GitHub issues and pull requests that sync in, laid out
+like the parts board. A GitHub issue can be claimed by someone here, given a
+priority that survives re-sync, commented on, and closed or reopened on GitHub.
+A bug reported in the app — **Report a bug** — stays here: it has no repo, so
+there is nowhere to send it, and nothing in the app invents one.
+
+**One webhook, many repos.** The webhook does not need setting up per repo, and
+shouldn't be: point one organisation-level webhook at `/github/webhook` and
+every repo the team owns arrives, including the ones that don't exist yet. What
+anybody _sees_ is then decided in the app, in **Admin → GitHub → Repositories**,
+where every repo that has ever delivered is listed as one of three things:
+
+|                  | What it means                                           | Where it shows                                                          |
+| ---------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **This season**  | This year's work, tied to a season                      | The default view, while that season is the current one                  |
+| **Every season** | Reused year after year — this tracker, the scouting app | Its own filter. Never the default, because it would be there every year |
+| **Ignored**      | Someone's fork, a scratch repo                          | Nowhere. Deliveries are accepted and dropped                            |
+
+A repo nobody has sorted yet registers itself as **this season's** the first
+time it delivers, which is what a new repo mid-season almost always is, and the
+Issues page says so until a mentor confirms it. _Forget its issues_ throws away
+what an ignored repo already imported, which is the other half of never wanting
+to see it.
+
+**Nothing happens when the season turns.** Last year's repo keeps last year's
+season, so its issues leave the default view by themselves and are still there
+under _All repos_, or filtered to that one repo. The dashboard's open-issue
+count reads the same scope, so the two can't disagree.
+
+Comment and description bodies are the markdown GitHub stores, rendered as
+markdown — code blocks and tables scroll sideways inside their box rather than
+wrapping, and raw HTML is never rendered, because the text comes from whoever
+opened the issue.
 
 ## Settings
 

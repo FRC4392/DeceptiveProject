@@ -22,8 +22,8 @@ about. Nothing here blocks the team using the tracker.
       two rows for one person on production and locked everyone out of
       Settings for an afternoon. `DEPLOY-PROD.md` §7a has the symptoms and
       the way out. Setting the claims stops it arising at all.
-- [ ] **682 kB JS bundle**, past Vite's 500 kB warning. Accepted: it gzips to
-      197 kB, it's `convex` + `@clerk/react` + `react-dom` + Radix rather
+- [ ] **859 kB JS bundle**, past Vite's 500 kB warning. Accepted: it gzips to
+      251 kB, it's `convex` + `@clerk/react` + `react-dom` + Radix rather
       than anything of ours, and the pit crew loads the app once on a field
       laptop. If it ever needs to come down, the two moves are `manualChunks`
       for the vendors and lazy-loading `LoginPage` — the only consumer of
@@ -31,6 +31,12 @@ about. Nothing here blocks the team using the tracker.
       user downloads a sign-in screen they never render. Note
       `src/e2e/app-smoke.test.tsx` mounts routes synchronously, so
       `Suspense` boundaries would need those cases reworked.
+
+      It grew by 54 kB gzipped when the issue viewer started rendering GitHub's
+      markdown (`react-markdown` + `remark-gfm`). Deliberate: comments arrive
+      as markdown and reading them as source was the complaint. Lazy-loading
+      `MarkdownBody` is the obvious saving and runs into the same
+      synchronous-mount problem as `LoginPage` above.
 
 ## Watch on the first real assembly sync
 

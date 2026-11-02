@@ -3,6 +3,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { activeSeason } from "./lib/season";
+import { inScope, scopedRepos } from "./lib/githubRepos";
 import {
   ASSEMBLED_STAGE,
   computeAssemblyStatuses,
@@ -83,7 +84,13 @@ export const summary = query({
           .withIndex("by_season", (q) => q.eq("seasonId", season._id))
           .take(SCAN_LIMIT)
       : [];
-    const issues = await ctx.db.query("issues").take(SCAN_LIMIT);
+    // Issues carry no season of their own; their repo does. Count the ones in
+    // the season's repos, plus the bugs reported in the app, so this agrees
+    // with what the Issues page shows by default.
+    const issueScope = await scopedRepos(ctx, "season");
+    const issues = (await ctx.db.query("issues").take(SCAN_LIMIT)).filter((i) =>
+      inScope(issueScope, i),
+    );
 
     // How many sub-assemblies could be put together right now — the one
     // number that says what today's work could be.

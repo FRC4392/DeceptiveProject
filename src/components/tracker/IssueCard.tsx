@@ -14,9 +14,15 @@ import { cn } from "@/lib/utils";
 export function IssueCard({
   issue,
   claimantName,
+  repoLabel,
 }: {
   issue: Doc<"issues">;
   claimantName?: string;
+  /**
+   * What the team calls the repo, when the card has to say which repo this is.
+   * Left out where the heading above already says it.
+   */
+  repoLabel?: string;
 }) {
   const currentUserId = useCurrentUserId();
   const claim = useMutation(api.github.claim);
@@ -32,17 +38,23 @@ export function IssueCard({
       )}
     >
       <Link to={`/issues/${issue._id}`} className="block">
-        <div className="flex items-start justify-between gap-2">
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-sm font-medium">
+        <div className="flex min-w-0 items-start justify-between gap-2">
+          {/* A repo name can be longer than the card; let it shrink and clip
+              rather than push the state chip off the edge. */}
+          <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-sm font-medium">
             {issue.source === "github" && (
-              <GitHubLogoIcon className="h-3.5 w-3.5 text-muted-foreground" />
+              <GitHubLogoIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             )}
-            {issueRef(issue)}
+            <span className="truncate">{issueRef(issue, repoLabel)}</span>
           </span>
-          <Chip className={state.badgeClass}>{state.label}</Chip>
+          <Chip className={cn("shrink-0", state.badgeClass)}>
+            {state.label}
+          </Chip>
         </div>
 
-        <p className="mt-1 text-sm font-semibold leading-snug">{issue.title}</p>
+        <p className="mt-1 break-words text-sm font-semibold leading-snug">
+          {issue.title}
+        </p>
 
         <div className="mt-2 flex flex-wrap gap-1.5">
           {issue.isPullRequest && (

@@ -515,6 +515,41 @@ export default defineSchema({
   }).index("by_token", ["token"]),
 
   // ---- GitHub issue/PR sync ----
+  // Every GitHub repo the webhook has delivered from, and what the team wants
+  // done with it. One organisation-level webhook feeds everything in, so this
+  // table — not the webhook configuration — is what decides who looks at what.
+  //
+  // A repo nobody has sorted yet is still a row: the webhook registers it as
+  // this season's on first delivery, which is what a new repo mid-season almost
+  // always is, and `reviewedAt` is how Admin asks a mentor to confirm.
+  githubRepos: defineTable({
+    /** "FRC4392/DeceptiveProject", spelled the way GitHub spells it. */
+    fullName: v.string(),
+    /** `fullName` lower-cased. GitHub treats names case-insensitively and the
+     *  one a mentor types rarely matches the one a payload carries. */
+    nameKey: v.string(),
+    /** What the chips show, when "robot-code-2027" isn't what anyone calls it. */
+    label: v.optional(v.string()),
+    kind: v.union(
+      // This year's work. Shown by default while its season is the current one,
+      // and gone from the default view the moment the team moves on.
+      v.literal("season"),
+      // Reused year after year — the tracker itself, the scouting app. Never in
+      // the season view, because it would be there every year.
+      v.literal("ongoing"),
+      // Deliveries dropped on arrival. Nothing is stored and nothing is shown.
+      v.literal("ignored"),
+    ),
+    /** Which year, when `kind` is "season". Meaningless otherwise. */
+    seasonId: v.optional(v.id("seasons")),
+    order: v.number(),
+    firstSeenAt: v.number(),
+    /** Unset until a mentor has confirmed the guess the webhook made. */
+    reviewedAt: v.optional(v.number()),
+  })
+    .index("by_nameKey", ["nameKey"])
+    .index("by_kind", ["kind"]),
+
   issues: defineTable({
     source: v.union(v.literal("github"), v.literal("manual")),
     repo: v.optional(v.string()),

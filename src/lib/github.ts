@@ -26,10 +26,14 @@ export function issueStateMeta(state: IssueState) {
   return ISSUE_STATES.find((s) => s.value === state) ?? ISSUE_STATES[0];
 }
 
-/** A short human reference like `deceivers/robot#7` for a synced issue. */
-export function issueRef(issue: Issue): string {
+/**
+ * A short human reference like `deceivers/robot#7` for a synced issue, or the
+ * team's own name for the repo where one is set — "Robot code#7" is what people
+ * say out loud, and the full owner/name is on the issue's own page.
+ */
+export function issueRef(issue: Issue, repoLabel?: string): string {
   if (issue.repo && issue.number !== undefined) {
-    return `${issue.repo}#${issue.number}`;
+    return `${repoLabel ?? issue.repo}#${issue.number}`;
   }
   return "Local";
 }
