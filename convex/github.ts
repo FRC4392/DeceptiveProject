@@ -5,6 +5,7 @@ import {
   internalQuery,
   internalMutation,
   httpAction,
+  type QueryCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
@@ -16,12 +17,20 @@ import {
   getActor,
 } from "./lib/auth";
 import { isLeadOrAbove } from "./lib/stages";
+import { activeSeason } from "./lib/season";
 import {
   derivePriority,
   normalizeIssueNode,
   normalizeRepo,
 } from "./lib/github";
 import { githubFetch } from "./lib/githubRest";
+import {
+  ensureRepo,
+  repoKey,
+  repoRow,
+  scopedRepos,
+  type RepoScope,
+} from "./lib/githubRepos";
 import { asRecord, verifySignature } from "./lib/githubWebhookAuth";
 
 export const issueStateValidator = v.union(
@@ -56,6 +65,20 @@ const vIssue = v.object({
   lastSyncedAt: v.optional(v.number()),
 });
 
+// Which repos a reader is asking about. "season" is the default everywhere:
+// what the team is building now, plus the bugs reported in the app itself.
+export const repoScopeValidator = v.union(
+  v.literal("season"),
+  v.literal("ongoing"),
+  v.literal("all"),
+);
+
+export const repoKindValidator = v.union(
+  v.literal("season"),
+  v.literal("ongoing"),
+  v.literal("ignored"),
+);
+
 const vIssueComment = v.object({
   _id: v.id("issueComments"),
   _creationTime: v.number(),
@@ -72,21 +95,65 @@ const SCAN_LIMIT = 2000;
 
 // ---- Queries ----
 
+/**
+ * The issues in one repo, or in a scope — read through `by_repo_and_number`'s
+ * repo prefix rather than by scanning, since a team with ten years of repos has
+ * most of its rows outside whatever anybody is looking at.
+ *
+ * `repo: undefined` is a real key here: an issue reported in the app has no
+ * repo, and those are the team's own bugs rather than nobody's.
+ */
+async function issuesInRepos(
+  ctx: QueryCtx,
+  scoped: { names: string[]; withoutRepo: boolean },
+): Promise<Doc<"issues">[]> {
+  const out: Doc<"issues">[] = [];
+  for (const name of scoped.names) {
+    out.push(
+      ...(await ctx.db
+        .query("issues")
+        .withIndex("by_repo_and_number", (q) => q.eq("repo", name))
+        .take(SCAN_LIMIT)),
+    );
+  }
+  if (scoped.withoutRepo) {
+    out.push(
+      ...(await ctx.db
+        .query("issues")
+        .withIndex("by_repo_and_number", (q) => q.eq("repo", undefined))
+        .take(SCAN_LIMIT)),
+    );
+  }
+  return out;
+}
+
+/** The issues a scope covers, newest first. One repo wins over the scope. */
+async function scopedIssues(
+  ctx: QueryCtx,
+  args: { scope?: RepoScope; repo?: string },
+): Promise<Doc<"issues">[]> {
+  const scoped =
+    args.repo !== undefined
+      ? { names: [args.repo], withoutRepo: false }
+      : await scopedRepos(ctx, args.scope ?? "season");
+  const issues =
+    scoped === null
+      ? await ctx.db.query("issues").take(SCAN_LIMIT)
+      : await issuesInRepos(ctx, scoped);
+  return issues.sort((a, b) => b._creationTime - a._creationTime);
+}
+
 export const list = query({
   args: {
     state: v.optional(issueStateValidator),
+    /** Defaults to this season's repos — see `repoScopeValidator`. */
+    scope: v.optional(repoScopeValidator),
+    /** One repo, "owner/name". Narrows past the scope rather than within it. */
+    repo: v.optional(v.string()),
   },
   returns: v.array(vIssue),
   handler: async (ctx, args) => {
-    let issues: Doc<"issues">[];
-    if (args.state !== undefined) {
-      issues = await ctx.db
-        .query("issues")
-        .withIndex("by_state", (q) => q.eq("state", args.state!))
-        .take(SCAN_LIMIT);
-    } else {
-      issues = await ctx.db.query("issues").order("desc").take(SCAN_LIMIT);
-    }
+    const issues = await scopedIssues(ctx, args);
     return issues.filter(
       (i) => args.state === undefined || i.state === args.state,
     );
@@ -110,17 +177,19 @@ export const listComments = query({
       .collect(),
 });
 
-// Counts for the dashboard widget.
+// Counts for the dashboard widget. Scoped the same way the list is, because a
+// dashboard reading "40 open" over a page showing seven is the complaint this
+// change exists to fix, in a new place.
 export const stats = query({
-  args: {},
+  args: { scope: v.optional(repoScopeValidator) },
   returns: v.object({
     open: v.number(),
     closed: v.number(),
     prs: v.number(),
     total: v.number(),
   }),
-  handler: async (ctx) => {
-    const issues = await ctx.db.query("issues").take(SCAN_LIMIT);
+  handler: async (ctx, args) => {
+    const issues = await scopedIssues(ctx, { scope: args.scope });
     let open = 0;
     let closed = 0;
     let prs = 0;
@@ -140,22 +209,172 @@ export const config = query({
   returns: v.object({
     webhookConfigured: v.boolean(),
     tokenConfigured: v.boolean(),
-    repos: v.array(v.string()),
+  }),
+  handler: async () => ({
+    webhookConfigured: !!process.env.GITHUB_WEBHOOK_SECRET,
+    tokenConfigured: !!process.env.GITHUB_TOKEN,
+  }),
+});
+
+// ---- The repo registry ----
+
+const vRepo = v.object({
+  _id: v.id("githubRepos"),
+  _creationTime: v.number(),
+  fullName: v.string(),
+  nameKey: v.string(),
+  label: v.optional(v.string()),
+  kind: repoKindValidator,
+  seasonId: v.optional(v.id("seasons")),
+  order: v.number(),
+  firstSeenAt: v.number(),
+  reviewedAt: v.optional(v.number()),
+  /** In the default (this season's) view. Derived, so one place decides it. */
+  inSeasonScope: v.boolean(),
+  open: v.number(),
+  total: v.number(),
+});
+
+/**
+ * Every repo the webhook has delivered from, with what it holds. Readable by
+ * anyone — the issue list's chips are built from it — while changing one is a
+ * mentor's call.
+ */
+export const repos = query({
+  args: {},
+  returns: v.object({
+    repos: v.array(vRepo),
+    /** Issues reported in the app itself. They have no repo and no season. */
+    local: v.object({ open: v.number(), total: v.number() }),
+    /** Rows nobody has confirmed yet, so Admin can be pointed at. */
+    unreviewed: v.number(),
   }),
   handler: async (ctx) => {
-    const issues = await ctx.db.query("issues").take(SCAN_LIMIT);
-    const repos = [
-      ...new Set(
-        issues
-          .map((i) => i.repo)
-          .filter((r): r is string => typeof r === "string"),
-      ),
-    ].sort();
+    const rows = await ctx.db.query("githubRepos").collect();
+    const season = await activeSeason(ctx);
+    const out = [];
+    for (const row of rows) {
+      const issues = await ctx.db
+        .query("issues")
+        .withIndex("by_repo_and_number", (q) => q.eq("repo", row.fullName))
+        .take(SCAN_LIMIT);
+      out.push({
+        ...row,
+        inSeasonScope:
+          row.kind === "season" &&
+          season !== null &&
+          row.seasonId === season._id,
+        open: issues.filter((i) => i.state === "open").length,
+        total: issues.length,
+      });
+    }
+    out.sort(
+      (a, b) => a.order - b.order || a.fullName.localeCompare(b.fullName),
+    );
+    const local = await ctx.db
+      .query("issues")
+      .withIndex("by_repo_and_number", (q) => q.eq("repo", undefined))
+      .take(SCAN_LIMIT);
     return {
-      webhookConfigured: !!process.env.GITHUB_WEBHOOK_SECRET,
-      tokenConfigured: !!process.env.GITHUB_TOKEN,
-      repos,
+      repos: out,
+      local: {
+        open: local.filter((i) => i.state === "open").length,
+        total: local.length,
+      },
+      unreviewed: rows.filter((r) => r.reviewedAt === undefined).length,
     };
+  },
+});
+
+/**
+ * Sort a repo: this season's, every season's, or ignored. Upserts, so a repo
+ * can be sorted before its first delivery — which is how a mentor sets the
+ * season's repo up in November rather than waiting for someone to file a bug.
+ */
+export const setRepo = mutation({
+  args: {
+    fullName: v.string(),
+    kind: repoKindValidator,
+    seasonId: v.optional(v.union(v.id("seasons"), v.null())),
+    label: v.optional(v.union(v.string(), v.null())),
+  },
+  returns: v.id("githubRepos"),
+  handler: async (ctx, args) => {
+    await requireMentor(ctx);
+    const fullName = normalizeRepo(args.fullName);
+    if (!/^[^/]+\/[^/]+$/.test(fullName)) {
+      throw new Error(`Expected "owner/name", got "${fullName}".`);
+    }
+    // A season repo without a season would sit in no view at all, so fall back
+    // to the current one rather than storing something nothing can show.
+    const season = await activeSeason(ctx);
+    const seasonId =
+      args.kind === "season"
+        ? (args.seasonId ?? season?._id ?? undefined)
+        : undefined;
+
+    const existing = await repoRow(ctx, fullName);
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        kind: args.kind,
+        seasonId,
+        label:
+          args.label === undefined
+            ? existing.label
+            : args.label?.trim() || undefined,
+        reviewedAt: Date.now(),
+      });
+      return existing._id;
+    }
+    const rows = await ctx.db.query("githubRepos").collect();
+    return ctx.db.insert("githubRepos", {
+      fullName,
+      nameKey: repoKey(fullName),
+      label: args.label?.trim() || undefined,
+      kind: args.kind,
+      seasonId,
+      order: rows.reduce((max, r) => Math.max(max, r.order), 0) + 1,
+      firstSeenAt: Date.now(),
+      reviewedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Throw away what a repo already imported, for one being ignored. Ignoring
+ * stops the next delivery; this clears the ones that already arrived, which is
+ * the other half of "I never want to see that repo here".
+ */
+export const forgetRepoIssues = mutation({
+  args: { fullName: v.string() },
+  returns: v.object({ removed: v.number() }),
+  handler: async (ctx, { fullName }) => {
+    await requireMentor(ctx);
+    const row = await repoRow(ctx, fullName);
+    const name = row?.fullName ?? normalizeRepo(fullName);
+    const issues = await ctx.db
+      .query("issues")
+      .withIndex("by_repo_and_number", (q) => q.eq("repo", name))
+      .take(SCAN_LIMIT);
+    for (const issue of issues) {
+      const comments = await ctx.db
+        .query("issueComments")
+        .withIndex("by_issue", (q) => q.eq("issueId", issue._id))
+        .collect();
+      for (const c of comments) await ctx.db.delete(c._id);
+      await ctx.db.delete(issue._id);
+    }
+    return { removed: issues.length };
+  },
+});
+
+export const removeRepo = mutation({
+  args: { id: v.id("githubRepos") },
+  returns: v.null(),
+  handler: async (ctx, { id }) => {
+    await requireMentor(ctx);
+    await ctx.db.delete(id);
+    return null;
   },
 });
 
@@ -366,10 +585,17 @@ const vUpsertArgs = {
 
 // Match on (repo, number) so replays and edits are idempotent. Preserves a
 // manual project assignment / priority override; everything else tracks GitHub.
+//
+// Returns null for a repo the team has ignored: the delivery is accepted and
+// dropped, which is what "I don't want that repo in here" has to mean when one
+// organisation-level webhook feeds every repo the team owns.
 export const upsertIssueFromWebhook = internalMutation({
   args: vUpsertArgs,
-  returns: v.id("issues"),
+  returns: v.union(v.id("issues"), v.null()),
   handler: async (ctx, args) => {
+    const repo = await ensureRepo(ctx, args.repo);
+    if (repo.kind === "ignored") return null;
+
     const priority = derivePriority(args.labels);
     const existing = await ctx.db
       .query("issues")
@@ -621,8 +847,12 @@ export const importIssues = action({
         // REST list flags PRs via a `pull_request` key on the item itself.
         const args = normalizeIssueNode(cleanRepo, item, false);
         if (args) {
-          await ctx.runMutation(internal.github.upsertIssueFromWebhook, args);
-          imported += 1;
+          const id = await ctx.runMutation(
+            internal.github.upsertIssueFromWebhook,
+            args,
+          );
+          // An ignored repo accepts nothing, so don't claim it imported.
+          if (id !== null) imported += 1;
         }
       }
       if (items.length < 100) break;

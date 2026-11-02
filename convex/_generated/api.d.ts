@@ -21,6 +21,7 @@ import type * as lib_assemblyTree from "../lib/assemblyTree.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_budget from "../lib/budget.js";
 import type * as lib_github from "../lib/github.js";
+import type * as lib_githubRepos from "../lib/githubRepos.js";
 import type * as lib_githubRest from "../lib/githubRest.js";
 import type * as lib_githubWebhookAuth from "../lib/githubWebhookAuth.js";
 import type * as lib_intake from "../lib/intake.js";
@@ -69,6 +70,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/budget": typeof lib_budget;
   "lib/github": typeof lib_github;
+  "lib/githubRepos": typeof lib_githubRepos;
   "lib/githubRest": typeof lib_githubRest;
   "lib/githubWebhookAuth": typeof lib_githubWebhookAuth;
   "lib/intake": typeof lib_intake;

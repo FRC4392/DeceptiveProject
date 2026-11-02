@@ -4,6 +4,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
+import type { Id } from "./_generated/dataModel";
 import type { TestConvex } from "convex-test";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -44,6 +45,15 @@ function upsertArgs(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * The upsert returns null only for a repo the team has ignored; every case
+ * below is about a repo that is being tracked.
+ */
+function mustId(id: Id<"issues"> | null): Id<"issues"> {
+  if (id === null) throw new Error("expected the issue to be stored");
+  return id;
+}
+
 async function firstIssueId(t: TestConvex<typeof schema>) {
   const issues = await t.query(api.github.list, {});
   return issues[0]._id;
@@ -52,9 +62,8 @@ async function firstIssueId(t: TestConvex<typeof schema>) {
 describe("the issue sync", () => {
   test("a synced issue lands as a GitHub-sourced issue", async () => {
     const t = convexTest(schema, modules);
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs(),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
     );
     const issue = await t.run((ctx) => ctx.db.get(id));
 
@@ -65,13 +74,14 @@ describe("the issue sync", () => {
 
   test("re-sync is idempotent and updates the same issue", async () => {
     const t = convexTest(schema, modules);
-    const first = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs(),
+    const first = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
     );
-    const second = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ title: "Drive motor stalls intermittently" }),
+    const second = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ title: "Drive motor stalls intermittently" }),
+      ),
     );
     expect(second).toBe(first);
 
@@ -82,13 +92,14 @@ describe("the issue sync", () => {
 
   test("closing an issue closes it here too", async () => {
     const t = convexTest(schema, modules);
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs(),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
     );
-    await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ state: "closed" }),
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ state: "closed" }),
+      ),
     );
     const issue = await t.run((ctx) => ctx.db.get(id));
     expect(issue?.state).toBe("closed");
@@ -96,9 +107,11 @@ describe("the issue sync", () => {
 
   test("priority is derived from labels", async () => {
     const t = convexTest(schema, modules);
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ labels: ["bug", "urgent"] }),
+    const id = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ labels: ["bug", "urgent"] }),
+      ),
     );
     const issue = await t.run((ctx) => ctx.db.get(id));
     expect(issue?.priority).toBe("high");
@@ -106,9 +119,11 @@ describe("the issue sync", () => {
 
   test("a PR is marked as one", async () => {
     const t = convexTest(schema, modules);
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 12, isPullRequest: true, title: "Add climber" }),
+    const id = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ number: 12, isPullRequest: true, title: "Add climber" }),
+      ),
     );
     const issue = await t.run((ctx) => ctx.db.get(id));
     expect(issue?.isPullRequest).toBe(true);
@@ -119,7 +134,9 @@ describe("the issue sync", () => {
 describe("comment mirroring", () => {
   test("upsert then delete a GitHub comment", async () => {
     const t = convexTest(schema, modules);
-    await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs());
+    mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
+    );
 
     await t.mutation(internal.github.upsertCommentFromWebhook, {
       repo: "deceivers/robot",
@@ -179,9 +196,8 @@ describe("manual issues", () => {
 
   test("setState rejects GitHub-sourced issues", async () => {
     const t = convexTest(schema, modules);
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs(),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
     );
     const user = await asUser(t);
     await expect(
@@ -193,7 +209,9 @@ describe("manual issues", () => {
 describe("delete", () => {
   test("deleteIssueFromWebhook removes the issue", async () => {
     const t = convexTest(schema, modules);
-    await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs());
+    mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
+    );
     await t.mutation(internal.github.deleteIssueFromWebhook, {
       repo: "deceivers/robot",
       number: 7,
@@ -207,9 +225,11 @@ describe("priority override", () => {
   test("an in-app override wins and survives a GitHub re-sync", async () => {
     const t = convexTest(schema, modules);
     const user = await asUser(t);
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ labels: ["bug"] }), // derives medium
+    const id = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ labels: ["bug"] }), // derives medium
+      ),
     );
     await user.mutation(api.github.update, { id, priorityOverride: "high" });
 
@@ -218,9 +238,11 @@ describe("priority override", () => {
     expect(issue?.priorityOverride).toBe("high");
 
     // A re-sync whose labels would derive "low" must not clobber the pin.
-    await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ labels: ["minor"] }),
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ labels: ["minor"] }),
+      ),
     );
     issue = await t.run((ctx) => ctx.db.get(id));
     expect(issue?.priority).toBe("high");
@@ -229,9 +251,11 @@ describe("priority override", () => {
   test("clearing the override reverts priority to the labels", async () => {
     const t = convexTest(schema, modules);
     const user = await asUser(t);
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ labels: ["urgent"] }), // derives high
+    const id = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ labels: ["urgent"] }), // derives high
+      ),
     );
     await user.mutation(api.github.update, { id, priorityOverride: "low" });
     expect((await t.run((ctx) => ctx.db.get(id)))?.priority).toBe("low");
@@ -247,9 +271,8 @@ describe("picking up an issue", () => {
   test("anyone can take one nobody has", async () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({}),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs({})),
     );
 
     await dana.mutation(api.github.claim, { id });
@@ -262,9 +285,8 @@ describe("picking up an issue", () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
     const sam = await asUser(t, "sam");
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({}),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs({})),
     );
 
     await dana.mutation(api.github.claim, { id });
@@ -276,9 +298,11 @@ describe("picking up an issue", () => {
   test("a closed issue isn't work to pick up", async () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ state: "closed" }),
+    const id = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ state: "closed" }),
+      ),
     );
     await expect(dana.mutation(api.github.claim, { id })).rejects.toThrow(
       /closed/i,
@@ -289,9 +313,8 @@ describe("picking up an issue", () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
     const sam = await asUser(t, "sam");
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({}),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs({})),
     );
     await dana.mutation(api.github.claim, { id });
 
@@ -309,15 +332,16 @@ describe("picking up an issue", () => {
     // owns who on the team picked it up, and a webhook must not wipe it.
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({}),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs({})),
     );
     await dana.mutation(api.github.claim, { id });
 
-    await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ title: "Retitled upstream", labels: ["bug"] }),
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ title: "Retitled upstream", labels: ["bug"] }),
+      ),
     );
     const issue = await t.run((ctx) => ctx.db.get(id));
     expect(issue?.title).toBe("Retitled upstream");
@@ -327,9 +351,8 @@ describe("picking up an issue", () => {
   test("a student can't put someone else on one", async () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({}),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs({})),
     );
     await expect(
       dana.mutation(api.github.assign, { id, userId: "sam" }),
@@ -342,17 +365,23 @@ describe("my issues", () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
     const sam = await asUser(t, "sam");
-    const mine = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 1, title: "Mine" }),
+    const mine = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ number: 1, title: "Mine" }),
+      ),
     );
-    const theirs = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 2, title: "Theirs" }),
+    const theirs = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ number: 2, title: "Theirs" }),
+      ),
     );
-    await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 3, title: "Nobody's" }),
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ number: 3, title: "Nobody's" }),
+      ),
     );
     await dana.mutation(api.github.claim, { id: mine });
     await sam.mutation(api.github.claim, { id: theirs });
@@ -364,13 +393,17 @@ describe("my issues", () => {
   test("open ones come before ones you already closed", async () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
-    const closed = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 1, title: "Already fixed", state: "closed" }),
+    const closed = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ number: 1, title: "Already fixed", state: "closed" }),
+      ),
     );
-    const open = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({ number: 2, title: "Still broken" }),
+    const open = mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ number: 2, title: "Still broken" }),
+      ),
     );
     // Claiming a closed issue is refused, so put the claim on directly — it's
     // what an issue you fixed after claiming looks like.
@@ -389,14 +422,220 @@ describe("my issues", () => {
   test("putting one back takes it off your list", async () => {
     const t = convexTest(schema, modules);
     const dana = await asUser(t, "dana");
-    const id = await t.mutation(
-      internal.github.upsertIssueFromWebhook,
-      upsertArgs({}),
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs({})),
     );
     await dana.mutation(api.github.claim, { id });
     expect(await dana.query(api.github.listMine, {})).toHaveLength(1);
 
     await dana.mutation(api.github.unclaim, { id });
     expect(await dana.query(api.github.listMine, {})).toHaveLength(0);
+  });
+});
+
+/**
+ * One organisation webhook delivers every repo the team owns, so which of them
+ * anybody looks at is decided here rather than in GitHub's settings. These
+ * cases are about that decision surviving the thing that used to break it: the
+ * turn of the season.
+ */
+describe("the repo registry", () => {
+  async function mentorWithSeason(t: TestConvex<typeof schema>) {
+    const mentor = t.withIdentity({
+      subject: "mentor_1",
+      issuer: "https://example.clerk.accounts.dev",
+      email: "mentor_1@example.com",
+      role: "mentor",
+    });
+    await mentor.mutation(api.auth.storeCurrentUser, {});
+    await mentor.mutation(api.seasons.seedDefaults, {
+      year: "27",
+      name: "2027 robot",
+    });
+    return mentor;
+  }
+
+  test("a repo nobody has sorted registers itself as this season's", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await mentorWithSeason(t);
+    mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
+    );
+
+    const { repos, unreviewed } = await mentor.query(api.github.repos, {});
+    expect(repos).toHaveLength(1);
+    expect(repos[0].fullName).toBe("deceivers/robot");
+    expect(repos[0].kind).toBe("season");
+    expect(repos[0].inSeasonScope).toBe(true);
+    expect(repos[0].open).toBe(1);
+    // Registered, but nobody has said that guess is right.
+    expect(unreviewed).toBe(1);
+  });
+
+  test("an ignored repo's deliveries are accepted and dropped", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await mentorWithSeason(t);
+    await mentor.mutation(api.github.setRepo, {
+      fullName: "deceivers/scratch",
+      kind: "ignored",
+    });
+
+    const id = await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "deceivers/scratch", number: 1 }),
+    );
+    expect(id).toBeNull();
+    expect(await mentor.query(api.github.list, { scope: "all" })).toHaveLength(
+      0,
+    );
+  });
+
+  test("the default view is this season's repos and the app's own bugs", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await mentorWithSeason(t);
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ repo: "deceivers/robot-2027", title: "This year" }),
+      ),
+    );
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ repo: "deceivers/tracker", title: "The tracker" }),
+      ),
+    );
+    await mentor.mutation(api.github.setRepo, {
+      fullName: "deceivers/tracker",
+      kind: "ongoing",
+    });
+    await mentor.mutation(api.github.createManualIssue, {
+      title: "Reported in the pit",
+    });
+
+    const season = await mentor.query(api.github.list, {});
+    expect(season.map((i) => i.title).sort()).toEqual([
+      "Reported in the pit",
+      "This year",
+    ]);
+
+    const ongoing = await mentor.query(api.github.list, { scope: "ongoing" });
+    expect(ongoing.map((i) => i.title)).toEqual(["The tracker"]);
+
+    const all = await mentor.query(api.github.list, { scope: "all" });
+    expect(all).toHaveLength(3);
+
+    const one = await mentor.query(api.github.list, {
+      scope: "all",
+      repo: "deceivers/tracker",
+    });
+    expect(one.map((i) => i.title)).toEqual(["The tracker"]);
+  });
+
+  test("the counts agree with the default view", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await mentorWithSeason(t);
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ repo: "deceivers/robot-2027" }),
+      ),
+    );
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ repo: "deceivers/tracker" }),
+      ),
+    );
+    await mentor.mutation(api.github.setRepo, {
+      fullName: "deceivers/tracker",
+      kind: "ongoing",
+    });
+
+    // The dashboard saying 2 over a page showing 1 is the complaint this
+    // change exists to fix, so the two read the same source.
+    expect(await mentor.query(api.github.stats, {})).toMatchObject({
+      open: 1,
+      total: 1,
+    });
+    expect(
+      await mentor.query(api.github.stats, { scope: "all" }),
+    ).toMatchObject({ open: 2, total: 2 });
+    expect((await mentor.query(api.dashboard.summary, {})).issues.open).toBe(1);
+  });
+
+  test("moving to the next season moves the default view with it", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await mentorWithSeason(t);
+    mustId(
+      await t.mutation(
+        internal.github.upsertIssueFromWebhook,
+        upsertArgs({ repo: "deceivers/robot-2027", title: "Last year" }),
+      ),
+    );
+    expect(await mentor.query(api.github.list, {})).toHaveLength(1);
+
+    const next = await mentor.mutation(api.seasons.create, {
+      year: "28",
+      name: "2028 robot",
+    });
+    await mentor.mutation(api.seasons.setActive, { id: next });
+
+    // Nothing was touched but the season. Last year's repo keeps last year's
+    // season, so its issues leave the default view on their own — and are
+    // still there under All repos.
+    expect(await mentor.query(api.github.list, {})).toHaveLength(0);
+    const all = await mentor.query(api.github.list, { scope: "all" });
+    expect(all.map((i) => i.title)).toEqual(["Last year"]);
+  });
+
+  test("forgetting an ignored repo's issues takes their comments too", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await mentorWithSeason(t);
+    const id = mustId(
+      await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
+    );
+    await t.mutation(internal.github.upsertCommentFromWebhook, {
+      repo: "deceivers/robot",
+      number: 7,
+      githubCommentId: 1,
+      body: "Looking at it",
+    });
+
+    const res = await mentor.mutation(api.github.forgetRepoIssues, {
+      fullName: "deceivers/robot",
+    });
+    expect(res.removed).toBe(1);
+    expect(await mentor.query(api.github.get, { id })).toBeNull();
+    expect(
+      await t.run((ctx) => ctx.db.query("issueComments").collect()),
+    ).toHaveLength(0);
+  });
+
+  test("a repo can be sorted before its first delivery", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await mentorWithSeason(t);
+    await mentor.mutation(api.github.setRepo, {
+      fullName: "https://github.com/deceivers/robot-2028.git",
+      kind: "season",
+      label: "Next year",
+    });
+
+    const { repos } = await mentor.query(api.github.repos, {});
+    // A pasted URL is the same repo as the one a payload will name.
+    expect(repos[0].fullName).toBe("deceivers/robot-2028");
+    expect(repos[0].label).toBe("Next year");
+    expect(repos[0].reviewedAt).toBeDefined();
+  });
+
+  test("only mentors sort repos", async () => {
+    const t = convexTest(schema, modules);
+    const student = await asUser(t, "sam");
+    await expect(
+      student.mutation(api.github.setRepo, {
+        fullName: "deceivers/robot",
+        kind: "ignored",
+      }),
+    ).rejects.toThrow();
   });
 });

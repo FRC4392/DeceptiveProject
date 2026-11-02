@@ -223,6 +223,15 @@ The Onshape release webhook has the same ordering for a different reason:
 `/onshape/webhook` does not exist on `main` at all, so registering it early
 points Onshape at a 404. It is registered from inside the app in step 7.
 
+**Put it on the organisation, not the repo.** The receiver takes the repo from
+`repository.full_name` on whatever arrives, so one organisation-level webhook
+covers every repo the team owns, including next year's — which is the point,
+since a new repo a year from now then needs no deployment step at all. Which
+repos anybody looks at is decided in the app, in Admin → GitHub →
+Repositories, not here; a repo nobody has sorted shows as this season's until a
+mentor says otherwise. A per-repo webhook still works and is the fallback if
+the organisation's settings aren't yours to change.
+
 | Field            | Value                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------------- |
 | Payload URL      | `https://neat-alligator-295.convex.site/github/webhook`                               |
@@ -245,8 +254,9 @@ from GitHub's own delivery log:
 | `400 Bad JSON`               | Content type is form-encoded instead of JSON                          |
 | `200 pong`                   | Working. GitHub signs the ping too, so this proves the secret matches |
 
-Issues carry no `seasonId`, so this doesn't wait on a season existing. It does
-wait on the deploy, for the reason above.
+Issues carry no `seasonId`, so this doesn't wait on a season existing — their
+season comes from the repo they arrived from, which is why the turn of the
+season needs no migration. It does wait on the deploy, for the reason above.
 
 ## 7. First run, in this order
 

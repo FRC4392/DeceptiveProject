@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { PriorityBadge } from "@/components/pm/PriorityBadge";
 import { IssueFormDialog } from "@/components/pm/IssueFormDialog";
+import { MarkdownBody } from "@/components/pm/MarkdownBody";
 import { Chip } from "@/components/tracker/PartChips";
 import { useIsMentor } from "@/lib/roles";
 import { initials, useRosterMap } from "@/lib/users";
@@ -73,7 +74,7 @@ export function IssueDetailPage() {
 
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="brand-title text-3xl">{issue.title}</h1>
+          <h1 className="brand-title break-words text-3xl">{issue.title}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Chip className={stateMeta.badgeClass}>{stateMeta.label}</Chip>
             {issue.isPullRequest && (
@@ -134,11 +135,13 @@ export function IssueDetailPage() {
         <div className="space-y-6">
           <section className="rounded-lg border bg-card p-4 shadow-sm">
             <h2 className="font-semibold">Description</h2>
-            <p className="mt-3 whitespace-pre-wrap text-sm">
-              {issue.body || (
-                <span className="text-muted-foreground">No description.</span>
-              )}
-            </p>
+            {issue.body ? (
+              <MarkdownBody body={issue.body} className="mt-3" />
+            ) : (
+              <p className="mt-3 text-sm text-muted-foreground">
+                No description.
+              </p>
+            )}
           </section>
 
           <CommentsSection issue={issue} />
@@ -149,7 +152,9 @@ export function IssueDetailPage() {
             <h2 className="font-semibold">Details</h2>
             {issue.repo && (
               <MetaRow label="Repo">
-                <span className="font-mono text-xs">{issueRef(issue)}</span>
+                <span className="break-all font-mono text-xs">
+                  {issueRef(issue)}
+                </span>
               </MetaRow>
             )}
             {issue.authorLogin && (
@@ -363,8 +368,11 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
                   initials(name)
                 )}
               </div>
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
+              {/* min-w-0 is what keeps a long comment inside the card: a flex
+                  item's default min-width is its content, so without it the
+                  widest unbroken line in the comment sets the width. */}
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">{name}</span>
                   {isGitHub && (
                     <Badge variant="outline" className="text-[10px]">
@@ -375,7 +383,7 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
                     {formatDateTime(c._creationTime)}
                   </span>
                 </div>
-                <p className="whitespace-pre-wrap text-sm">{c.body}</p>
+                <MarkdownBody body={c.body} />
               </div>
             </div>
           );
