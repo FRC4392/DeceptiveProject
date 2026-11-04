@@ -2,7 +2,7 @@
 import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { requireMentor } from "./lib/auth";
+import { canRead, requireMentor } from "./lib/auth";
 
 const vMachine = v.object({
   _id: v.id("machines"),
@@ -29,6 +29,7 @@ export const listMachines = query({
   args: {},
   returns: v.array(vMachine),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return [];
     const machines = await ctx.db.query("machines").collect();
     return machines.sort((a, b) => a.order - b.order);
   },
@@ -87,6 +88,7 @@ export const listProcessTypes = query({
   args: {},
   returns: v.array(vProcessType),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return [];
     const processes = await ctx.db.query("processTypes").collect();
     return processes.sort((a, b) => a.order - b.order);
   },

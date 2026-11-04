@@ -54,8 +54,9 @@ function mustId(id: Id<"issues"> | null): Id<"issues"> {
   return id;
 }
 
-async function firstIssueId(t: TestConvex<typeof schema>) {
-  const issues = await t.query(api.github.list, {});
+/** Reads go through a signed-in caller; nobody else may read the issues. */
+async function firstIssueId(reader: Pick<TestConvex<typeof schema>, "query">) {
+  const issues = await reader.query(api.github.list, {});
   return issues[0]._id;
 }
 
@@ -134,6 +135,9 @@ describe("the issue sync", () => {
 describe("comment mirroring", () => {
   test("upsert then delete a GitHub comment", async () => {
     const t = convexTest(schema, modules);
+    // The webhook writes as nobody — GitHub isn't a user. Reading it back is
+    // a team member's job.
+    const reader = await asUser(t);
     mustId(
       await t.mutation(internal.github.upsertIssueFromWebhook, upsertArgs()),
     );
@@ -145,8 +149,8 @@ describe("comment mirroring", () => {
       authorLogin: "carol",
       body: "Looking into it.",
     });
-    let comments = await t.query(api.github.listComments, {
-      issueId: await firstIssueId(t),
+    let comments = await reader.query(api.github.listComments, {
+      issueId: await firstIssueId(reader),
     });
     expect(comments).toHaveLength(1);
     expect(comments[0].authorLogin).toBe("carol");
@@ -159,8 +163,8 @@ describe("comment mirroring", () => {
       authorLogin: "carol",
       body: "Fixed in #8.",
     });
-    comments = await t.query(api.github.listComments, {
-      issueId: await firstIssueId(t),
+    comments = await reader.query(api.github.listComments, {
+      issueId: await firstIssueId(reader),
     });
     expect(comments).toHaveLength(1);
     expect(comments[0].body).toBe("Fixed in #8.");
@@ -168,8 +172,8 @@ describe("comment mirroring", () => {
     await t.mutation(internal.github.deleteCommentFromWebhook, {
       githubCommentId: 555,
     });
-    comments = await t.query(api.github.listComments, {
-      issueId: await firstIssueId(t),
+    comments = await reader.query(api.github.listComments, {
+      issueId: await firstIssueId(reader),
     });
     expect(comments).toHaveLength(0);
   });

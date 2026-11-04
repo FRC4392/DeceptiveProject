@@ -21,6 +21,20 @@ const vCount = v.object({
   total: v.number(),
 });
 
+const NO_COUNT = { parts: 0, subAssemblies: 0, todos: 0, issues: 0, total: 0 };
+
+/** What someone who isn't signed in gets: the shape, with nothing in it. */
+const NOTHING = {
+  outstanding: NO_COUNT,
+  mine: NO_COUNT,
+  parts: { ready: 0, total: 0 },
+  subAssemblies: { built: 0, total: 0, readyToBuild: 0 },
+  todos: { done: 0, total: 0, unclaimed: 0 },
+  issues: { open: 0, closed: 0, prs: 0, total: 0 },
+  bought: { toOrder: 0, ordered: 0, arrived: 0, total: 0 },
+  nextCompetition: null,
+};
+
 export const summary = query({
   args: {},
   returns: v.object({
@@ -61,7 +75,10 @@ export const summary = query({
   }),
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    const me = identity?.subject;
+    // Asked for without signing in, this used to answer with the team's real
+    // totals — only "mine" came back empty.
+    if (!identity) return NOTHING;
+    const me = identity.subject;
     const season = await activeSeason(ctx);
 
     const parts = season

@@ -7,7 +7,7 @@
 import { query, mutation, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireLead } from "./lib/auth";
+import { canReadAsLead, requireLead } from "./lib/auth";
 import { requireActiveSeason } from "./lib/season";
 import { assertNumberFree, takePartNumber } from "./lib/numbering";
 import { loadKnown } from "./lib/intakeKnown";
@@ -87,6 +87,7 @@ export const pendingCount = query({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {
+    if (!(await canReadAsLead(ctx))) return 0;
     const queued = await ctx.db
       .query("releaseIntakes")
       .withIndex("by_status", (q) => q.eq("status", "queued"))
@@ -103,6 +104,7 @@ export const list = query({
   args: { includeProcessed: v.optional(v.boolean()) },
   returns: v.array(v.object({ intake: vIntake, lines: v.array(vLine) })),
   handler: async (ctx, { includeProcessed }) => {
+    if (!(await canReadAsLead(ctx))) return [];
     const all = await ctx.db.query("releaseIntakes").order("desc").take(100);
     const visible = includeProcessed
       ? all

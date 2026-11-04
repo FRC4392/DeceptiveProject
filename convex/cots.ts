@@ -3,7 +3,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { requireUserId, requireLead } from "./lib/auth";
+import { canRead, requireUserId, requireLead } from "./lib/auth";
 import { activeSeason, requireActiveSeason } from "./lib/season";
 
 const statusValidator = v.union(
@@ -39,6 +39,7 @@ export const list = query({
   args: { subsystemId: v.optional(v.id("subsystems")) },
   returns: v.array(vCots),
   handler: async (ctx, { subsystemId }) => {
+    if (!(await canRead(ctx))) return [];
     const season = await activeSeason(ctx);
     if (!season) return [];
     const items =

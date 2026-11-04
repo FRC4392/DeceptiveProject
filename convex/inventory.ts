@@ -1,7 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { requireUserId, requireMentor } from "./lib/auth";
+import { canRead, requireUserId, requireMentor } from "./lib/auth";
 
 const vInventoryItem = v.object({
   _id: v.id("inventoryItems"),
@@ -16,6 +16,7 @@ export const list = query({
   args: {},
   returns: v.array(vInventoryItem),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return [];
     const items = await ctx.db.query("inventoryItems").take(2000);
     return items.sort((a, b) => a.name.localeCompare(b.name));
   },

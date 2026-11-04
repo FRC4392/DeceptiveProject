@@ -12,7 +12,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireMentor } from "./lib/auth";
+import { canReadAsMentor, requireMentor } from "./lib/auth";
 import { requireActiveSeason } from "./lib/season";
 import { classifyAssemblyLine, classifyRelease } from "./lib/intake";
 import { loadKnown } from "./lib/intakeKnown";
@@ -30,6 +30,7 @@ export const listDocuments = query({
   args: {},
   returns: v.array(vOnshapeDoc),
   handler: async (ctx) => {
+    if (!(await canReadAsMentor(ctx))) return [];
     const docs = await ctx.db.query("onshapeDocuments").collect();
     return docs.sort((a, b) => a.name.localeCompare(b.name));
   },

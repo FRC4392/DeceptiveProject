@@ -7,6 +7,7 @@ import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import {
+  canRead,
   getActor,
   requireLead,
   requireMentor,
@@ -49,6 +50,7 @@ export const listTags = query({
   args: {},
   returns: v.array(vTag),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return [];
     const tags = await ctx.db.query("todoTags").collect();
     return tags.sort((a, b) => a.order - b.order);
   },
@@ -106,6 +108,7 @@ export const list = query({
   args: { includeDone: v.optional(v.boolean()) },
   returns: v.array(vTodo),
   handler: async (ctx, { includeDone }) => {
+    if (!(await canRead(ctx))) return [];
     const season = await activeSeason(ctx);
     if (!season) return [];
     const todos = await ctx.db
@@ -125,7 +128,8 @@ export const list = query({
 export const get = query({
   args: { id: v.id("todos") },
   returns: v.union(vTodo, v.null()),
-  handler: (ctx, { id }) => ctx.db.get(id),
+  handler: async (ctx, { id }) =>
+    (await canRead(ctx)) ? ctx.db.get(id) : null,
 });
 
 export const listMine = query({
@@ -156,6 +160,7 @@ export const notes = query({
     }),
   ),
   handler: async (ctx, { todoId }) => {
+    if (!(await canRead(ctx))) return [];
     const rows = await ctx.db
       .query("todoNotes")
       .withIndex("by_todo", (q) => q.eq("todoId", todoId))

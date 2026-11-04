@@ -6,7 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { useCurrentUser } from "@/lib/roles";
-import { type Actor, type Role } from "@/lib/stages";
+import { type Actor } from "@/lib/stages";
 
 export function useActiveSeason() {
   return useQuery(api.seasons.active, {});
@@ -62,7 +62,7 @@ export function useActor(): Actor & { userId: string | null; name: string } {
     return {
       userId,
       name: user?.name ?? "",
-      role: (user?.role ?? "student") as Role,
+      role: user?.role ?? "student",
       ledSubsystemIds: (subsystems ?? [])
         .filter((s) => userId !== null && s.leadUserId === userId)
         .map((s) => s._id as string),

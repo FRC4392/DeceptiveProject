@@ -11,7 +11,12 @@ import { v } from "convex/values";
 import type { GenericMutationCtx, UserIdentity } from "convex/server";
 import type { DataModel, Doc } from "./_generated/dataModel";
 import { createClerkClient, type User } from "@clerk/backend";
-import { effectiveRole } from "./lib/auth";
+import {
+  readerRole,
+  roleFromIdentity,
+  roleFromValue,
+  roleOf,
+} from "./lib/auth";
 import type { UserJSON, WebhookEvent } from "@clerk/backend";
 import { Webhook } from "svix";
 
@@ -37,20 +42,6 @@ const vCurrentUser = v.object({
   name: v.string(),
   role: appRoleValidator,
 });
-
-function roleFromValue(value: unknown): Role {
-  return value === "mentor" ? "mentor" : "student";
-}
-
-/**
- * The role the session token claims, or undefined when it carries no `role`
- * claim at all — which is what a Clerk JWT template that hasn't been given the
- * claim looks like. The two cases are not the same: "no claim" must not be
- * read as "not a mentor", or every page load would quietly demote people.
- */
-function roleFromIdentity(identity: UserIdentity): Role | undefined {
-  return identity.role === undefined ? undefined : roleFromValue(identity.role);
-}
 
 /** The best name the session token offers, or "" when it offers none. */
 function nameFromIdentity(identity: UserIdentity): string {
@@ -166,9 +157,9 @@ export const currentUser = query({
       id: identity.subject,
       email: user?.email ?? identity.email ?? "",
       name: user?.name ?? nameFromIdentity(identity),
-      role: user
-        ? effectiveRole(user)
-        : (roleFromIdentity(identity) ?? "student"),
+      // The same answer the server's read guards act on, so a page can't
+      // render for someone the queries behind it will refuse.
+      role: roleOf(user, identity),
     };
   },
 });
@@ -193,17 +184,7 @@ export const storeCurrentUser = mutation({
 export const callerRole = internalQuery({
   args: {},
   returns: v.union(appRoleValidator, v.null()),
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
-    const user = await ctx.db
-      .query("users")
-      .withIndex("authId", (q) => q.eq("authId", identity.subject))
-      .unique();
-    return user
-      ? effectiveRole(user)
-      : (roleFromIdentity(identity) ?? "student");
-  },
+  handler: (ctx) => readerRole(ctx),
 });
 
 export const upsertUserFromClerk = internalMutation({

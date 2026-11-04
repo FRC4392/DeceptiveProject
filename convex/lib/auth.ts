@@ -1,3 +1,4 @@
+import type { UserIdentity } from "convex/server";
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc } from "../_generated/dataModel";
 import {
@@ -51,6 +52,79 @@ export function effectiveRole(user: Doc<"users"> | null): Role {
 
 export async function currentRole(ctx: Ctx): Promise<Role> {
   return effectiveRole(await getCurrentUser(ctx));
+}
+
+/** Clerk's mentor flag, read as a role: anything but "mentor" is a student. */
+export function roleFromValue(value: unknown): "mentor" | "student" {
+  return value === "mentor" ? "mentor" : "student";
+}
+
+/**
+ * The role the session token claims, or undefined when it carries no `role`
+ * claim at all — which is what a Clerk JWT template that hasn't been given the
+ * claim looks like. The two cases are not the same: "no claim" must not be
+ * read as "not a mentor", or every page load would quietly demote people.
+ */
+export function roleFromIdentity(
+  identity: UserIdentity,
+): "mentor" | "student" | undefined {
+  return identity.role === undefined ? undefined : roleFromValue(identity.role);
+}
+
+/**
+ * The role someone *reads* with, or null when nobody is signed in.
+ *
+ * Every query that isn't for the whole world asks this first. It is the same
+ * answer `auth.currentUser` gives the screens, on purpose: when the server and
+ * the screens disagree about who you are, a page renders as if you may see it
+ * and then comes back empty with nothing to say why.
+ *
+ * Unlike `requireLead` and `requireMentor` it doesn't need the `users` row.
+ * Sign-in writes that row from the browser, and if that write fails the
+ * person should be treated as whatever their session says — not locked out of
+ * every page with no explanation.
+ */
+export async function readerRole(ctx: Ctx): Promise<Role | null> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) return null;
+  const user = await ctx.db
+    .query("users")
+    .withIndex("authId", (q) => q.eq("authId", identity.subject))
+    .unique();
+  return roleOf(user, identity);
+}
+
+/**
+ * The one decision `readerRole` and `auth.currentUser` both make, for a caller
+ * that already has the row in hand: the row's role when there is a row, and
+ * the session's claim when there isn't one yet.
+ */
+export function roleOf(
+  user: Doc<"users"> | null,
+  identity: UserIdentity,
+): Role {
+  return user ? effectiveRole(user) : (roleFromIdentity(identity) ?? "student");
+}
+
+/**
+ * Signed in at all. For the reads every member of the team can see. Only asks
+ * the session, never the `users` table — there's nothing about the row it
+ * needs to know.
+ */
+export async function canRead(ctx: Ctx): Promise<boolean> {
+  return (await ctx.auth.getUserIdentity()) !== null;
+}
+
+/** For the reads a lead acts on — the intake queue, the heads-up list. */
+export async function canReadAsLead(ctx: Ctx): Promise<boolean> {
+  const role = await readerRole(ctx);
+  return role !== null && isLeadOrAbove(role);
+}
+
+/** For the reads behind the mentor-only admin pages. */
+export async function canReadAsMentor(ctx: Ctx): Promise<boolean> {
+  const role = await readerRole(ctx);
+  return role !== null && isMentorOrAbove(role);
 }
 
 /**

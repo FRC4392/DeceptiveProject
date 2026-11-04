@@ -1,6 +1,6 @@
 import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { requireMentor } from "./lib/auth";
+import { canRead, requireMentor } from "./lib/auth";
 import { activeSeason, requireActiveSeason } from "./lib/season";
 
 const COMPETITION_LIMIT = 200;
@@ -17,6 +17,7 @@ export const list = query({
   args: {},
   returns: v.array(vCompetition),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return [];
     const season = await activeSeason(ctx);
     if (!season) return [];
     return ctx.db
@@ -31,6 +32,7 @@ export const next = query({
   args: {},
   returns: v.union(vCompetition, v.null()),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return null;
     const season = await activeSeason(ctx);
     if (!season) return null;
     const upcoming = await ctx.db

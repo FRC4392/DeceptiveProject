@@ -1,7 +1,7 @@
 import { query, mutation, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireMentor } from "./lib/auth";
+import { canRead, requireMentor } from "./lib/auth";
 import { ensureDefaultSubAssembly } from "./subAssemblies";
 import { DEFAULT_PAD, defaultSubAssemblyNumber } from "./lib/numbering";
 import { normalizePartNumber } from "./lib/stages";
@@ -61,6 +61,7 @@ export const list = query({
   args: {},
   returns: v.array(vSeason),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return [];
     const seasons = await ctx.db.query("seasons").collect();
     return seasons.sort((a, b) => b.year.localeCompare(a.year));
   },
@@ -71,6 +72,7 @@ export const active = query({
   args: {},
   returns: v.union(vSeason, v.null()),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return null;
     const seasons = await ctx.db.query("seasons").collect();
     return seasons.find((s) => s.active) ?? null;
   },

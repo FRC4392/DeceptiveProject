@@ -12,7 +12,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
-import { requireMentor } from "./lib/auth";
+import { canReadAsLead, canReadAsMentor, requireMentor } from "./lib/auth";
 import { modeForShare, type BudgetMode } from "./lib/budget";
 
 export const DEFAULTS = {
@@ -48,6 +48,8 @@ export const get = query({
   args: {},
   returns: vSettings,
   handler: async (ctx) => {
+    // Its write twin is mentor-only, and nothing on screen reads it.
+    if (!(await canReadAsMentor(ctx))) return { ...DEFAULTS };
     const rows = await ctx.db.query("appSettings").collect();
     const map = new Map(rows.map((r) => [r.key, r.value]));
     return {
@@ -104,6 +106,20 @@ export const budget = query({
     renewalDate: v.union(v.number(), v.null()),
   }),
   handler: async (ctx) => {
+    // How much allowance is left before the team drops into manual mode is
+    // for the leads working the intake queue.
+    if (!(await canReadAsLead(ctx))) {
+      return {
+        used: 0,
+        limit: DEFAULTS.apiLimit,
+        remaining: DEFAULTS.apiLimit,
+        mode: "normal" as const,
+        forced: false,
+        forcedReason: null,
+        forcedAt: null,
+        renewalDate: null,
+      };
+    }
     const state = await budgetState(ctx);
     return {
       used: state.used,

@@ -10,7 +10,13 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { requireUserId, requireMentor, getActor } from "./lib/auth";
+import {
+  canRead,
+  canReadAsMentor,
+  requireUserId,
+  requireMentor,
+  getActor,
+} from "./lib/auth";
 import { isLeadOrAbove, isMentorOrAbove } from "./lib/stages";
 import { activeSeason } from "./lib/season";
 import {
@@ -148,6 +154,7 @@ export const list = query({
   },
   returns: v.array(vIssue),
   handler: async (ctx, args) => {
+    if (!(await canRead(ctx))) return [];
     const issues = await scopedIssues(ctx, args);
     return issues.filter(
       (i) => args.state === undefined || i.state === args.state,
@@ -158,18 +165,21 @@ export const list = query({
 export const get = query({
   args: { id: v.id("issues") },
   returns: v.union(vIssue, v.null()),
-  handler: async (ctx, { id }) => ctx.db.get(id),
+  handler: async (ctx, { id }) =>
+    (await canRead(ctx)) ? ctx.db.get(id) : null,
 });
 
 export const listComments = query({
   args: { issueId: v.id("issues") },
   returns: v.array(vIssueComment),
   handler: async (ctx, { issueId }) =>
-    ctx.db
-      .query("issueComments")
-      .withIndex("by_issue", (q) => q.eq("issueId", issueId))
-      .order("asc")
-      .collect(),
+    !(await canRead(ctx))
+      ? []
+      : ctx.db
+          .query("issueComments")
+          .withIndex("by_issue", (q) => q.eq("issueId", issueId))
+          .order("asc")
+          .collect(),
 });
 
 // Counts for the dashboard widget. Scoped the same way the list is, because a
@@ -184,6 +194,7 @@ export const stats = query({
     total: v.number(),
   }),
   handler: async (ctx, args) => {
+    if (!(await canRead(ctx))) return { open: 0, closed: 0, prs: 0, total: 0 };
     const issues = await scopedIssues(ctx, { scope: args.scope });
     let open = 0;
     let closed = 0;
@@ -205,10 +216,13 @@ export const config = query({
     webhookConfigured: v.boolean(),
     tokenConfigured: v.boolean(),
   }),
-  handler: async () => ({
-    webhookConfigured: !!process.env.GITHUB_WEBHOOK_SECRET,
-    tokenConfigured: !!process.env.GITHUB_TOKEN,
-  }),
+  handler: async (ctx) =>
+    (await canReadAsMentor(ctx))
+      ? {
+          webhookConfigured: !!process.env.GITHUB_WEBHOOK_SECRET,
+          tokenConfigured: !!process.env.GITHUB_TOKEN,
+        }
+      : { webhookConfigured: false, tokenConfigured: false },
 });
 
 // ---- The repo registry ----
@@ -245,6 +259,9 @@ export const repos = query({
     unreviewed: v.number(),
   }),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) {
+      return { repos: [], local: { open: 0, total: 0 }, unreviewed: 0 };
+    }
     const rows = await ctx.db.query("githubRepos").collect();
     const season = await activeSeason(ctx);
     const out = [];
@@ -745,7 +762,6 @@ export const getForWriteback = internalQuery({
     return { repo: issue.repo, number: issue.number, source: issue.source };
   },
 });
-
 
 // ---- Actions (GitHub REST write-back — default runtime, plain fetch) ----
 
