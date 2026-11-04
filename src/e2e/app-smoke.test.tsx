@@ -44,14 +44,11 @@ vi.mock("../../convex/_generated/api", () => ({
     github: {
       config: "github.config",
       importIssues: "github.importIssues",
-      listRepoMappings: "github.listRepoMappings",
-      setRepoProject: "github.setRepoProject",
       stats: "github.stats",
       list: "github.list",
       listMine: "github.listMine",
       claim: "github.claim",
       unclaim: "github.unclaim",
-      removeRepoMapping: "github.removeRepoMapping",
     },
     cots: { list: "cots.list" },
     onshape: {
@@ -135,7 +132,6 @@ vi.mock("convex/react", () => ({
       case "competitions.list":
       case "github.list":
       case "github.listMine":
-      case "github.listRepoMappings":
       case "cots.list":
       case "onshape.listDocuments":
       case "users.list":
@@ -250,7 +246,9 @@ describe("app smoke routes", () => {
   it("names the season in the app bar, and says nothing when it's the newest", () => {
     renderAt("/dashboard");
 
-    expect(screen.getByText("2027 robot")).toBeInTheDocument();
+    // In both headers: the phone's and the desktop's. CSS shows one at a
+    // time; the phone used to have none.
+    expect(screen.getAllByText("2027 robot")).toHaveLength(2);
     expect(screen.queryByText(/not the newest season/i)).toBeNull();
   });
 
@@ -262,7 +260,7 @@ describe("app smoke routes", () => {
 
     renderAt("/dashboard");
 
-    expect(screen.getByText(/not the newest season/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/not the newest season/i)).toHaveLength(2);
   });
 
   it("loads the authenticated dashboard shell", () => {
@@ -321,6 +319,48 @@ describe("app smoke routes", () => {
     expect(
       screen.getByRole("heading", { name: "Robot parts" }),
     ).toBeInTheDocument();
+  });
+
+  // A link to a part, opened while signed out, used to end on the parts board.
+  it("sends someone back to the page they were trying to reach", () => {
+    clerkMock.isSignedIn = false;
+    renderAt("/login?next=%2Fparts%2Fpt_1");
+    expect(clerkMock.signInProps[0]).toMatchObject({
+      forceRedirectUrl: "/parts/pt_1",
+    });
+  });
+
+  it("won't send anyone to another site after signing in", () => {
+    clerkMock.isSignedIn = false;
+    renderAt("/login?next=%2F%2Fevil.example");
+    expect(clerkMock.signInProps[0]).toMatchObject({ forceRedirectUrl: "/" });
+  });
+
+  it("takes someone already signed in straight to where they were going", () => {
+    renderAt("/login?next=%2Ftodos");
+    expect(
+      screen.getByRole("heading", { name: "To-do list" }),
+    ).toBeInTheDocument();
+  });
+
+  // The drawer is the menu on a phone. Open, the page behind can't take
+  // focus; shut, focus goes back to the button that opened it.
+  it("keeps the keyboard in the menu while it's open", async () => {
+    renderAt("/parts");
+    const page = () =>
+      screen.getByRole("main").parentElement as HTMLElement & {
+        inert: boolean;
+      };
+    const opener = screen.getByRole("button", { name: "Open menu" });
+    expect(opener).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(opener);
+    expect(page().inert).toBe(true);
+    expect(opener).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.keyboard("{Escape}");
+    expect(page().inert).toBe(false);
+    expect(opener).toHaveFocus();
   });
 
   it("opens the parts board with its six stage columns", () => {

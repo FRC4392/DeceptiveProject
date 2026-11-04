@@ -405,12 +405,15 @@ function SubsystemSettings() {
             <span className="grow font-medium">{s.name}</span>
             <Select
               value={s.leadUserId ?? "none"}
-              onValueChange={(value) =>
-                void update({
+              onValueChange={(value) => {
+                setError(null);
+                update({
                   id: s._id,
                   leadUserId: value === "none" ? null : value,
-                })
-              }
+                }).catch((err: unknown) =>
+                  setError(errorText(err, "No luck.")),
+                );
+              }}
             >
               <SelectTrigger className="w-48" aria-label={`${s.name} lead`}>
                 <SelectValue placeholder="No lead" />
@@ -558,18 +561,24 @@ function ProcessSettings() {
             <label className="flex items-center gap-2 text-sm">
               <Checkbox
                 checked={p.needsDrawing}
-                onCheckedChange={(v) =>
-                  void update({ id: p._id, needsDrawing: v === true })
-                }
+                onCheckedChange={(v) => {
+                  setError(null);
+                  update({ id: p._id, needsDrawing: v === true }).catch(
+                    (err: unknown) => setError(errorText(err, "No luck.")),
+                  );
+                }}
               />
               Needs a drawing
             </label>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox
                 checked={p.needsFinishing}
-                onCheckedChange={(v) =>
-                  void update({ id: p._id, needsFinishing: v === true })
-                }
+                onCheckedChange={(v) => {
+                  setError(null);
+                  update({ id: p._id, needsFinishing: v === true }).catch(
+                    (err: unknown) => setError(errorText(err, "No luck.")),
+                  );
+                }}
               />
               Needs finishing
             </label>
@@ -677,9 +686,15 @@ function MachineSettings() {
             <label className="flex items-center gap-2 text-sm">
               <Checkbox
                 checked={m.requiresMentorPresent}
-                onCheckedChange={(v) =>
-                  void update({ id: m._id, requiresMentorPresent: v === true })
-                }
+                onCheckedChange={(v) => {
+                  setError(null);
+                  update({
+                    id: m._id,
+                    requiresMentorPresent: v === true,
+                  }).catch((err: unknown) =>
+                    setError(errorText(err, "No luck.")),
+                  );
+                }}
               />
               A mentor has to be in the room
             </label>
@@ -908,16 +923,20 @@ function CompetitionSettings() {
   const [name, setName] = useState("");
   const [date, setDate] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
     const ts = fromDateInputValue(date);
     if (!name.trim() || ts === undefined) return;
+    setError(null);
     setSaving(true);
     try {
       await create({ name: name.trim(), date: ts });
       setName("");
       setDate("");
+    } catch (err) {
+      setError(errorText(err, "No luck."));
     } finally {
       setSaving(false);
     }
@@ -948,7 +967,12 @@ function CompetitionSettings() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void remove({ id: competition._id })}
+                onClick={() => {
+                  setError(null);
+                  remove({ id: competition._id }).catch((err: unknown) =>
+                    setError(errorText(err, "No luck.")),
+                  );
+                }}
               >
                 Remove
               </Button>
@@ -983,6 +1007,7 @@ function CompetitionSettings() {
           Add event
         </Button>
       </form>
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
     </Panel>
   );
 }

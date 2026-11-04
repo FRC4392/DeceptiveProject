@@ -183,16 +183,25 @@ function ReposPanel() {
   const remove = useMutation(api.github.removeRepo);
   const [adding, setAdding] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  // Failures get their own line, in the danger colour. They used to share
+  // `note` with "Removed 3 issues.", rendered grey — an error that looked
+  // like a status update — and three of the row edits reported nothing.
+  const [error, setError] = useState<string | null>(null);
+
+  function clear() {
+    setNote(null);
+    setError(null);
+  }
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
     if (!adding.trim()) return;
-    setNote(null);
+    clear();
     try {
       await setRepo({ fullName: adding.trim(), kind: "season" });
       setAdding("");
     } catch (err) {
-      setNote(errorText(err, "Couldn't add that repo."));
+      setError(errorText(err, "Couldn't add that repo."));
     }
   }
 
@@ -204,12 +213,12 @@ function ReposPanel() {
     ) {
       return;
     }
-    setNote(null);
+    clear();
     try {
       const res = await forget({ fullName: row.fullName });
       setNote(`Removed ${res.removed} issue${res.removed === 1 ? "" : "s"}.`);
     } catch (err) {
-      setNote(errorText(err, "Couldn't remove those issues."));
+      setError(errorText(err, "Couldn't remove those issues."));
     }
   }
 
@@ -235,13 +244,21 @@ function ReposPanel() {
               key={row._id}
               row={row}
               seasons={seasons ?? []}
-              onSet={(args) =>
-                setRepo({ fullName: row.fullName, ...args }).then(
-                  () => undefined,
-                )
-              }
+              onSet={(args) => {
+                clear();
+                return setRepo({ fullName: row.fullName, ...args })
+                  .then(() => undefined)
+                  .catch((err: unknown) =>
+                    setError(errorText(err, "Couldn't save that repo.")),
+                  );
+              }}
               onForget={() => void forgetIssues(row)}
-              onRemove={() => void remove({ id: row._id })}
+              onRemove={() => {
+                clear();
+                remove({ id: row._id }).catch((err: unknown) =>
+                  setError(errorText(err, "Couldn't remove that repo.")),
+                );
+              }}
             />
           ))}
         </ul>
@@ -269,6 +286,7 @@ function ReposPanel() {
         </Button>
       </form>
       {note && <p className="text-sm text-muted-foreground">{note}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
     </Panel>
   );
 }

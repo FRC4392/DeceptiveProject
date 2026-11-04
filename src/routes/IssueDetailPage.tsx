@@ -22,6 +22,7 @@ import { useIsMentor } from "@/lib/roles";
 import { initials, useRosterMap } from "@/lib/users";
 import { PRIORITIES, type Priority } from "@/lib/priority";
 import { formatDateTime } from "@/lib/dates";
+import { errorText } from "@/lib/errors";
 import { issueRef, issueStateMeta } from "@/lib/github";
 import {
   ExternalLinkIcon,
@@ -37,6 +38,7 @@ export function IssueDetailPage() {
   const removeIssue = useMutation(api.github.remove);
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const isMentor = useIsMentor();
 
   if (issue === undefined) {
@@ -56,10 +58,20 @@ export function IssueDetailPage() {
   const stateMeta = issueStateMeta(issue.state);
 
   async function handleDelete() {
-    if (!confirm(`Delete "${issue!.title}"? This removes its task too.`))
-      return;
-    await removeIssue({ id });
-    void navigate("/issues");
+    // It takes its comments with it. A GitHub issue is only gone from here:
+    // it's still on GitHub, and a later delivery will bring it back.
+    const where =
+      issue!.source === "github"
+        ? " from the tracker? It stays on GitHub."
+        : "?";
+    if (!confirm(`Delete "${issue!.title}" and its comments${where}`)) return;
+    setError(null);
+    try {
+      await removeIssue({ id });
+      void navigate("/issues");
+    } catch (err) {
+      setError(errorText(err, "That didn't delete."));
+    }
   }
 
   return (
@@ -116,6 +128,7 @@ export function IssueDetailPage() {
           )}
         </div>
       </header>
+      {error && <p className="text-sm text-danger">{error}</p>}
 
       {/* What to do about it, the way a part page leads with its one action. */}
       <section className="rounded-lg border-2 border-primary bg-card p-4 shadow-sm">
@@ -190,11 +203,13 @@ function StateControl({ issue }: { issue: Doc<"issues"> }) {
   const setGitHubState = useAction(api.github.setGitHubState);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const nextState = issue.state === "open" ? "closed" : "open";
 
   async function toggle() {
     setBusy(true);
     setNote(null);
+    setError(null);
     try {
       if (issue.source === "manual") {
         await setState({ id: issue._id, state: nextState });
@@ -203,8 +218,12 @@ function StateControl({ issue }: { issue: Doc<"issues"> }) {
           issueId: issue._id,
           state: nextState,
         });
-        setNote(res.message);
+        // "GitHub error 403." is a failure, not a status update.
+        if (res.ok) setNote(res.message);
+        else setError(res.message);
       }
+    } catch (err) {
+      setError(errorText(err, "That didn't work."));
     } finally {
       setBusy(false);
     }
@@ -227,6 +246,7 @@ function StateControl({ issue }: { issue: Doc<"issues"> }) {
             : "Reopen it on GitHub"}
       </Button>
       {note && <p className="text-xs text-muted-foreground">{note}</p>}
+      {error && <p className="text-xs text-danger">{error}</p>}
     </div>
   );
 }
@@ -235,6 +255,14 @@ const AUTO_PRIORITY = "__auto__";
 
 function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
   const update = useMutation(api.github.update);
+  const [error, setError] = useState<string | null>(null);
+  function save(args: Parameters<typeof update>[0]) {
+    setError(null);
+    update(args).catch((err: unknown) =>
+      setError(errorText(err, "That didn't save.")),
+    );
+  }
+  const errorLine = error && <p className="text-xs text-danger">{error}</p>;
 
   // Manual issues set priority directly.
   if (issue.source === "manual") {
@@ -246,7 +274,7 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
         <Select
           value={issue.priority}
           onValueChange={(v) =>
-            void update({ id: issue._id, priority: v as Priority })
+            save({ id: issue._id, priority: v as Priority })
           }
         >
           <SelectTrigger>
@@ -260,6 +288,7 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
             ))}
           </SelectContent>
         </Select>
+        {errorLine}
       </div>
     );
   }
@@ -274,7 +303,7 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
       <Select
         value={issue.priorityOverride ?? AUTO_PRIORITY}
         onValueChange={(v) =>
-          void update({
+          save({
             id: issue._id,
             priorityOverride: v === AUTO_PRIORITY ? null : (v as Priority),
           })
@@ -296,6 +325,7 @@ function PriorityControl({ issue }: { issue: Doc<"issues"> }) {
         {overridden ? "Pinned — survives re-sync." : "Currently"}
         {!overridden && <PriorityBadge priority={issue.priority} />}
       </p>
+      {errorLine}
     </div>
   );
 }
@@ -324,6 +354,7 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
   const [toGitHub, setToGitHub] = useState(false);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const canPostToGitHub = issue.source === "github";
 
@@ -333,18 +364,26 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
     if (!trimmed) return;
     setSaving(true);
     setNote(null);
+    setError(null);
     try {
       if (toGitHub && canPostToGitHub) {
         const res = await commentOnGitHub({
           issueId: issue._id,
           body: trimmed,
         });
-        setNote(res.message);
-        if (res.ok) setBody("");
+        if (res.ok) {
+          setNote(res.message);
+          setBody("");
+        } else {
+          setError(res.message);
+        }
       } else {
         await addComment({ issueId: issue._id, body: trimmed });
         setBody("");
       }
+    } catch (err) {
+      // The text stays in the box, so nothing typed is lost.
+      setError(errorText(err, "That comment didn't post."));
     } finally {
       setSaving(false);
     }
@@ -422,6 +461,7 @@ function CommentsSection({ issue }: { issue: Doc<"issues"> }) {
           </Button>
         </div>
         {note && <p className="text-xs text-muted-foreground">{note}</p>}
+        {error && <p className="text-xs text-danger">{error}</p>}
       </form>
     </section>
   );

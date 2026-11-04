@@ -16,6 +16,8 @@ export function FilterChip({
   return (
     <button
       type="button"
+      // A toggle, so say which way it's set: the colour was the only clue.
+      aria-pressed={active}
       onClick={onClick}
       className={cn(
         "min-h-11 rounded-full border px-4 text-sm transition-colors sm:min-h-9",

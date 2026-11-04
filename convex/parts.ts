@@ -180,7 +180,10 @@ export const search = query({
       )
         // That index spans every season. The year prefix normally keeps them
         // apart, but don't lean on that to decide what this season can see.
-        .filter((part) => part.seasonId === season._id);
+        // Archived parts are off the board, so they're out of search too —
+        // the partial match below already left them out, and typing a whole
+        // number used to land on one anyway.
+        .filter((part) => part.seasonId === season._id && !part.isArchived);
       if (exact.length > 0) return exact;
     }
 
@@ -315,10 +318,15 @@ export const headsUp = query({
       .take(SCAN_LIMIT);
 
     // One scan for every open problem, grouped by part — this runs on the
-    // board for every lead, so it mustn't be a query per part.
+    // board for every lead, so it mustn't be a query per part. Open ones
+    // only, straight off the index: this used to read every problem ever
+    // recorded, in every season, to find the handful still open.
     const openByPart = new Map<Id<"parts">, Doc<"problems">[]>();
-    for (const problem of await ctx.db.query("problems").take(SCAN_LIMIT)) {
-      if (problem.resolvedAt !== undefined) continue;
+    const open = await ctx.db
+      .query("problems")
+      .withIndex("by_resolved", (q) => q.eq("resolvedAt", undefined))
+      .take(SCAN_LIMIT);
+    for (const problem of open) {
       const list = openByPart.get(problem.partId) ?? [];
       list.push(problem);
       openByPart.set(problem.partId, list);
@@ -652,13 +660,17 @@ export const reportProblem = mutation({
       openedByUserId: userId,
     });
 
+    // One remake chip, counting them all. Each problem used to add its own,
+    // so a part with two problems wore two "Remake 1" chips. The problems
+    // themselves stay separate, and Heads up still lists each one.
+    const earlier = part.flags.find((f) => f.kind === "remake");
     const patch: Partial<Doc<"parts">> = {
       flags: [
-        ...part.flags,
+        ...part.flags.filter((f) => f.kind !== "remake"),
         {
           kind: "remake" as const,
           note: args.note?.trim() || args.reason.replace(/_/g, " "),
-          qty: qtyAffected,
+          qty: (earlier?.qty ?? 0) + qtyAffected,
           at: Date.now(),
           byUserId: userId,
         },
@@ -718,7 +730,9 @@ export const resolveProblem = mutation({
 // ---- Flags ----
 
 export const clearFlag = mutation({
-  args: { partId: v.id("parts"), kind: v.string() },
+  // The flag kinds a part can carry, not any string: clearing a kind that
+  // doesn't exist used to succeed and do nothing.
+  args: { partId: v.id("parts"), kind: flagValidator.fields.kind },
   returns: v.null(),
   handler: async (ctx, { partId, kind }) => {
     await requireLead(ctx);
@@ -734,12 +748,7 @@ export const clearFlag = mutation({
 export const addFlag = mutation({
   args: {
     partId: v.id("parts"),
-    kind: v.union(
-      v.literal("changed_after_made"),
-      v.literal("drawing_out_of_date"),
-      v.literal("remake"),
-      v.literal("waiting"),
-    ),
+    kind: flagValidator.fields.kind,
     note: v.optional(v.string()),
   },
   returns: v.null(),

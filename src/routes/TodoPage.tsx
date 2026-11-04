@@ -9,7 +9,7 @@ import { Chip } from "@/components/tracker/PartChips";
 import { TodoFormDialog } from "@/components/tracker/TodoFormDialog";
 import { AssigneePicker } from "@/components/tracker/AssigneePicker";
 import { initials } from "@/lib/stages";
-import { useIsLead, useIsMentor } from "@/lib/roles";
+import { useCurrentUserId, useIsLead, useIsMentor } from "@/lib/roles";
 import { useRosterMap } from "@/lib/users";
 import { errorText } from "@/lib/errors";
 
@@ -20,7 +20,10 @@ export function TodoPage() {
   const todo = useQuery(api.todos.get, { id });
   const tags = useQuery(api.todos.listTags, {});
   const notes = useQuery(api.todos.notes, { todoId: id });
-  const me = useQuery(api.auth.currentUser);
+  // `null` while loading, never `undefined`: an unclaimed item's claimant
+  // is `undefined`, and comparing the two would make every unclaimed item
+  // look like yours until the signed-in user arrived.
+  const myId = useCurrentUserId();
   const roster = useRosterMap();
   const isLead = useIsLead();
   const isMentor = useIsMentor();
@@ -55,7 +58,7 @@ export function TodoPage() {
   const claimant = todo.claimedByUserId
     ? roster[todo.claimedByUserId]
     : undefined;
-  const mine = todo.claimedByUserId === me?.id;
+  const mine = todo.claimedByUserId === myId;
   const tagNames = todo.tagIds
     .map((tagId) => (tags ?? []).find((t) => t._id === tagId)?.name)
     .filter((name): name is string => Boolean(name));

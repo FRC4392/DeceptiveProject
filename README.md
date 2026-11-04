@@ -161,9 +161,9 @@ card opens the item, the way a part card opens a part, with one big button
 that moves it on — "Placed the order → Ordered", then "It turned up →
 Arrived", worded the way a part's advance button is. Ordering one asks when
 it's due, and a lead can move one back. Anyone can add one or correct a
-vendor, and a lead can delete one. The subsystem's own parts list still shows
-where each item is up to, read-only. A sub-assembly won't complete while a
-bought item it needs is still on order.
+vendor, and a lead can delete one. The subsystem's own parts list shows where
+each item is up to as well, and opens the same dialog. A sub-assembly won't
+complete while a bought item it needs is still on order.
 
 **Bought items can be imported as well as typed in.** Every way into the
 tracker — the release webhook, the Onshape panel sync, a BOM CSV — ends up on
@@ -320,17 +320,24 @@ inventory, and GitHub issue/PR sync.
 convex/
   schema.ts          users, seasons, subsystems, parts (+ stage events, notes,
                      problems), partNumberCounters, machines, processTypes,
-                     training, cotsItems, assembly steps, release intakes,
-                     apiCalls, appSettings, onshape*, todos/todoTags/
-                     todoNotes, issues/issueComments/githubRepos,
+                     cotsItems, subAssemblies (+ members, notes, events),
+                     release intakes and their lines, apiCalls,
+                     appSettings, onshape*, todos/todoTags/todoNotes,
+                     competitions, issues/issueComments/githubRepos,
                      inventoryItems
   lib/stages.ts      the stage model: what comes next and who may move it.
                      Imported by the React screens too
+  lib/auth.ts        who's asking: the role guards for writes, and the
+                     read checks every query starts with
   lib/numbering.ts   {YY}-{SUB}-{NNN}, taken inside the mutation transaction
+  lib/assembly.ts    can it be built yet, and how many of everything the
+                     tree adds up to. Imported by the React screens too
+  lib/budget.ts      what each Onshape mode allows, and when the year starts
+  lib/counts.ts      counter presses as steps, so none are lost
   lib/intake.ts      release matching (matched / changed / unknown / removed)
                      and BOM CSV parsing
   parts.ts           the tracker: numbers, stage moves, claiming, problems
-  subsystems.ts      subsystems, progress tiles, assembly steps
+  subsystems.ts      subsystems, progress tiles, the next-number counters
   shop.ts            machines, process types, roles
   seasons.ts         seasons: first-run setup, adding a year, switching year
   subAssemblies.ts   sub-assemblies, their members, notes and history
@@ -359,17 +366,19 @@ src/
   main.tsx           ClerkProvider + ConvexProviderWithClerk + router
   Layout.tsx         authenticated shell
   routes/            PartsBoardPage, PartPage, ShopPage, MyPartsPage,
-                     OrderingPage,
-                     SubsystemsPage, IntakePage, TrackerSettingsPage,
-                     DashboardPage, TodoBoardPage/TodoPage/MyTodosPage,
-                     InventoryPage,
-                     IssuesPage/IssueDetailPage, AdminPage, GitHubAdminPage,
-                     OnshapeAdminPage
+                     OrderingPage, SubsystemsPage, AssemblyPage,
+                     IntakePage, DashboardPage,
+                     TodoBoardPage/TodoPage/MyTodosPage, InventoryPage,
+                     IssuesPage/IssueDetailPage/MyIssuesPage,
+                     SettingsPage, GitHubAdminPage, OnshapeAdminPage,
+                     LoginPage
   lib/stages.ts      chip colours and labels on top of convex/lib/stages.ts
   lib/tracker.ts     the season / subsystem / process / actor lookups
+  lib/redirect.ts    where to send someone back to after signing in
   components/tracker/ PartCard, StageStrip, PartSearch, QtyCounter,
-                     GetNumberDialog, ProblemDialog, PartChips,
-                     SubAssemblies, SubAssemblyCard, TodoCard,
+                     GetNumberDialog, ProblemDialog, PartChips, ClaimLine,
+                     AssigneePicker, FilterChip, BoughtItem, UnknownLine,
+                     SubAssemblies, SubAssemblyCard, IssueCard, TodoCard,
                      TodoFormDialog
   components/pm/     IssueFormDialog, PriorityBadge, MarkdownBody
   components/ui/     shadcn/ui primitives
@@ -769,8 +778,15 @@ right for throwaway data: in a real season a part number is never reused.
 
 ```sh
 npm run test          # vitest run
-npm run test:e2e      # smoke tests for shell/navigation/setup states
+npm run test:e2e      # smoke tests for shell/navigation/setup states (mocked)
 npm run test:watch    # vitest watch mode
 npm run lint           # tsc + eslint
 npm run format         # prettier --write .
 ```
+
+`test:e2e` is a smoke test of the React shell with Convex and Clerk mocked
+out, not a browser test against a running deployment. It catches a route that
+stops rendering or a screen that loses its heading; it can't tell you a layout
+works at phone width, that the keyboard can reach everything, or that the
+frontend and backend agree. The Convex tests run the real functions against
+`convex-test`, which is where the rules are checked.
