@@ -4,7 +4,11 @@ import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { canRead, currentRole, requireUserId, requireLead } from "./lib/auth";
-import { activeSeason, requireActiveSeason } from "./lib/season";
+import {
+  activeSeason,
+  assertSubsystemInSeason,
+  requireActiveSeason,
+} from "./lib/season";
 import { isLeadOrAbove } from "./lib/stages";
 
 const statusValidator = v.union(
@@ -75,6 +79,9 @@ export const create = mutation({
   handler: async (ctx, args) => {
     await requireUserId(ctx);
     const season = await requireActiveSeason(ctx);
+    const subsystem = await ctx.db.get(args.subsystemId);
+    if (!subsystem) throw new Error("Pick a subsystem.");
+    assertSubsystemInSeason(subsystem, season);
     return ctx.db.insert("cotsItems", {
       seasonId: season._id,
       subsystemId: args.subsystemId,

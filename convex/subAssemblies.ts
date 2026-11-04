@@ -13,7 +13,11 @@ import {
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { canRead, getActor, requireLead, requireUserId } from "./lib/auth";
-import { activeSeason, requireActiveSeason } from "./lib/season";
+import {
+  activeSeason,
+  assertSubsystemInSeason,
+  requireActiveSeason,
+} from "./lib/season";
 import {
   assertNumberFree,
   defaultSubAssemblyNumber,
@@ -138,6 +142,7 @@ export const create = mutation({
     const season = await requireActiveSeason(ctx);
     const subsystem = await ctx.db.get(subsystemId);
     if (!subsystem) throw new Error("That subsystem is gone.");
+    assertSubsystemInSeason(subsystem, season);
 
     const siblings = await ctx.db
       .query("subAssemblies")

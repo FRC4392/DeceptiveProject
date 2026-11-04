@@ -12,6 +12,23 @@ export async function activeSeason(
   return seasons.find((s) => s.active) ?? null;
 }
 
+/**
+ * Refuse to make something in this season against a subsystem from another.
+ *
+ * A form left open across a season switch still holds last season's subsystem
+ * id. Creating against it would file the new thing under a subsystem the board
+ * no longer shows — and, for anything that takes a number, mint this year's
+ * digits with last year's code.
+ */
+export function assertSubsystemInSeason(
+  subsystem: Doc<"subsystems">,
+  season: Doc<"seasons">,
+): void {
+  if (subsystem.seasonId !== season._id) {
+    throw new Error("That subsystem is from another season. Pick it again.");
+  }
+}
+
 export async function requireActiveSeason(
   ctx: QueryCtx | MutationCtx,
 ): Promise<Doc<"seasons">> {

@@ -318,6 +318,55 @@ describe("how numbers are shaped and where they start", () => {
     ).rejects.toThrow(/already issued/);
   });
 
+  // A form left open across a season switch still holds last season's
+  // subsystem. Nothing may be made against it in the new one.
+  test("nothing is made in a new season against last season's subsystem", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const [stale] = await mentor.query(api.subsystems.list, {});
+    const processes = await mentor.query(api.shop.listProcessTypes, {});
+    const y2028 = await mentor.mutation(api.seasons.create, {
+      year: "28",
+      name: "2028 robot",
+      makeActive: true,
+    });
+    expect((await mentor.query(api.seasons.active, {}))?._id).toBe(y2028);
+
+    const refused = /from another season/;
+    await expect(
+      mentor.mutation(api.parts.createWithNumber, {
+        subsystemId: stale._id,
+        name: "Side plate",
+        processTypeId: processes[0]._id,
+        qtyNeeded: 1,
+      }),
+    ).rejects.toThrow(refused);
+    await expect(
+      mentor.mutation(api.cots.create, {
+        subsystemId: stale._id,
+        name: "Motor",
+        qtyNeeded: 1,
+      }),
+    ).rejects.toThrow(refused);
+    await expect(
+      mentor.mutation(api.subAssemblies.create, {
+        subsystemId: stale._id,
+        name: "Roller",
+      }),
+    ).rejects.toThrow(refused);
+    await expect(
+      mentor.mutation(api.subsystems.setNextNumber, {
+        subsystemId: stale._id,
+        next: 50,
+      }),
+    ).rejects.toThrow(refused);
+
+    // This season's own subsystem is fine.
+    const [fresh] = await mentor.query(api.subsystems.list, {});
+    expect(fresh._id).not.toBe(stale._id);
+    expect(await makePart(mentor, fresh.code, "Rail")).toMatch(/^28-/);
+  });
+
   // The padding test above reads the season before the update and never after,
   // so it couldn't see this: once a row carries `numberPad`, the queries every
   // screen subscribes to have to be able to return it.
