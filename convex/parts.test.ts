@@ -323,3 +323,104 @@ describe("moving a part along", () => {
     expect(part?.stage).toBe(1);
   });
 });
+
+describe("when something goes wrong more than once", () => {
+  async function plate(t: ReturnType<typeof convexTest>) {
+    const { mentor, intake, router } = await setup(t);
+    const { partId } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: intake._id,
+      name: "Side plate",
+      processTypeId: router._id,
+      qtyNeeded: 4,
+    });
+    await mentor.mutation(api.parts.setQtyMade, { partId, qtyMade: 4 });
+    return { mentor, partId };
+  }
+
+  // Each problem used to add its own chip: two problems, two "Remake 1"s.
+  test("the part wears one remake chip, counting them all", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, partId } = await plate(t);
+    await mentor.mutation(api.parts.reportProblem, {
+      partId,
+      reason: "broke",
+      qtyAffected: 1,
+    });
+    await mentor.mutation(api.parts.reportProblem, {
+      partId,
+      reason: "scrapped",
+      qtyAffected: 2,
+    });
+
+    const part = await mentor.query(api.parts.get, { id: partId });
+    const remakes = part!.flags.filter((f) => f.kind === "remake");
+    expect(remakes).toHaveLength(1);
+    expect(remakes[0].qty).toBe(3);
+    // The problems stay separate, and Heads up still lists each.
+    expect(await mentor.query(api.parts.problems, { partId })).toHaveLength(2);
+    const headsUp = await mentor.query(api.parts.headsUp, {});
+    expect(headsUp.filter((h) => h.kind === "problem")).toHaveLength(2);
+  });
+
+  test("Heads up drops a problem once it's resolved", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, partId } = await plate(t);
+    await mentor.mutation(api.parts.reportProblem, {
+      partId,
+      reason: "broke",
+      qtyAffected: 1,
+    });
+    const [problem] = await mentor.query(api.parts.problems, { partId });
+    await mentor.mutation(api.parts.resolveProblem, { problemId: problem._id });
+    const headsUp = await mentor.query(api.parts.headsUp, {});
+    expect(headsUp.filter((h) => h.kind === "problem")).toEqual([]);
+  });
+});
+
+describe("searching for an archived part", () => {
+  // The board hides archived parts, and a partial number never found them;
+  // typing the whole number used to land on one anyway.
+  test("finds it neither by its whole number nor by its name", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router } = await setup(t);
+    const { partId, partNumber } = await mentor.mutation(
+      api.parts.createWithNumber,
+      {
+        subsystemId: intake._id,
+        name: "Old bracket",
+        processTypeId: router._id,
+        qtyNeeded: 1,
+      },
+    );
+    expect(
+      await mentor.query(api.parts.search, { query: partNumber }),
+    ).toHaveLength(1);
+
+    await mentor.mutation(api.parts.setArchived, { partId, archived: true });
+    expect(await mentor.query(api.parts.search, { query: partNumber })).toEqual(
+      [],
+    );
+    expect(
+      await mentor.query(api.parts.search, { query: "Old bracket" }),
+    ).toEqual([]);
+  });
+});
+
+describe("clearing a flag", () => {
+  test("only takes a kind of flag a part can carry", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, router } = await setup(t);
+    const { partId } = await mentor.mutation(api.parts.createWithNumber, {
+      subsystemId: intake._id,
+      name: "Plate",
+      processTypeId: router._id,
+      qtyNeeded: 1,
+    });
+    await expect(
+      mentor.mutation(api.parts.clearFlag, {
+        partId,
+        kind: "not_a_flag" as "waiting",
+      }),
+    ).rejects.toThrow();
+  });
+});
