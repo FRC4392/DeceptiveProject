@@ -1,7 +1,8 @@
 # What's left
 
-Written 1 November 2026. Production is deployed and running on `main`; build,
-lint and all 494 tests pass. Everything below is either a decision taken
+Written 1 November 2026, updated 4 November. Production is deployed and
+running on `main`; build, lint and the tests pass — no count here, since it
+went stale within days the last time. Everything below is either a decision taken
 deliberately, something waiting on kickoff, or a rough edge worth knowing
 about. Nothing here blocks the team using the tracker.
 
@@ -22,8 +23,8 @@ about. Nothing here blocks the team using the tracker.
       two rows for one person on production and locked everyone out of
       Settings for an afternoon. `DEPLOY-PROD.md` §7a has the symptoms and
       the way out. Setting the claims stops it arising at all.
-- [ ] **859 kB JS bundle**, past Vite's 500 kB warning. Accepted: it gzips to
-      251 kB, it's `convex` + `@clerk/react` + `react-dom` + Radix rather
+- [ ] **864 kB JS bundle**, past Vite's 500 kB warning. Accepted: it gzips to
+      252 kB, it's `convex` + `@clerk/react` + `react-dom` + Radix rather
       than anything of ours, and the pit crew loads the app once on a field
       laptop. If it ever needs to come down, the two moves are `manualChunks`
       for the vendors and lazy-loading `LoginPage` — the only consumer of
@@ -37,6 +38,17 @@ about. Nothing here blocks the team using the tracker.
       as markdown and reading them as source was the complaint. Lazy-loading
       `MarkdownBody` is the obvious saving and runs into the same
       synchronous-mount problem as `LoginPage` above.
+
+- [ ] **Two leads editing the same sub-assembly's members at once: last
+      save wins.** The editor saves the whole member list it last showed, so
+      the second save drops what the first added. The counters had the same
+      shape and now send steps (`convex/lib/counts.ts`); this one needs the
+      editor to send what it saw, so a stale save can be refused. Rare, and
+      noted on `subAssemblies.setMembers`.
+- [ ] **No screen for the budget settings.** The limit, the thresholds, the
+      renewal date and a forced mode are set from the command line with
+      `settings:configure` (see the README's budget section). Set the renewal
+      date before the second year, or last year's calls keep counting.
 
 ## Watch on the first real assembly sync
 

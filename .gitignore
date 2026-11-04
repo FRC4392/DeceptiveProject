@@ -20,6 +20,8 @@ coverage
 # Local environment files
 .env
 .env.*
+# Last on purpose: a later `.env*` line would undo this and silently ignore
+# any new example file.
 !.env*.example
 *.local
 
@@ -42,8 +44,9 @@ coverage
 *.njsproj
 *.sln
 *.sw?
+
+# Vercel's per-checkout project link
 .vercel
-.env*
 
 # Claude Code's per-machine scaffolding — launch.json names a dev server by
 # local port, so it belongs to a checkout rather than to the project.

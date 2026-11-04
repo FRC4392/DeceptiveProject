@@ -44,14 +44,11 @@ vi.mock("../../convex/_generated/api", () => ({
     github: {
       config: "github.config",
       importIssues: "github.importIssues",
-      listRepoMappings: "github.listRepoMappings",
-      setRepoProject: "github.setRepoProject",
       stats: "github.stats",
       list: "github.list",
       listMine: "github.listMine",
       claim: "github.claim",
       unclaim: "github.unclaim",
-      removeRepoMapping: "github.removeRepoMapping",
     },
     cots: { list: "cots.list" },
     onshape: {
@@ -135,7 +132,6 @@ vi.mock("convex/react", () => ({
       case "competitions.list":
       case "github.list":
       case "github.listMine":
-      case "github.listRepoMappings":
       case "cots.list":
       case "onshape.listDocuments":
       case "users.list":
