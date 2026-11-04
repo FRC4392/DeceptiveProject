@@ -764,6 +764,132 @@ export const deleteCommentFromWebhook = internalMutation({
   },
 });
 
+/**
+ * One-off: fold issues stored under a non-canonical spelling of their repo
+ * into the canonical one. Deliveries heal rows as they're touched (see
+ * `issueAt`); this does the rest at once, and merges the duplicate pairs that
+ * mixed spellings already produced.
+ *
+ * Dry run unless told otherwise — read what it would do first:
+ *
+ *   npx convex run github:canonicalizeIssueRepos
+ *   npx convex run github:canonicalizeIssueRepos '{"dryRun": false}'
+ *
+ * Where a pair has to become one, the row GitHub synced most recently is
+ * kept, since it holds the freshest title, state and labels. What the team
+ * did in the app — a claim, a priority override — is carried over from the
+ * other if the keeper has none, and comments move across without doubling.
+ */
+export const canonicalizeIssueRepos = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  returns: v.object({
+    dryRun: v.boolean(),
+    renamed: v.number(),
+    merged: v.number(),
+    removed: v.number(),
+    changes: v.array(
+      v.object({
+        repo: v.string(),
+        number: v.number(),
+        from: v.array(v.string()),
+        rows: v.number(),
+      }),
+    ),
+  }),
+  handler: async (ctx, { dryRun }) => {
+    const dry = dryRun ?? true;
+    const issues = await ctx.db.query("issues").collect();
+
+    const groups = new Map<string, Doc<"issues">[]>();
+    const canonicalOf = new Map<string, string>();
+    for (const issue of issues) {
+      if (issue.repo === undefined || issue.number === undefined) continue;
+      let canonical = canonicalOf.get(issue.repo);
+      if (canonical === undefined) {
+        canonical = await canonicalRepo(ctx, issue.repo);
+        canonicalOf.set(issue.repo, canonical);
+      }
+      const key = `${canonical}#${issue.number}`;
+      groups.set(key, [...(groups.get(key) ?? []), issue]);
+    }
+
+    let renamed = 0;
+    let merged = 0;
+    let removed = 0;
+    const changes: {
+      repo: string;
+      number: number;
+      from: string[];
+      rows: number;
+    }[] = [];
+
+    for (const rows of groups.values()) {
+      const canonical = canonicalOf.get(rows[0].repo!)!;
+      const number = rows[0].number!;
+      if (rows.length === 1 && rows[0].repo === canonical) continue;
+
+      changes.push({
+        repo: canonical,
+        number,
+        from: [...new Set(rows.map((r) => r.repo!))],
+        rows: rows.length,
+      });
+      if (rows.length === 1) renamed += 1;
+      else {
+        merged += 1;
+        removed += rows.length - 1;
+      }
+      if (dry) continue;
+
+      const [keeper, ...rest] = [...rows].sort(
+        (a, b) => (b.lastSyncedAt ?? 0) - (a.lastSyncedAt ?? 0),
+      );
+      const patch: Partial<Doc<"issues">> = { repo: canonical };
+      const claimed =
+        keeper.claimedByUserId ??
+        rest.find((r) => r.claimedByUserId)?.claimedByUserId;
+      if (claimed !== undefined) patch.claimedByUserId = claimed;
+      const override =
+        keeper.priorityOverride ??
+        rest.find((r) => r.priorityOverride)?.priorityOverride;
+      if (override !== undefined) {
+        patch.priorityOverride = override;
+        patch.priority = override;
+      }
+      await ctx.db.patch(keeper._id, patch);
+
+      const kept = await ctx.db
+        .query("issueComments")
+        .withIndex("by_issue", (q) => q.eq("issueId", keeper._id))
+        .collect();
+      const keptIds = new Set(
+        kept.map((c) => c.githubCommentId).filter((id) => id !== undefined),
+      );
+      for (const dup of rest) {
+        const comments = await ctx.db
+          .query("issueComments")
+          .withIndex("by_issue", (q) => q.eq("issueId", dup._id))
+          .collect();
+        for (const comment of comments) {
+          const seen =
+            comment.githubCommentId !== undefined &&
+            keptIds.has(comment.githubCommentId);
+          if (seen) await ctx.db.delete(comment._id);
+          else {
+            await ctx.db.patch(comment._id, { issueId: keeper._id });
+            if (comment.githubCommentId !== undefined) {
+              keptIds.add(comment.githubCommentId);
+            }
+          }
+        }
+        await ctx.db.delete(dup._id);
+      }
+    }
+
+    return { dryRun: dry, renamed, merged, removed, changes };
+  },
+});
+
 // After a successful REST state change, keep the local mirror consistent even
 // if the webhook isn't configured (the webhook, if present, is idempotent).
 export const applyStateFromWriteback = internalMutation({
