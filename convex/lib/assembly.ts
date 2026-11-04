@@ -300,6 +300,24 @@ export type Demand = {
   perRefByAssembly: Map<string, Map<string, number>>;
 };
 
+/**
+ * What a new build count does to whether a sub-assembly is built.
+ *
+ * Built means every unit is, so dropping below that on a built one un-builds
+ * it — otherwise it would go on reading as done, and unblocking every parent
+ * it sits in, with nothing built at all. Reaching the full count on one that
+ * isn't built does *not* build it: the Done button does more than count — it
+ * puts the parts on the robot and checks the children — and pressing + on a
+ * counter mustn't do all that behind the lead's back.
+ */
+export function completionAfterCount(
+  next: number,
+  target: number,
+  completed: boolean,
+): "unbuild" | "unchanged" {
+  return completed && next < target ? "unbuild" : "unchanged";
+}
+
 /** How many whole units of one sub-assembly get built. */
 export function unitsOf(assembly: DemandAssembly): number {
   return (

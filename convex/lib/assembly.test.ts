@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   blockingSummary,
   buildAssemblyInput,
+  completionAfterCount,
   computeAssemblyStatuses,
   groupMemberRefs,
   isSafeDrawingUrl,
@@ -504,5 +505,21 @@ describe("building the readiness input", () => {
   test("an assembly with no members at all is ready", () => {
     const input = buildAssemblyInput(header, undefined, new Map(), new Map());
     expect(computeAssemblyStatuses([input])[0].ready).toBe(true);
+  });
+});
+
+describe("what a build count does to being built", () => {
+  test("below full on a built one un-builds it", () => {
+    expect(completionAfterCount(1, 2, true)).toBe("unbuild");
+    expect(completionAfterCount(0, 1, true)).toBe("unbuild");
+  });
+  test("full on a built one leaves it built", () => {
+    expect(completionAfterCount(2, 2, true)).toBe("unchanged");
+  });
+  test("full on an unbuilt one doesn't build it", () => {
+    expect(completionAfterCount(2, 2, false)).toBe("unchanged");
+  });
+  test("anything on an unbuilt one leaves it unbuilt", () => {
+    expect(completionAfterCount(0, 2, false)).toBe("unchanged");
   });
 });

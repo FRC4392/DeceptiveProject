@@ -1096,8 +1096,14 @@ describe("the history of a sub-assembly", () => {
     const events = await mentor.query(api.subAssemblies.history, {
       subAssemblyId: id,
     });
-    expect(events.map((e) => e.kind)).toEqual(["reopened", "built"]);
+    // Reopening also starts the count again, and says so.
+    expect(events.map((e) => e.kind)).toEqual([
+      "reopened",
+      "qty_built",
+      "built",
+    ]);
     expect(events[0].userId).toBe("mentor_1");
+    expect(events[1]).toMatchObject({ from: 1, to: 0 });
   });
 });
 
@@ -1182,5 +1188,167 @@ describe("what no sub-assembly has spoken for", () => {
 
     const bearing = loose.find((l) => l.label === "Bearing");
     expect(bearing).toMatchObject({ kind: "cots", planned: 4, claimed: 0 });
+  });
+});
+
+// Built means every unit is built. The count and the Done button are two
+// records of one fact, and they mustn't be allowed to disagree.
+describe("the build count and being built", () => {
+  /** A roller inside the intake's -000, the roller built. */
+  async function builtRoller(t: ReturnType<typeof convexTest>) {
+    const base = await setup(t);
+    const { mentor, intake } = base;
+    const root = (await listFor(mentor, intake._id)).find(
+      (r) => r.assembly.isDefault,
+    )!.assembly._id;
+    const { id: roller } = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Roller",
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: root,
+      partIds: [],
+      cotsItemIds: [],
+      childIds: [roller],
+    });
+    await mentor.mutation(api.subAssemblies.complete, { id: roller });
+    const get = (id: Id<"subAssemblies">) =>
+      mentor.query(api.subAssemblies.get, { id });
+    return { ...base, root, roller, get };
+  }
+
+  test("taking the count below full un-builds it", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, roller, get } = await builtRoller(t);
+    expect((await get(roller))?.completedAt).toBeDefined();
+
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, {
+      id: roller,
+      qtyBuilt: 0,
+    });
+    const after = await get(roller);
+    expect(after?.completedAt).toBeUndefined();
+    expect(after?.qtyBuilt).toBe(0);
+  });
+
+  // This is why it matters: a built child unblocks its parent.
+  test("and stops the assembly it sits in from going together", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, root, roller } = await builtRoller(t);
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, {
+      id: roller,
+      qtyBuilt: 0,
+    });
+    await expect(
+      mentor.mutation(api.subAssemblies.complete, { id: root }),
+    ).rejects.toThrow(/Roller/);
+  });
+
+  test("history says it was reopened, and by the count", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, roller } = await builtRoller(t);
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, {
+      id: roller,
+      qtyBuilt: 0,
+    });
+    const events = await mentor.query(api.subAssemblies.history, {
+      subAssemblyId: roller,
+    });
+    expect(events.map((e) => e.kind)).toEqual([
+      "reopened",
+      "qty_built",
+      "built",
+    ]);
+  });
+
+  test("a student can't un-build one from the counter", async () => {
+    const t = convexTest(schema, modules);
+    const { roller, get } = await builtRoller(t);
+    const student = t.withIdentity(studentIdentity());
+    await student.mutation(api.auth.storeCurrentUser, {});
+
+    await expect(
+      student.mutation(api.subAssemblies.setQtyBuilt, {
+        id: roller,
+        qtyBuilt: 0,
+      }),
+    ).rejects.toThrow("The subsystem lead or a mentor changes a built one.");
+    const still = await get(roller);
+    expect(still?.completedAt).toBeDefined();
+    expect(still?.qtyBuilt).toBe(1);
+  });
+
+  // Same rule as the Done button, so the counter is no way round it.
+  test("only the lead of its own subsystem, not any lead", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, roller } = await builtRoller(t);
+    const subsystems = await mentor.query(api.subsystems.list, {});
+    const drivetrain = subsystems.find((s) => s.code === "DRV")!;
+    for (const [who, subsystem] of [
+      ["drv_lead", drivetrain],
+      ["int_lead", intake],
+    ] as const) {
+      const lead = t.withIdentity({ subject: who, issuer: ISSUER });
+      await lead.mutation(api.auth.storeCurrentUser, {});
+      await mentor.mutation(api.shop.setUserRole, {
+        userId: who,
+        role: "lead",
+      });
+      await mentor.mutation(api.subsystems.update, {
+        id: subsystem._id,
+        leadUserId: who,
+      });
+    }
+
+    const drvLead = t.withIdentity({ subject: "drv_lead", issuer: ISSUER });
+    await expect(
+      drvLead.mutation(api.subAssemblies.setQtyBuilt, {
+        id: roller,
+        qtyBuilt: 0,
+      }),
+    ).rejects.toThrow(/subsystem lead/);
+
+    const intLead = t.withIdentity({ subject: "int_lead", issuer: ISSUER });
+    await intLead.mutation(api.subAssemblies.setQtyBuilt, {
+      id: roller,
+      qtyBuilt: 0,
+    });
+  });
+
+  // Done does more than count — it puts parts on the robot — so + doesn't.
+  test("filling the count doesn't mark it built", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake, get } = await builtRoller(t);
+    const { id: frame } = await mentor.mutation(api.subAssemblies.create, {
+      subsystemId: intake._id,
+      name: "Frame",
+    });
+    await mentor.mutation(api.subAssemblies.setQtyBuilt, {
+      id: frame,
+      qtyBuilt: 1,
+    });
+    const after = await get(frame);
+    expect(after?.qtyBuilt).toBe(1);
+    expect(after?.completedAt).toBeUndefined();
+  });
+
+  test("reopening starts the count again", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, roller, get } = await builtRoller(t);
+    expect((await get(roller))?.qtyBuilt).toBe(1);
+
+    await mentor.mutation(api.subAssemblies.reopen, { id: roller });
+    const after = await get(roller);
+    expect(after?.completedAt).toBeUndefined();
+    expect(after?.qtyBuilt).toBe(0);
+  });
+
+  test("reopening one that's gone says so", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, roller } = await builtRoller(t);
+    await t.run((ctx) => ctx.db.delete(roller));
+    await expect(
+      mentor.mutation(api.subAssemblies.reopen, { id: roller }),
+    ).rejects.toThrow("That sub-assembly is gone.");
   });
 });
