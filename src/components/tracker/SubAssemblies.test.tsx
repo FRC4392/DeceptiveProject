@@ -316,7 +316,7 @@ describe("what a sub-assembly is made of", () => {
 describe("how many of it get built", () => {
   it("counts them up the way a part counts what's been made", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onStep = vi.fn();
     render(
       <BuiltCounter
         assembly={assembly("sa_root", "27-INT-000", "Intake", {
@@ -324,14 +324,17 @@ describe("how many of it get built", () => {
           qtySpares: 1,
           qtyBuilt: 1,
         })}
-        onChange={onChange}
+        onStep={onStep}
       />,
     );
 
     // One of three: neither done nor untouched.
     expect(screen.getByText("1/3")).toBeInTheDocument();
+    // A step, not the count it lands on — see convex/lib/counts.ts.
     await user.click(screen.getByLabelText("One more built"));
-    expect(onChange).toHaveBeenCalledWith(2);
+    expect(onStep).toHaveBeenCalledWith(1);
+    await user.click(screen.getByLabelText("One fewer built"));
+    expect(onStep).toHaveBeenLastCalledWith(-1);
   });
 
   it("won't count past what's being built", () => {
@@ -341,7 +344,7 @@ describe("how many of it get built", () => {
           qtyNeeded: 1,
           qtyBuilt: 1,
         })}
-        onChange={vi.fn()}
+        onStep={vi.fn()}
       />,
     );
     expect(screen.getByLabelText("One more built")).toBeDisabled();

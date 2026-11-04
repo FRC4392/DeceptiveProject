@@ -86,6 +86,9 @@ export function AssemblyMembers({
     return selected.quantities.find((q) => q.refId === memberId)?.quantity ?? 1;
   }
 
+  // Sends the whole membership, built from what this editor last showed — so
+  // two leads saving the same assembly at once is last-write-wins. See the
+  // note on `setMembers`.
   function save(
     next: Partial<Omit<AssemblyRow, "assembly">> & {
       quantities?: { refId: string; quantity: number }[];
@@ -396,10 +399,11 @@ function QtyBox({
  */
 export function BuiltCounter({
   assembly,
-  onChange,
+  onStep,
 }: {
   assembly: Doc<"subAssemblies">;
-  onChange: (qtyBuilt: number) => void;
+  /** One more or one fewer — a step, so presses at once all land. */
+  onStep: (delta: 1 | -1) => void;
 }) {
   const target = (assembly.qtyNeeded ?? 1) + (assembly.qtySpares ?? 0);
   const built = assembly.qtyBuilt ?? 0;
@@ -413,7 +417,7 @@ export function BuiltCounter({
           size="icon"
           className="h-9 w-9"
           disabled={built <= 0}
-          onClick={() => onChange(built - 1)}
+          onClick={() => onStep(-1)}
           aria-label="One fewer built"
         >
           <MinusIcon className="h-4 w-4" />
@@ -427,7 +431,7 @@ export function BuiltCounter({
           size="icon"
           className="h-9 w-9"
           disabled={built >= target}
-          onClick={() => onChange(built + 1)}
+          onClick={() => onStep(1)}
           aria-label="One more built"
         >
           <PlusIcon className="h-4 w-4" />

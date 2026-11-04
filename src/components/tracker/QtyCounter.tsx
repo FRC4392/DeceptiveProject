@@ -13,8 +13,10 @@ export function QtyCounter({ part }: { part: Doc<"parts"> }) {
   const setQtyMade = useMutation(api.parts.setQtyMade);
   const target = part.qtyNeeded + part.qtySpares;
 
+  // A step, not the new count: the server applies it to the count as it
+  // stands, so two people pressing + at once both get counted.
   function step(delta: number) {
-    void setQtyMade({ partId: part._id, qtyMade: part.qtyMade + delta });
+    void setQtyMade({ partId: part._id, delta });
   }
 
   return (

@@ -28,6 +28,7 @@ import {
   requireActiveSeason,
 } from "./lib/season";
 import { assertNumberFree, takePartNumber } from "./lib/numbering";
+import { requestedCount } from "./lib/counts";
 import {
   asStage,
   canAdvance,
@@ -597,15 +598,22 @@ export const unclaim = mutation({
 // ---- Quantities ----
 
 export const setQtyMade = mutation({
-  args: { partId: v.id("parts"), qtyMade: v.number() },
+  args: {
+    partId: v.id("parts"),
+    /** A number typed in. */
+    qtyMade: v.optional(v.number()),
+    /** A press of − or +. See lib/counts.ts for why it isn't a number. */
+    delta: v.optional(v.number()),
+  },
   returns: v.null(),
-  handler: async (ctx, { partId, qtyMade }) => {
+  handler: async (ctx, { partId, qtyMade, delta }) => {
     await requireUserId(ctx);
     const part = await ctx.db.get(partId);
     if (!part) throw new Error("That part is gone.");
     const target = part.qtyNeeded + part.qtySpares;
+    const wanted = requestedCount(part.qtyMade, { value: qtyMade, delta });
     await ctx.db.patch(partId, {
-      qtyMade: Math.min(Math.max(0, Math.round(qtyMade)), target),
+      qtyMade: Math.min(Math.max(0, Math.round(wanted)), target),
     });
     return null;
   },

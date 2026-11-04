@@ -41,8 +41,10 @@ export function InventoryPage() {
     setUnitCost("");
   }
 
-  function adjust(id: Id<"inventoryItems">, current: number, delta: number) {
-    void updateItem({ id, onHandQty: Math.max(0, current + delta) });
+  // A step, not the new count: the server applies it to the count as it
+  // stands, so two people pressing − at once both take one off.
+  function adjust(id: Id<"inventoryItems">, delta: number) {
+    void updateItem({ id, onHandQtyDelta: delta });
   }
 
   return (
@@ -126,7 +128,7 @@ export function InventoryPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        onClick={() => adjust(item._id, item.onHandQty, -1)}
+                        onClick={() => adjust(item._id, -1)}
                       >
                         <MinusIcon className="h-3.5 w-3.5" />
                       </Button>
@@ -137,7 +139,7 @@ export function InventoryPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
-                        onClick={() => adjust(item._id, item.onHandQty, 1)}
+                        onClick={() => adjust(item._id, 1)}
                       >
                         <PlusIcon className="h-3.5 w-3.5" />
                       </Button>

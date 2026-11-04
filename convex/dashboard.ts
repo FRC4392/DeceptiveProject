@@ -6,9 +6,10 @@ import { activeSeason } from "./lib/season";
 import { inScope, scopedRepos } from "./lib/githubRepos";
 import {
   ASSEMBLED_STAGE,
+  buildAssemblyInput,
   computeAssemblyStatuses,
+  groupMemberRefs,
   READY_STAGE,
-  type AssemblyInput,
 } from "./lib/assembly";
 
 const SCAN_LIMIT = 5000;
@@ -81,14 +82,13 @@ export const summary = query({
     const me = identity.subject;
     const season = await activeSeason(ctx);
 
-    const parts = season
-      ? (
-          await ctx.db
-            .query("parts")
-            .withIndex("by_season", (q) => q.eq("seasonId", season._id))
-            .take(SCAN_LIMIT)
-        ).filter((p) => !p.isArchived)
+    const seasonParts = season
+      ? await ctx.db
+          .query("parts")
+          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+          .take(SCAN_LIMIT)
       : [];
+    const parts = seasonParts.filter((p) => !p.isArchived);
     const assemblies = season
       ? await ctx.db
           .query("subAssemblies")
@@ -109,35 +109,38 @@ export const summary = query({
       inScope(issueScope, i),
     );
 
+    const bought = season
+      ? await ctx.db
+          .query("cotsItems")
+          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
+          .take(SCAN_LIMIT)
+      : [];
+
     // How many sub-assemblies could be put together right now — the one
-    // number that says what today's work could be.
-    const members = await ctx.db.query("subAssemblyMembers").take(SCAN_LIMIT);
-    const partById = new Map(parts.map((p) => [p._id as string, p]));
-    const inputs: AssemblyInput[] = assemblies.map((assembly) => {
-      const mine = members.filter((m) => m.subAssemblyId === assembly._id);
-      return {
-        id: assembly._id,
-        number: assembly.partNumber,
-        name: assembly.name,
-        order: assembly.order,
-        completed: assembly.completedAt !== undefined,
-        childIds: mine
-          .map((m) => m.childSubAssemblyId)
-          .filter((id): id is NonNullable<typeof id> => id !== undefined),
-        members: mine
-          .filter((m) => m.partId !== undefined)
-          .map((m) => {
-            const part = partById.get(m.partId as string);
-            return {
-              kind: "part" as const,
-              label: part?.partNumber ?? "",
-              stageLabel: "",
-              ready: (part?.stage ?? 0) >= READY_STAGE,
-            };
-          }),
-      };
-    });
-    const statuses = computeAssemblyStatuses(inputs);
+    // number that says what today's work could be. Built the same way, from
+    // the same rows, as each person's own list of assemblies, so the two
+    // can't disagree about what's ready.
+    const refsById = groupMemberRefs(
+      await ctx.db.query("subAssemblyMembers").take(SCAN_LIMIT),
+    );
+    const partById = new Map(seasonParts.map((p) => [p._id as string, p]));
+    const cotsById = new Map(bought.map((c) => [c._id as string, c]));
+    const statuses = computeAssemblyStatuses(
+      assemblies.map((assembly) =>
+        buildAssemblyInput(
+          {
+            id: assembly._id,
+            number: assembly.partNumber,
+            name: assembly.name,
+            order: assembly.order,
+            completed: assembly.completedAt !== undefined,
+          },
+          refsById.get(assembly._id),
+          partById,
+          cotsById,
+        ),
+      ),
+    );
 
     const outstandingParts = parts.filter((p) => p.stage < ASSEMBLED_STAGE);
     const outstandingAssemblies = assemblies.filter(
@@ -161,13 +164,6 @@ export const summary = query({
     const mineIssues = openIssues.filter(
       (i) => me !== undefined && i.claimedByUserId === me,
     );
-
-    const bought = season
-      ? await ctx.db
-          .query("cotsItems")
-          .withIndex("by_season", (q) => q.eq("seasonId", season._id))
-          .take(SCAN_LIMIT)
-      : [];
 
     const upcoming = season
       ? await ctx.db

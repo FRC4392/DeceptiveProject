@@ -23,6 +23,7 @@ import {
   defaultSubAssemblyNumber,
   takePartNumber,
 } from "./lib/numbering";
+import { requestedCount } from "./lib/counts";
 import {
   ASSEMBLED_STAGE,
   READY_STAGE,
@@ -35,7 +36,9 @@ import {
   unitsOf,
   rollUpDemand,
   wouldCycle,
-  type AssemblyInput,
+  buildAssemblyInput,
+  completionAfterCount,
+  groupMemberRefs,
   type DemandAssembly,
 } from "./lib/assembly";
 import {
@@ -44,6 +47,7 @@ import {
   isLeadOrAbove,
   isMentorOrAbove,
   normalizePartNumber,
+  type Actor,
 } from "./lib/stages";
 
 const SCAN_LIMIT = 5000;
@@ -319,7 +323,9 @@ export const listMine = query({
 
     // Readiness needs the whole season's tree, since a child of mine may sit
     // anywhere in it.
-    const members = await ctx.db.query("subAssemblyMembers").take(SCAN_LIMIT);
+    const refsById = groupMemberRefs(
+      await ctx.db.query("subAssemblyMembers").take(SCAN_LIMIT),
+    );
     const parts = await ctx.db
       .query("parts")
       .withIndex("by_season", (q) => q.eq("seasonId", season._id))
@@ -331,45 +337,23 @@ export const listMine = query({
       .take(SCAN_LIMIT);
     const cotsById = new Map(cots.map((c) => [c._id as string, c]));
 
-    const inputs: AssemblyInput[] = all.map((assembly) => {
-      const own = members.filter((m) => m.subAssemblyId === assembly._id);
-      return {
-        id: assembly._id,
-        number: assembly.partNumber,
-        name: assembly.name,
-        order: assembly.order,
-        completed: assembly.completedAt !== undefined,
-        childIds: own
-          .map((m) => m.childSubAssemblyId)
-          .filter((id): id is Id<"subAssemblies"> => id !== undefined),
-        members: [
-          ...own
-            .filter((m) => m.partId !== undefined)
-            .map((m) => {
-              const part = partById.get(m.partId as string);
-              return {
-                kind: "part" as const,
-                label: part?.partNumber ?? "a part",
-                stageLabel: "not in the bin yet",
-                ready: (part?.stage ?? 0) >= READY_STAGE,
-              };
-            }),
-          ...own
-            .filter((m) => m.cotsItemId !== undefined)
-            .map((m) => {
-              const item = cotsById.get(m.cotsItemId as string);
-              return {
-                kind: "cots" as const,
-                label: item?.name ?? "a bought item",
-                stageLabel: item?.status ?? "needed",
-                ready: item?.status === "arrived",
-              };
-            }),
-        ],
-      };
-    });
     const statusById = new Map(
-      computeAssemblyStatuses(inputs).map((s) => [s.id, s]),
+      computeAssemblyStatuses(
+        all.map((assembly) =>
+          buildAssemblyInput(
+            {
+              id: assembly._id,
+              number: assembly.partNumber,
+              name: assembly.name,
+              order: assembly.order,
+              completed: assembly.completedAt !== undefined,
+            },
+            refsById.get(assembly._id),
+            partById,
+            cotsById,
+          ),
+        ),
+      ).map((s) => [s.id, s]),
     );
 
     const subsystems = await ctx.db.query("subsystems").collect();
@@ -480,6 +464,14 @@ export const setDrawing = mutation({
  * else had it. That was wrong about how robots are built: two roller
  * assemblies share an end cap, and the tracker's job is to add that up, not
  * to make the team pick one. What it costs is `rollUpDemand`'s problem.
+ *
+ * Known limit: this replaces the whole membership with what the editor sends,
+ * and the editor builds that from the list it last showed. Two leads editing
+ * the *same* assembly at once is last-write-wins — the second save drops
+ * whatever the first added. The counters had the same shape and send steps
+ * now (lib/counts.ts); this one would need the editor to say what it saw, so
+ * a stale save can be refused rather than applied. Rare enough to leave for
+ * now, and written down so it isn't a surprise.
  */
 export const setMembers = mutation({
   args: {
@@ -793,21 +785,45 @@ export const setUnits = mutation({
  * either done or untouched.
  */
 export const setQtyBuilt = mutation({
-  args: { id: v.id("subAssemblies"), qtyBuilt: v.number() },
+  args: {
+    id: v.id("subAssemblies"),
+    /** A number typed in. */
+    qtyBuilt: v.optional(v.number()),
+    /** A press of − or +. See lib/counts.ts for why it isn't a number. */
+    delta: v.optional(v.number()),
+  },
   returns: v.null(),
-  handler: async (ctx, { id, qtyBuilt }) => {
+  handler: async (ctx, { id, qtyBuilt, delta }) => {
     const userId = await requireUserId(ctx);
     const assembly = await ctx.db.get(id);
     if (!assembly) throw new Error("That sub-assembly is gone.");
+    // The same count `complete` builds up to: `unitsNeeded` is this
+    // assembly's own needed + spares, read the long way round.
     const target = unitsOf({
       id,
       needed: assembly.qtyNeeded,
       spares: assembly.qtySpares,
       placements: [],
     });
-    const next = Math.min(target, Math.max(0, Math.round(qtyBuilt)));
     const before = assembly.qtyBuilt ?? 0;
-    await ctx.db.patch(id, { qtyBuilt: next });
+    const wanted = requestedCount(before, { value: qtyBuilt, delta });
+    const next = Math.min(target, Math.max(0, Math.round(wanted)));
+
+    // Below the full count on a built one, it isn't built any more — and
+    // that's the same call as marking it built, so it takes the same person.
+    const unbuild =
+      completionAfterCount(next, target, assembly.completedAt !== undefined) ===
+      "unbuild";
+    if (unbuild && !mayInstall(await getActor(ctx), assembly)) {
+      throw new Error("The subsystem lead or a mentor changes a built one.");
+    }
+
+    await ctx.db.patch(id, {
+      qtyBuilt: next,
+      ...(unbuild
+        ? { completedAt: undefined, completedByUserId: undefined }
+        : {}),
+    });
     if (next !== before) {
       await ctx.db.insert("assemblyEvents", {
         subAssemblyId: id,
@@ -815,6 +831,13 @@ export const setQtyBuilt = mutation({
         userId,
         from: before,
         to: next,
+      });
+    }
+    if (unbuild) {
+      await ctx.db.insert("assemblyEvents", {
+        subAssemblyId: id,
+        kind: "reopened",
+        userId,
       });
     }
     return null;
@@ -867,6 +890,22 @@ export const unclaim = mutation({
  * child, a part not in the bin or a bought item still on order all stop it,
  * and nothing moves when it stops.
  */
+/**
+ * Whether this person may say a sub-assembly is or isn't on the robot: its
+ * subsystem's lead, or any mentor. One rule for marking it built and for
+ * un-building it from the counter, so the counter can't be used to get round
+ * the Done button's check.
+ */
+function mayInstall(
+  actor: Actor,
+  assembly: Pick<Doc<"subAssemblies">, "subsystemId">,
+): boolean {
+  return (
+    isMentorOrAbove(actor.role) ||
+    actor.ledSubsystemIds.includes(assembly.subsystemId as string)
+  );
+}
+
 export const complete = mutation({
   args: { id: v.id("subAssemblies") },
   returns: v.object({ moved: v.number() }),
@@ -879,10 +918,7 @@ export const complete = mutation({
     // Putting something on the robot is the subsystem lead's or a mentor's
     // call. Checking it here and not only per part matters: a sub-assembly
     // holding nothing but children would otherwise never reach a check.
-    if (
-      !isMentorOrAbove(actor.role) &&
-      !actor.ledSubsystemIds.includes(assembly.subsystemId as string)
-    ) {
+    if (!mayInstall(actor, assembly)) {
       throw new Error("The subsystem lead or a mentor marks it installed.");
     }
 
@@ -1117,10 +1153,28 @@ export const reopen = mutation({
   returns: v.null(),
   handler: async (ctx, { id }) => {
     const user = await requireLead(ctx);
+    const assembly = await ctx.db.get(id);
+    if (!assembly) throw new Error("That sub-assembly is gone.");
+    // Done set the count to the full number; left there, a reopened one
+    // reads "3/3" with + greyed out and nothing to say it isn't built. Nobody
+    // knows how many really are, so start the count again.
+    const before = assembly.qtyBuilt ?? 0;
     await ctx.db.patch(id, {
       completedAt: undefined,
       completedByUserId: undefined,
+      qtyBuilt: 0,
     });
+    // The count first, so the history reads newest-first with the reopen on
+    // top and the reset under it — the same order the counter writes them.
+    if (before !== 0) {
+      await ctx.db.insert("assemblyEvents", {
+        subAssemblyId: id,
+        kind: "qty_built",
+        userId: user.authId,
+        from: before,
+        to: 0,
+      });
+    }
     await ctx.db.insert("assemblyEvents", {
       subAssemblyId: id,
       kind: "reopened",

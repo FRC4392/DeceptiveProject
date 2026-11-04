@@ -9,11 +9,16 @@ import {
   mutation,
   internalQuery,
   internalMutation,
+  type MutationCtx,
   type QueryCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
 import { canReadAsLead, canReadAsMentor, requireMentor } from "./lib/auth";
-import { modeForShare, type BudgetMode } from "./lib/budget";
+import {
+  allowancePeriodStart,
+  modeForShare,
+  type BudgetMode,
+} from "./lib/budget";
 
 export const DEFAULTS = {
   apiLimit: 2500,
@@ -70,20 +75,56 @@ export const get = query({
   },
 });
 
+/** A person's change to a setting, from a screen or from the command line. */
+async function writeSetting(
+  ctx: MutationCtx,
+  key: string,
+  value: unknown,
+): Promise<void> {
+  const write = async (k: string, v: unknown) => {
+    const existing = await ctx.db
+      .query("appSettings")
+      .withIndex("by_key", (q) => q.eq("key", k))
+      .unique();
+    if (existing) await ctx.db.patch(existing._id, { value: v });
+    else await ctx.db.insert("appSettings", { key: k, value: v });
+  };
+  await write(key, value);
+  // A mode a person sets is theirs, not the app's. Clear the reason the app
+  // left when it last forced one, or the budget would go on reporting the
+  // app's reason for the person's choice — and drop that choice at renewal
+  // as though the app had made it.
+  if (key === "forcedMode") {
+    await write("forcedModeReason", null);
+    await write("forcedModeAt", null);
+  }
+}
+
 export const set = mutation({
   args: { key: v.string(), value: v.any() },
   returns: v.null(),
   handler: async (ctx, { key, value }) => {
     await requireMentor(ctx);
-    const existing = await ctx.db
-      .query("appSettings")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, { value });
-    } else {
-      await ctx.db.insert("appSettings", { key, value });
-    }
+    await writeSetting(ctx, key, value);
+    return null;
+  },
+});
+
+/**
+ * The same as `set`, for the command line. There's no screen for the budget
+ * settings yet, and `npx convex run` calls a function as nobody, which `set`
+ * refuses — so, like `shop:grantRole`, this is the way in for a mentor at the
+ * deployment's own terminal:
+ *
+ *   npx convex run settings:configure '{"key": "renewalDate", "value": 1785542400000}'
+ *
+ * Internal, so only someone with access to the deployment can call it.
+ */
+export const configure = internalMutation({
+  args: { key: v.string(), value: v.any() },
+  returns: v.null(),
+  handler: async (ctx, { key, value }) => {
+    await writeSetting(ctx, key, value);
     return null;
   },
 });
@@ -159,7 +200,14 @@ export const forceManualMode = internalMutation({
   handler: async (ctx, { reason }) => {
     const rows = await ctx.db.query("appSettings").collect();
     const byKey = new Map(rows.map((r) => [r.key, r]));
-    if (byKey.get("forcedMode")?.value === "manual") return null;
+    // A Manual a mentor chose carries no reason: theirs, so leave it. One the
+    // app forced is stamped again rather than skipped — last year's is still
+    // stored after a renewal, and skipping it would leave a fresh 402 dated
+    // last year, which the budget then reads as lapsed and stops braking.
+    const mentorChoseManual =
+      byKey.get("forcedMode")?.value === "manual" &&
+      (byKey.get("forcedModeReason")?.value ?? null) === null;
+    if (mentorChoseManual) return null;
     const write = async (key: string, value: unknown) => {
       const existing = byKey.get(key);
       if (existing) await ctx.db.patch(existing._id, { value });
@@ -192,16 +240,43 @@ async function budgetState(ctx: QueryCtx): Promise<BudgetState> {
     (map.get("leanThreshold") as number) ?? DEFAULTS.leanThreshold;
   const manualThreshold =
     (map.get("manualThreshold") as number) ?? DEFAULTS.manualThreshold;
-  const forcedMode =
+  const storedMode =
     (map.get("forcedMode") as BudgetMode | null | undefined) ?? null;
+  const forcedReason =
+    (map.get("forcedModeReason") as string | null | undefined) ?? null;
+  const forcedAt =
+    (map.get("forcedModeAt") as number | null | undefined) ?? null;
+  const renewalDate = (map.get("renewalDate") as number | null) ?? null;
+  const periodStart = allowancePeriodStart(renewalDate, Date.now());
 
+  // Only this year's calls. The bound goes in the index range, never in a
+  // filter after the fact: the index runs oldest first, so taking a batch and
+  // then filtering would keep only last year's calls and read zero forever.
+  // Every Convex index ends in `_creationTime`, which is what makes this a
+  // range read. Bounded to a year, the read is bounded by real usage too, so
+  // it no longer stops counting at 10,000.
   const counted = await ctx.db
     .query("apiCalls")
-    .withIndex("by_counted", (q) => q.eq("counted", true))
-    .take(10000);
+    .withIndex("by_counted", (q) =>
+      periodStart === null
+        ? q.eq("counted", true)
+        : q.eq("counted", true).gte("_creationTime", periodStart),
+    )
+    .collect();
   const used = counted.length;
   const remaining = Math.max(0, limit - used);
   const share = limit > 0 ? remaining / limit : 0;
+
+  // A mode the app forced — it only ever forces Manual, after Onshape said
+  // the allowance was spent, and always says why — is about *that* year. Once
+  // the allowance renews it no longer applies. A mode a mentor chose carries
+  // no reason (setting one clears the app's), and stays until they change it.
+  const appForcedLastYear =
+    storedMode !== null &&
+    forcedReason !== null &&
+    periodStart !== null &&
+    (forcedAt ?? 0) < periodStart;
+  const forcedMode = appForcedLastYear ? null : storedMode;
 
   return {
     used,
@@ -209,9 +284,8 @@ async function budgetState(ctx: QueryCtx): Promise<BudgetState> {
     remaining,
     mode: forcedMode ?? modeForShare(share, leanThreshold, manualThreshold),
     forced: forcedMode !== null,
-    forcedReason:
-      (map.get("forcedModeReason") as string | null | undefined) ?? null,
-    forcedAt: (map.get("forcedModeAt") as number | null | undefined) ?? null,
-    renewalDate: (map.get("renewalDate") as number | null) ?? null,
+    forcedReason: forcedMode === null ? null : forcedReason,
+    forcedAt: forcedMode === null ? null : forcedAt,
+    renewalDate,
   };
 }
