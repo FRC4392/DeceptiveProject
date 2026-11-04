@@ -10,13 +10,8 @@ import {
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import {
-  requireUserId,
-  requireMentor,
-  getCurrentUser,
-  getActor,
-} from "./lib/auth";
-import { isLeadOrAbove } from "./lib/stages";
+import { requireUserId, requireMentor, getActor } from "./lib/auth";
+import { isLeadOrAbove, isMentorOrAbove } from "./lib/stages";
 import { activeSeason } from "./lib/season";
 import {
   derivePriority,
@@ -751,14 +746,6 @@ export const getForWriteback = internalQuery({
   },
 });
 
-export const callerRole = internalQuery({
-  args: {},
-  returns: v.union(v.literal("mentor"), v.literal("student"), v.null()),
-  handler: async (ctx) => {
-    const user = await getCurrentUser(ctx);
-    return user ? (user.role ?? "student") : null;
-  },
-});
 
 // ---- Actions (GitHub REST write-back — default runtime, plain fetch) ----
 
@@ -825,8 +812,11 @@ export const importIssues = action({
   args: { repo: v.string() },
   returns: v.object({ imported: v.number() }),
   handler: async (ctx, { repo }) => {
-    const role = await ctx.runQuery(internal.github.callerRole, {});
-    if (role !== "mentor") throw new Error("Mentors only.");
+    // The shared role lookup, not a local copy of it: the copy this replaced
+    // read Clerk's raw mentor flag, so someone promoted in Settings was turned
+    // away and someone demoted there kept the button.
+    const role = await ctx.runQuery(internal.auth.callerRole, {});
+    if (!role || !isMentorOrAbove(role)) throw new Error("Mentors only.");
     const token = process.env.GITHUB_TOKEN;
     if (!token) throw new Error("Set GITHUB_TOKEN first.");
     const cleanRepo = normalizeRepo(repo);

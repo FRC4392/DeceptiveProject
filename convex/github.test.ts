@@ -639,3 +639,61 @@ describe("the repo registry", () => {
     ).rejects.toThrow();
   });
 });
+
+// Import is mentor-only, and "mentor" means what Settings says, not just what
+// Clerk says. A role granted in Settings lives in `appRole` and has to win.
+describe("who may import issues", () => {
+  async function withRoles(
+    t: TestConvex<typeof schema>,
+    subject: string,
+    role: "mentor" | "student",
+    appRole?: "student" | "lead" | "mentor" | "admin",
+  ) {
+    await t.run(async (ctx) => {
+      await ctx.db.insert("users", {
+        authId: subject,
+        email: `${subject}@example.com`,
+        name: subject,
+        role,
+        ...(appRole ? { appRole } : {}),
+      });
+    });
+    return t.withIdentity({
+      subject,
+      issuer: "https://example.clerk.accounts.dev",
+    });
+  }
+
+  // Getting as far as the token check means the role check let them through.
+  test("an admin made in Settings gets past the role check", async () => {
+    const t = convexTest(schema, modules);
+    const admin = await withRoles(t, "admin_1", "student", "admin");
+    await expect(
+      admin.action(api.github.importIssues, { repo: "deceivers/robot" }),
+    ).rejects.toThrow(/GITHUB_TOKEN/);
+  });
+
+  test("a mentor made in Settings gets past the role check", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await withRoles(t, "mentor_1", "student", "mentor");
+    await expect(
+      mentor.action(api.github.importIssues, { repo: "deceivers/robot" }),
+    ).rejects.toThrow(/GITHUB_TOKEN/);
+  });
+
+  test("someone demoted in Settings is turned away, whatever Clerk says", async () => {
+    const t = convexTest(schema, modules);
+    const demoted = await withRoles(t, "ex_mentor", "mentor", "student");
+    await expect(
+      demoted.action(api.github.importIssues, { repo: "deceivers/robot" }),
+    ).rejects.toThrow(/Mentors only/);
+  });
+
+  test("a lead can't import", async () => {
+    const t = convexTest(schema, modules);
+    const lead = await withRoles(t, "lead_1", "student", "lead");
+    await expect(
+      lead.action(api.github.importIssues, { repo: "deceivers/robot" }),
+    ).rejects.toThrow(/Mentors only/);
+  });
+});
