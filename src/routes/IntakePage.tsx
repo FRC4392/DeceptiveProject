@@ -331,14 +331,24 @@ function IntakeCard({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => void finish({ intakeId: intake._id })}
+            onClick={() => {
+              setError(null);
+              finish({ intakeId: intake._id }).catch((err: unknown) =>
+                setError(errorText(err, "No luck.")),
+              );
+            }}
           >
             Done with this
           </Button>
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => void removeIntake({ intakeId: intake._id })}
+            onClick={() => {
+              setError(null);
+              removeIntake({ intakeId: intake._id }).catch((err: unknown) =>
+                setError(errorText(err, "No luck.")),
+              );
+            }}
           >
             Discard
           </Button>
@@ -486,9 +496,12 @@ function AssemblyLine({ line }: { line: Line }) {
         <Button
           size="sm"
           variant="ghost"
-          onClick={() =>
-            void applyLine({ lineId: line._id, decision: "ignored" })
-          }
+          onClick={() => {
+            setError(null);
+            applyLine({ lineId: line._id, decision: "ignored" }).catch(
+              (err: unknown) => setError(errorText(err, "No luck.")),
+            );
+          }}
         >
           Got it
         </Button>
@@ -532,29 +545,49 @@ function AssemblyLine({ line }: { line: Line }) {
  * nothing to decide — it exists, somebody is buying it — so the row is here
  * to be seen and waved past.
  */
+/**
+ * A line's answer, and the sentence to show if it didn't go through. These
+ * buttons used to fire and forget, so a refused answer just did nothing.
+ */
+function useAnswer() {
+  const [error, setError] = useState<string | null>(null);
+  function run(action: Promise<unknown>) {
+    setError(null);
+    action.catch((err: unknown) => setError(errorText(err, "No luck.")));
+  }
+  return { error, run };
+}
+
 function BoughtLine({ line }: { line: Line }) {
   const applyLine = useMutation(api.intake.applyLine);
+  const { error, run } = useAnswer();
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
-      <span className="min-w-0">
-        <span className="block font-medium">{line.name}</span>
-        <span className="block text-xs text-muted-foreground">{line.note}</span>
-      </span>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() =>
-          void applyLine({ lineId: line._id, decision: "ignored" })
-        }
-      >
-        Got it
-      </Button>
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+        <span className="min-w-0">
+          <span className="block font-medium">{line.name}</span>
+          <span className="block text-xs text-muted-foreground">
+            {line.note}
+          </span>
+        </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() =>
+            run(applyLine({ lineId: line._id, decision: "ignored" }))
+          }
+        >
+          Got it
+        </Button>
+      </div>
+      {error && <p className="mt-2 text-xs text-danger">{error}</p>}
     </div>
   );
 }
 
 function ChangedLine({ line }: { line: Line }) {
   const applyLine = useMutation(api.intake.applyLine);
+  const { error, run } = useAnswer();
   const options = [
     {
       value: "rework" as const,
@@ -593,7 +626,7 @@ function ChangedLine({ line }: { line: Line }) {
             key={option.value}
             type="button"
             onClick={() =>
-              void applyLine({ lineId: line._id, decision: option.value })
+              run(applyLine({ lineId: line._id, decision: option.value }))
             }
             className="rounded-lg border bg-background p-3 text-left transition-colors hover:border-primary"
           >
@@ -604,38 +637,45 @@ function ChangedLine({ line }: { line: Line }) {
           </button>
         ))}
       </div>
+      {error && <p className="mt-2 text-xs text-danger">{error}</p>}
     </div>
   );
 }
 
 function RemovedLine({ line }: { line: Line }) {
   const applyLine = useMutation(api.intake.applyLine);
+  const { error, run } = useAnswer();
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm">
-      <span>
-        <span className="font-mono">{line.partNumber}</span> {line.name}
-        <span className="block text-xs text-muted-foreground">{line.note}</span>
-      </span>
-      <span className="flex gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            void applyLine({ lineId: line._id, decision: "archived" })
-          }
-        >
-          Archive it
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            void applyLine({ lineId: line._id, decision: "ignored" })
-          }
-        >
-          Leave it
-        </Button>
-      </span>
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm">
+        <span>
+          <span className="font-mono">{line.partNumber}</span> {line.name}
+          <span className="block text-xs text-muted-foreground">
+            {line.note}
+          </span>
+        </span>
+        <span className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              run(applyLine({ lineId: line._id, decision: "archived" }))
+            }
+          >
+            Archive it
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              run(applyLine({ lineId: line._id, decision: "ignored" }))
+            }
+          >
+            Leave it
+          </Button>
+        </span>
+      </div>
+      {error && <p className="mt-2 text-xs text-danger">{error}</p>}
     </div>
   );
 }

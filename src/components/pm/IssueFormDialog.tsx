@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { errorText } from "@/lib/errors";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +47,7 @@ export function IssueFormDialog({
   );
   const [labels, setLabels] = useState((issue?.labels ?? []).join(", "));
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -54,6 +56,7 @@ export function IssueFormDialog({
       .split(",")
       .map((l) => l.trim())
       .filter(Boolean);
+    setError(null);
     setSaving(true);
     try {
       if (isEdit && issue) {
@@ -76,6 +79,9 @@ export function IssueFormDialog({
         setLabels("");
       }
       onOpenChange(false);
+    } catch (err) {
+      // Stays open so nothing typed is lost; this used to stay open silently.
+      setError(errorText(err, "That didn't save."));
     } finally {
       setSaving(false);
     }
@@ -145,6 +151,7 @@ export function IssueFormDialog({
             />
           </div>
 
+          {error && <p className="text-sm text-danger">{error}</p>}
           <DialogFooter>
             <Button type="submit" disabled={saving || !title.trim()}>
               {saving ? "Saving…" : isEdit ? "Save changes" : "Create issue"}

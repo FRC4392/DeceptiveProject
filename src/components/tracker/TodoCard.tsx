@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation } from "convex/react";
 import { api } from "../../../convex/_generated/api";
@@ -7,6 +8,7 @@ import { Chip } from "@/components/tracker/PartChips";
 import { ClaimLine } from "@/components/tracker/ClaimLine";
 import { useCurrentUserId } from "@/lib/roles";
 import { cn } from "@/lib/utils";
+import { errorText } from "@/lib/errors";
 
 const PRIORITY: Record<Doc<"todos">["priority"], string> = {
   high: "bg-danger/10 text-danger",
@@ -28,6 +30,7 @@ export function TodoCard({
   const setDone = useMutation(api.todos.setDone);
   const claim = useMutation(api.todos.claim);
   const unclaim = useMutation(api.todos.unclaim);
+  const [error, setError] = useState<string | null>(null);
   const done = todo.doneAt !== undefined;
   const tagNames = todo.tagIds
     .map((id) => tags.find((t) => t._id === id)?.name)
@@ -45,9 +48,12 @@ export function TodoCard({
           checked={done}
           className="mt-1"
           aria-label={done ? `Reopen ${todo.title}` : `Finish ${todo.title}`}
-          onCheckedChange={(next) =>
-            void setDone({ id: todo._id, done: next === true })
-          }
+          onCheckedChange={(next) => {
+            setError(null);
+            setDone({ id: todo._id, done: next === true }).catch(
+              (err: unknown) => setError(errorText(err, "That didn't work.")),
+            );
+          }}
         />
         <div className="min-w-0 grow">
           <Link
@@ -72,6 +78,7 @@ export function TodoCard({
               ))}
             </div>
           )}
+          {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
         </div>
       </div>
 

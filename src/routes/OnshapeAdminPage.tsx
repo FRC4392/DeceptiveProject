@@ -46,6 +46,8 @@ export function OnshapeAdminPage() {
   const [subsystemSel, setSubsystemSel] = useState<string>(NO_SUBSYSTEM);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+  // Failures in the danger colour, apart from `note`, which says what worked.
+  const [error, setError] = useState<string | null>(null);
 
   if (!isMentor) {
     return (
@@ -61,6 +63,8 @@ export function OnshapeAdminPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!documentId.trim()) return;
+    setNote("");
+    setError(null);
     setSaving(true);
     try {
       await mapDocument({
@@ -77,6 +81,8 @@ export function OnshapeAdminPage() {
       setDocumentId("");
       setName("");
       setSubsystemSel(NO_SUBSYSTEM);
+    } catch (err) {
+      setError(errorText(err, "Couldn't map that document."));
     } finally {
       setSaving(false);
     }
@@ -194,6 +200,7 @@ export function OnshapeAdminPage() {
           </Button>
         </form>
         {note && <p className="mt-3 text-sm text-muted-foreground">{note}</p>}
+        {error && <p className="mt-3 text-sm text-danger">{error}</p>}
       </Panel>
 
       <Panel title="Known documents">
@@ -234,7 +241,15 @@ export function OnshapeAdminPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => void removeDoc({ id: d._id })}
+                      onClick={() => {
+                        setError(null);
+                        removeDoc({ id: d._id }).catch((err: unknown) =>
+                          setError(
+                            errorText(err, "Couldn't remove that document."),
+                          ),
+                        );
+                      }}
+                      aria-label={`Remove ${d.name}`}
                     >
                       <TrashIcon className="h-4 w-4" />
                     </Button>

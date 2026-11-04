@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { useIsMentor } from "@/lib/roles";
 import { formatCost } from "@/lib/stages";
+import { errorText } from "@/lib/errors";
 import { MinusIcon, PlusIcon, TrashIcon } from "@radix-ui/react-icons";
 
 export function InventoryPage() {
@@ -27,24 +28,35 @@ export function InventoryPage() {
   const [name, setName] = useState("");
   const [qty, setQty] = useState("0");
   const [unitCost, setUnitCost] = useState("");
+  // Every write on this page says so when it doesn't go through. They used
+  // to fail silently: a count that didn't move, a row that didn't appear.
+  const [error, setError] = useState<string | null>(null);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    await createItem({
-      name: name.trim(),
-      onHandQty: parseInt(qty, 10) || 0,
-      unitCost: unitCost.trim() === "" ? undefined : parseFloat(unitCost),
-    });
-    setName("");
-    setQty("0");
-    setUnitCost("");
+    setError(null);
+    try {
+      await createItem({
+        name: name.trim(),
+        onHandQty: parseInt(qty, 10) || 0,
+        unitCost: unitCost.trim() === "" ? undefined : parseFloat(unitCost),
+      });
+      setName("");
+      setQty("0");
+      setUnitCost("");
+    } catch (err) {
+      setError(errorText(err, "That didn't save."));
+    }
   }
 
   // A step, not the new count: the server applies it to the count as it
   // stands, so two people pressing − at once both take one off.
   function adjust(id: Id<"inventoryItems">, delta: number) {
-    void updateItem({ id, onHandQtyDelta: delta });
+    setError(null);
+    updateItem({ id, onHandQtyDelta: delta }).catch((err: unknown) =>
+      setError(errorText(err, "That didn't work.")),
+    );
   }
 
   return (
@@ -58,6 +70,8 @@ export function InventoryPage() {
           </Link>
         </p>
       </div>
+
+      {error && <p className="text-sm text-danger">{error}</p>}
 
       <form
         onSubmit={(e) => void add(e)}
@@ -128,7 +142,9 @@ export function InventoryPage() {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7"
+                        disabled={item.onHandQty <= 0}
                         onClick={() => adjust(item._id, -1)}
+                        aria-label={`One fewer ${item.name}`}
                       >
                         <MinusIcon className="h-3.5 w-3.5" />
                       </Button>
@@ -140,6 +156,7 @@ export function InventoryPage() {
                         size="icon"
                         className="h-7 w-7"
                         onClick={() => adjust(item._id, 1)}
+                        aria-label={`One more ${item.name}`}
                       >
                         <PlusIcon className="h-3.5 w-3.5" />
                       </Button>
@@ -158,7 +175,13 @@ export function InventoryPage() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => void removeItem({ id: item._id })}
+                        onClick={() => {
+                          setError(null);
+                          removeItem({ id: item._id }).catch((err: unknown) =>
+                            setError(errorText(err, "That didn't work.")),
+                          );
+                        }}
+                        aria-label={`Remove ${item.name}`}
                       >
                         <TrashIcon className="h-4 w-4" />
                       </Button>

@@ -51,15 +51,25 @@ function fromDateInput(value: string): number | null {
  * shown — the move stamped it — so this is for correcting a date, not for
  * supplying one.
  */
-function DateFields({ item }: { item: Doc<"cotsItems"> }) {
+function DateFields({
+  item,
+  onError,
+}: {
+  item: Doc<"cotsItems">;
+  /** Where to say a correction didn't save — the dialog's own error line. */
+  onError: (message: string | null) => void;
+}) {
   const setStatus = useMutation(api.cots.setStatus);
 
   function set(field: "eta" | "orderedAt" | "arrivedAt", value: string) {
-    void setStatus({
+    onError(null);
+    setStatus({
       id: item._id,
       status: item.status,
       [field]: fromDateInput(value),
-    });
+    }).catch((err: unknown) =>
+      onError(errorText(err, "That date didn't save.")),
+    );
   }
 
   return (
@@ -207,7 +217,7 @@ export function BoughtItemDetail({
             </Detail>
           </dl>
 
-          <DateFields item={item} />
+          <DateFields item={item} onError={setError} />
           {error && <p className="text-sm text-danger">{error}</p>}
         </div>
 
@@ -230,8 +240,12 @@ export function BoughtItemDetail({
               variant="ghost"
               className="text-danger"
               onClick={() => {
-                void remove({ id: item._id });
-                onOpenChange(false);
+                setError(null);
+                remove({ id: item._id })
+                  .then(() => onOpenChange(false))
+                  .catch((err: unknown) =>
+                    setError(errorText(err, "That didn't delete.")),
+                  );
               }}
             >
               Delete
