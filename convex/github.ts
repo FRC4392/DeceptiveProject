@@ -29,6 +29,7 @@ import {
   ensureRepo,
   repoKey,
   repoRow,
+  inScope,
   scopedRepos,
   type RepoScope,
 } from "./lib/githubRepos";
@@ -505,10 +506,18 @@ export const listMine = query({
   returns: v.array(vIssue),
   handler: async (ctx) => {
     const userId = await requireUserId(ctx);
-    const mine = await ctx.db
-      .query("issues")
-      .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
-      .take(200);
+    // An issue has no season of its own; its repo does. Drop the ones in a
+    // repo that belongs to a past season. Keep this season's, and keep the
+    // ongoing repos too — the scouting app is reused every year, so a claim
+    // on it is today's work, even though the season view leaves it out.
+    const thisSeason = await scopedRepos(ctx, "season");
+    const ongoing = await scopedRepos(ctx, "ongoing");
+    const mine = (
+      await ctx.db
+        .query("issues")
+        .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
+        .take(200)
+    ).filter((i) => inScope(thisSeason, i) || inScope(ongoing, i));
     // Open ones first — a closed issue you fixed is history, not a job.
     return mine.sort((a, b) => {
       const aClosed = a.state === "closed";

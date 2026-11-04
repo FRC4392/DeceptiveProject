@@ -132,12 +132,18 @@ export const listMine = query({
   returns: v.array(vPart),
   handler: async (ctx) => {
     const userId = await requireUserId(ctx);
+    // This season's, like the board — a claim from last year's robot isn't a
+    // job any more, and `subAssemblies.listMine` beside it is already scoped.
+    const season = await activeSeason(ctx);
+    if (!season) return [];
+    // Claimant first and season second: one person's claims are tens of rows,
+    // so this reads far less than starting from the whole season would.
     const parts = await ctx.db
       .query("parts")
       .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
       .take(SCAN_LIMIT);
     return parts
-      .filter((p) => !p.isArchived)
+      .filter((p) => !p.isArchived && p.seasonId === season._id)
       .sort(
         (a, b) => a.stage - b.stage || a.partNumber.localeCompare(b.partNumber),
       );
