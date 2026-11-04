@@ -30,13 +30,40 @@ import { MyIssuesPage } from "@/routes/MyIssuesPage";
 import { IssueDetailPage } from "@/routes/IssueDetailPage";
 import { LoginPage } from "@/routes/LoginPage";
 
-function StoreCurrentUser() {
+/** How long to wait before each retry of writing the user row, in ms. */
+const STORE_USER_RETRY_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+
+export function StoreCurrentUser() {
   const { isAuthenticated } = useConvexAuth();
   const storeCurrentUser = useMutation(api.auth.storeCurrentUser);
 
+  // The `users` row is what every write checks a role against. This effect
+  // runs once per sign-in, so a single failed attempt used to mean no row for
+  // as long as the tab stayed open — reads still work off the session, but a
+  // mentor couldn't save anything. Keep trying for a while instead.
   useEffect(() => {
     if (!isAuthenticated) return;
-    void storeCurrentUser();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const attempt = (n: number) => {
+      storeCurrentUser().catch((err: unknown) => {
+        if (cancelled) return;
+        const delay = STORE_USER_RETRY_MS[n];
+        if (delay === undefined) {
+          console.error("Couldn't save your sign-in; giving up.", err);
+          return;
+        }
+        console.warn(`Couldn't save your sign-in; retrying in ${delay}ms.`);
+        timer = setTimeout(() => attempt(n + 1), delay);
+      });
+    };
+    attempt(0);
+
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
   }, [isAuthenticated, storeCurrentUser]);
 
   return null;
