@@ -3,14 +3,18 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { canRead, requireUserId, requireLead } from "./lib/auth";
+import { canRead, currentRole, requireUserId, requireLead } from "./lib/auth";
 import { activeSeason, requireActiveSeason } from "./lib/season";
+import { isLeadOrAbove } from "./lib/stages";
 
 const statusValidator = v.union(
   v.literal("needed"),
   v.literal("ordered"),
   v.literal("arrived"),
 );
+
+/** In the order it happens, so a move can tell forward from back. */
+const STATUS_ORDER = { needed: 0, ordered: 1, arrived: 2 } as const;
 
 const vCots = v.object({
   _id: v.id("cotsItems"),
@@ -111,6 +115,17 @@ export const setStatus = mutation({
     await requireUserId(ctx);
     const item = await ctx.db.get(id);
     if (!item) throw new Error("That item is gone.");
+
+    // Forward is anyone's job: placing the order, signing for the box. Back
+    // undoes what someone recorded and clears its dates, so it's a lead's
+    // call — the screens only offer it to a lead, and now so does this.
+    // Correcting a date without moving the item stays open to everyone, as
+    // the screens have it.
+    if (STATUS_ORDER[status] < STATUS_ORDER[item.status]) {
+      if (!isLeadOrAbove(await currentRole(ctx))) {
+        throw new Error("A lead or a mentor moves a bought item back.");
+      }
+    }
 
     const now = Date.now();
     const patch: Partial<Doc<"cotsItems">> = { status };
