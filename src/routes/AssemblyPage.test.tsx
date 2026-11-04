@@ -202,7 +202,7 @@ describe("a sub-assembly's own page", () => {
     renderPage();
 
     await user.click(screen.getByLabelText("One more built"));
-    expect(setQtyBuilt).toHaveBeenCalledWith({ id: ROOT_ID, qtyBuilt: 1 });
+    expect(setQtyBuilt).toHaveBeenCalledWith({ id: ROOT_ID, delta: 1 });
   });
 
   it("keeps the 000 undeletable", () => {

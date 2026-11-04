@@ -23,6 +23,7 @@ import {
   defaultSubAssemblyNumber,
   takePartNumber,
 } from "./lib/numbering";
+import { requestedCount } from "./lib/counts";
 import {
   ASSEMBLED_STAGE,
   READY_STAGE,
@@ -463,6 +464,14 @@ export const setDrawing = mutation({
  * else had it. That was wrong about how robots are built: two roller
  * assemblies share an end cap, and the tracker's job is to add that up, not
  * to make the team pick one. What it costs is `rollUpDemand`'s problem.
+ *
+ * Known limit: this replaces the whole membership with what the editor sends,
+ * and the editor builds that from the list it last showed. Two leads editing
+ * the *same* assembly at once is last-write-wins — the second save drops
+ * whatever the first added. The counters had the same shape and send steps
+ * now (lib/counts.ts); this one would need the editor to say what it saw, so
+ * a stale save can be refused rather than applied. Rare enough to leave for
+ * now, and written down so it isn't a surprise.
  */
 export const setMembers = mutation({
   args: {
@@ -776,9 +785,15 @@ export const setUnits = mutation({
  * either done or untouched.
  */
 export const setQtyBuilt = mutation({
-  args: { id: v.id("subAssemblies"), qtyBuilt: v.number() },
+  args: {
+    id: v.id("subAssemblies"),
+    /** A number typed in. */
+    qtyBuilt: v.optional(v.number()),
+    /** A press of − or +. See lib/counts.ts for why it isn't a number. */
+    delta: v.optional(v.number()),
+  },
   returns: v.null(),
-  handler: async (ctx, { id, qtyBuilt }) => {
+  handler: async (ctx, { id, qtyBuilt, delta }) => {
     const userId = await requireUserId(ctx);
     const assembly = await ctx.db.get(id);
     if (!assembly) throw new Error("That sub-assembly is gone.");
@@ -790,8 +805,9 @@ export const setQtyBuilt = mutation({
       spares: assembly.qtySpares,
       placements: [],
     });
-    const next = Math.min(target, Math.max(0, Math.round(qtyBuilt)));
     const before = assembly.qtyBuilt ?? 0;
+    const wanted = requestedCount(before, { value: qtyBuilt, delta });
+    const next = Math.min(target, Math.max(0, Math.round(wanted)));
 
     // Below the full count on a built one, it isn't built any more — and
     // that's the same call as marking it built, so it takes the same person.

@@ -236,9 +236,7 @@ export function AssemblyPage() {
             <div className="mt-4 flex flex-wrap items-end gap-4 text-sm">
               <BuiltCounter
                 assembly={assembly}
-                onChange={(qtyBuilt) =>
-                  void run(() => setQtyBuilt({ id, qtyBuilt }))
-                }
+                onStep={(delta) => void run(() => setQtyBuilt({ id, delta }))}
               />
             </div>
 
