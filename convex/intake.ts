@@ -8,7 +8,7 @@ import { query, mutation, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { canReadAsLead, requireLead } from "./lib/auth";
-import { requireActiveSeason } from "./lib/season";
+import { assertSubsystemInSeason, requireActiveSeason } from "./lib/season";
 import { assertNumberFree, takePartNumber } from "./lib/numbering";
 import { loadKnown } from "./lib/intakeKnown";
 import {
@@ -328,6 +328,7 @@ export const applyLine = mutation({
         }
         const subsystem = await ctx.db.get(args.subsystemId);
         if (!subsystem) throw new Error("That subsystem is gone.");
+        assertSubsystemInSeason(subsystem, season);
         const process = await ctx.db.get(args.processTypeId);
         if (!process) throw new Error("That process is gone.");
 
@@ -512,6 +513,7 @@ export const createSubAssemblyFromLine = mutation({
     const season = await requireActiveSeason(ctx);
     const subsystem = await ctx.db.get(args.subsystemId);
     if (!subsystem) throw new Error("That subsystem is gone.");
+    assertSubsystemInSeason(subsystem, season);
 
     // Keep the released number when it looks like one of ours, the same rule
     // a part follows — the CAD and the board agreeing is the whole point.
@@ -599,6 +601,7 @@ export const createCotsItemFromLine = mutation({
     const season = await requireActiveSeason(ctx);
     const subsystem = await ctx.db.get(args.subsystemId);
     if (!subsystem) throw new Error("That subsystem is gone.");
+    assertSubsystemInSeason(subsystem, season);
 
     // No number is taken. A bought item is never made, so there is nothing
     // for a {YY}-{SUB}-{NNN} to label, and numbers are never reused — burning

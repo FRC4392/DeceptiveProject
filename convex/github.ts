@@ -29,6 +29,7 @@ import {
   ensureRepo,
   repoKey,
   repoRow,
+  inScope,
   scopedRepos,
   type RepoScope,
 } from "./lib/githubRepos";
@@ -505,10 +506,18 @@ export const listMine = query({
   returns: v.array(vIssue),
   handler: async (ctx) => {
     const userId = await requireUserId(ctx);
-    const mine = await ctx.db
-      .query("issues")
-      .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
-      .take(200);
+    // An issue has no season of its own; its repo does. Drop the ones in a
+    // repo that belongs to a past season. Keep this season's, and keep the
+    // ongoing repos too — the scouting app is reused every year, so a claim
+    // on it is today's work, even though the season view leaves it out.
+    const thisSeason = await scopedRepos(ctx, "season");
+    const ongoing = await scopedRepos(ctx, "ongoing");
+    const mine = (
+      await ctx.db
+        .query("issues")
+        .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
+        .take(200)
+    ).filter((i) => inScope(thisSeason, i) || inScope(ongoing, i));
     // Open ones first — a closed issue you fixed is history, not a job.
     return mine.sort((a, b) => {
       const aClosed = a.state === "closed";
@@ -601,6 +610,41 @@ const vUpsertArgs = {
 // Returns null for a repo the team has ignored: the delivery is accepted and
 // dropped, which is what "I don't want that repo in here" has to mean when one
 // organisation-level webhook feeds every repo the team owns.
+/**
+ * How the repo registry spells a repo, or the payload's own spelling when the
+ * registry hasn't met it yet. GitHub doesn't care about case and the team's
+ * registry doesn't either, so issues are stored under this one spelling —
+ * otherwise "team/robot" and "Team/Robot" are two copies of the same issue.
+ */
+async function canonicalRepo(ctx: QueryCtx, raw: string): Promise<string> {
+  return (await repoRow(ctx, raw))?.fullName ?? raw.trim();
+}
+
+/**
+ * The issue at (repo, number). Looks under the canonical spelling first, then
+ * under the one the payload used — rows written before names were made
+ * canonical carry whatever the payload said, and a delivery has to find them
+ * rather than starting a second copy. `github:canonicalizeIssueRepos` folds
+ * those old rows together; this is what keeps new ones from appearing.
+ */
+async function issueAt(
+  ctx: QueryCtx,
+  canonical: string,
+  raw: string,
+  number: number,
+) {
+  for (const repo of canonical === raw ? [canonical] : [canonical, raw]) {
+    const found = await ctx.db
+      .query("issues")
+      .withIndex("by_repo_and_number", (q) =>
+        q.eq("repo", repo).eq("number", number),
+      )
+      .unique();
+    if (found) return found;
+  }
+  return null;
+}
+
 export const upsertIssueFromWebhook = internalMutation({
   args: vUpsertArgs,
   returns: v.union(v.id("issues"), v.null()),
@@ -609,15 +653,12 @@ export const upsertIssueFromWebhook = internalMutation({
     if (repo.kind === "ignored") return null;
 
     const priority = derivePriority(args.labels);
-    const existing = await ctx.db
-      .query("issues")
-      .withIndex("by_repo_and_number", (q) =>
-        q.eq("repo", args.repo).eq("number", args.number),
-      )
-      .unique();
+    const existing = await issueAt(ctx, repo.fullName, args.repo, args.number);
 
     if (existing) {
       await ctx.db.patch(existing._id, {
+        // Heals a row stored under the payload's spelling, as it's touched.
+        repo: repo.fullName,
         source: "github",
         githubId: args.githubId,
         title: args.title,
@@ -638,7 +679,7 @@ export const upsertIssueFromWebhook = internalMutation({
 
     const id = await ctx.db.insert("issues", {
       source: "github",
-      repo: args.repo,
+      repo: repo.fullName,
       number: args.number,
       githubId: args.githubId,
       title: args.title,
@@ -660,12 +701,12 @@ export const deleteIssueFromWebhook = internalMutation({
   args: { repo: v.string(), number: v.number() },
   returns: v.null(),
   handler: async (ctx, { repo, number }) => {
-    const existing = await ctx.db
-      .query("issues")
-      .withIndex("by_repo_and_number", (q) =>
-        q.eq("repo", repo).eq("number", number),
-      )
-      .unique();
+    const existing = await issueAt(
+      ctx,
+      await canonicalRepo(ctx, repo),
+      repo,
+      number,
+    );
     if (!existing) return null;
     const comments = await ctx.db
       .query("issueComments")
@@ -687,12 +728,12 @@ export const upsertCommentFromWebhook = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const issue = await ctx.db
-      .query("issues")
-      .withIndex("by_repo_and_number", (q) =>
-        q.eq("repo", args.repo).eq("number", args.number),
-      )
-      .unique();
+    const issue = await issueAt(
+      ctx,
+      await canonicalRepo(ctx, args.repo),
+      args.repo,
+      args.number,
+    );
     if (!issue) return null; // comment on an issue we haven't synced — ignore
     const existing = await ctx.db
       .query("issueComments")
@@ -729,6 +770,132 @@ export const deleteCommentFromWebhook = internalMutation({
       .unique();
     if (existing) await ctx.db.delete(existing._id);
     return null;
+  },
+});
+
+/**
+ * One-off: fold issues stored under a non-canonical spelling of their repo
+ * into the canonical one. Deliveries heal rows as they're touched (see
+ * `issueAt`); this does the rest at once, and merges the duplicate pairs that
+ * mixed spellings already produced.
+ *
+ * Dry run unless told otherwise — read what it would do first:
+ *
+ *   npx convex run github:canonicalizeIssueRepos
+ *   npx convex run github:canonicalizeIssueRepos '{"dryRun": false}'
+ *
+ * Where a pair has to become one, the row GitHub synced most recently is
+ * kept, since it holds the freshest title, state and labels. What the team
+ * did in the app — a claim, a priority override — is carried over from the
+ * other if the keeper has none, and comments move across without doubling.
+ */
+export const canonicalizeIssueRepos = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  returns: v.object({
+    dryRun: v.boolean(),
+    renamed: v.number(),
+    merged: v.number(),
+    removed: v.number(),
+    changes: v.array(
+      v.object({
+        repo: v.string(),
+        number: v.number(),
+        from: v.array(v.string()),
+        rows: v.number(),
+      }),
+    ),
+  }),
+  handler: async (ctx, { dryRun }) => {
+    const dry = dryRun ?? true;
+    const issues = await ctx.db.query("issues").collect();
+
+    const groups = new Map<string, Doc<"issues">[]>();
+    const canonicalOf = new Map<string, string>();
+    for (const issue of issues) {
+      if (issue.repo === undefined || issue.number === undefined) continue;
+      let canonical = canonicalOf.get(issue.repo);
+      if (canonical === undefined) {
+        canonical = await canonicalRepo(ctx, issue.repo);
+        canonicalOf.set(issue.repo, canonical);
+      }
+      const key = `${canonical}#${issue.number}`;
+      groups.set(key, [...(groups.get(key) ?? []), issue]);
+    }
+
+    let renamed = 0;
+    let merged = 0;
+    let removed = 0;
+    const changes: {
+      repo: string;
+      number: number;
+      from: string[];
+      rows: number;
+    }[] = [];
+
+    for (const rows of groups.values()) {
+      const canonical = canonicalOf.get(rows[0].repo!)!;
+      const number = rows[0].number!;
+      if (rows.length === 1 && rows[0].repo === canonical) continue;
+
+      changes.push({
+        repo: canonical,
+        number,
+        from: [...new Set(rows.map((r) => r.repo!))],
+        rows: rows.length,
+      });
+      if (rows.length === 1) renamed += 1;
+      else {
+        merged += 1;
+        removed += rows.length - 1;
+      }
+      if (dry) continue;
+
+      const [keeper, ...rest] = [...rows].sort(
+        (a, b) => (b.lastSyncedAt ?? 0) - (a.lastSyncedAt ?? 0),
+      );
+      const patch: Partial<Doc<"issues">> = { repo: canonical };
+      const claimed =
+        keeper.claimedByUserId ??
+        rest.find((r) => r.claimedByUserId)?.claimedByUserId;
+      if (claimed !== undefined) patch.claimedByUserId = claimed;
+      const override =
+        keeper.priorityOverride ??
+        rest.find((r) => r.priorityOverride)?.priorityOverride;
+      if (override !== undefined) {
+        patch.priorityOverride = override;
+        patch.priority = override;
+      }
+      await ctx.db.patch(keeper._id, patch);
+
+      const kept = await ctx.db
+        .query("issueComments")
+        .withIndex("by_issue", (q) => q.eq("issueId", keeper._id))
+        .collect();
+      const keptIds = new Set(
+        kept.map((c) => c.githubCommentId).filter((id) => id !== undefined),
+      );
+      for (const dup of rest) {
+        const comments = await ctx.db
+          .query("issueComments")
+          .withIndex("by_issue", (q) => q.eq("issueId", dup._id))
+          .collect();
+        for (const comment of comments) {
+          const seen =
+            comment.githubCommentId !== undefined &&
+            keptIds.has(comment.githubCommentId);
+          if (seen) await ctx.db.delete(comment._id);
+          else {
+            await ctx.db.patch(comment._id, { issueId: keeper._id });
+            if (comment.githubCommentId !== undefined) {
+              keptIds.add(comment.githubCommentId);
+            }
+          }
+        }
+        await ctx.db.delete(dup._id);
+      }
+    }
+
+    return { dryRun: dry, renamed, merged, removed, changes };
   },
 });
 

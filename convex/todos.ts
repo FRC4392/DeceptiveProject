@@ -137,10 +137,15 @@ export const listMine = query({
   returns: v.array(vTodo),
   handler: async (ctx) => {
     const userId = await requireUserId(ctx);
-    const todos = await ctx.db
-      .query("todos")
-      .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
-      .take(SCAN_LIMIT);
+    // This season's, like the list it comes from.
+    const season = await activeSeason(ctx);
+    if (!season) return [];
+    const todos = (
+      await ctx.db
+        .query("todos")
+        .withIndex("by_claimedBy", (q) => q.eq("claimedByUserId", userId))
+        .take(SCAN_LIMIT)
+    ).filter((t) => t.seasonId === season._id);
     return todos.sort((a, b) => {
       if (!!a.doneAt !== !!b.doneAt) return a.doneAt ? 1 : -1;
       return b._creationTime - a._creationTime;

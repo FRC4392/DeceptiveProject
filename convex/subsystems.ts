@@ -11,7 +11,11 @@ import type { Doc } from "./_generated/dataModel";
 import { canRead, canReadAsMentor, requireMentor } from "./lib/auth";
 import { READY_STAGE } from "./lib/assembly";
 import { ensureDefaultSubAssembly } from "./subAssemblies";
-import { activeSeason, requireActiveSeason } from "./lib/season";
+import {
+  activeSeason,
+  assertSubsystemInSeason,
+  requireActiveSeason,
+} from "./lib/season";
 
 const vSubsystem = v.object({
   _id: v.id("subsystems"),
@@ -261,6 +265,7 @@ export const setNextNumber = mutation({
     const season = await requireActiveSeason(ctx);
     const subsystem = await ctx.db.get(subsystemId);
     if (!subsystem) throw new Error("That subsystem is gone.");
+    assertSubsystemInSeason(subsystem, season);
 
     const wanted = Math.round(next);
     if (!Number.isFinite(wanted) || wanted < 1) {

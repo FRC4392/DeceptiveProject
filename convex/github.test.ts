@@ -701,3 +701,211 @@ describe("who may import issues", () => {
     ).rejects.toThrow(/Mentors only/);
   });
 });
+
+// GitHub doesn't care how a repo name is capitalised, so neither can we:
+// "team/robot" and "Team/Robot" are one repo, and an issue in it is one row.
+describe("repo names in any case", () => {
+  async function issuesIn(t: TestConvex<typeof schema>) {
+    return t.run((ctx) => ctx.db.query("issues").collect());
+  }
+
+  test("a delivery spelt differently updates the issue rather than copying it", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot", title: "First" }),
+    );
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "Team/Robot", title: "Renamed" }),
+    );
+
+    const issues = await issuesIn(t);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].title).toBe("Renamed");
+    // Stored the way the registry first met it.
+    expect(issues[0].repo).toBe("team/robot");
+  });
+
+  test("an issue stored under the old spelling is found and healed, not copied", async () => {
+    const t = convexTest(schema, modules);
+    // The registry knows it as "team/robot"…
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot", number: 1 }),
+    );
+    // …but a row written before names were canonical says "Team/Robot".
+    await t.run(async (ctx) => {
+      await ctx.db.insert("issues", {
+        source: "github",
+        repo: "Team/Robot",
+        number: 7,
+        title: "Old row",
+        state: "open",
+        labels: [],
+        assigneeLogins: [],
+        isPullRequest: false,
+        priority: "medium",
+      });
+    });
+
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "Team/Robot", number: 7, title: "Updated" }),
+    );
+
+    const seven = (await issuesIn(t)).filter((i) => i.number === 7);
+    expect(seven).toHaveLength(1);
+    expect(seven[0].title).toBe("Updated");
+    expect(seven[0].repo).toBe("team/robot");
+  });
+
+  test("a comment spelt differently lands on the issue", async () => {
+    const t = convexTest(schema, modules);
+    const reader = await asUser(t);
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot" }),
+    );
+    await t.mutation(internal.github.upsertCommentFromWebhook, {
+      repo: "TEAM/ROBOT",
+      number: 7,
+      githubCommentId: 1,
+      body: "On it.",
+    });
+    const comments = await reader.query(api.github.listComments, {
+      issueId: await firstIssueId(reader),
+    });
+    expect(comments).toHaveLength(1);
+  });
+
+  test("a delete spelt differently removes the issue", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot" }),
+    );
+    await t.mutation(internal.github.deleteIssueFromWebhook, {
+      repo: "Team/Robot",
+      number: 7,
+    });
+    expect(await issuesIn(t)).toHaveLength(0);
+  });
+});
+
+describe("folding old spellings together", () => {
+  /** "team/robot" in the registry, plus rows the old code stored however. */
+  async function withOldRows(t: TestConvex<typeof schema>) {
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot", number: 1, title: "Registers it" }),
+    );
+    return t.run(async (ctx) => {
+      const base = {
+        source: "github" as const,
+        state: "open" as const,
+        labels: [],
+        assigneeLogins: [],
+        isPullRequest: false,
+        priority: "medium" as const,
+      };
+      // #2 exists only under the wrong spelling: a rename.
+      await ctx.db.insert("issues", {
+        ...base,
+        repo: "Team/Robot",
+        number: 2,
+        title: "Lone",
+      });
+      // #7 exists under both: a merge. The newer sync wins; the claim is on the older.
+      const older = await ctx.db.insert("issues", {
+        ...base,
+        repo: "team/robot",
+        number: 7,
+        title: "Stale",
+        lastSyncedAt: 1,
+        claimedByUserId: "dana",
+      });
+      const newer = await ctx.db.insert("issues", {
+        ...base,
+        repo: "Team/Robot",
+        number: 7,
+        title: "Fresh",
+        lastSyncedAt: 2,
+      });
+      // The same GitHub comment mirrored onto both, plus one only on the older.
+      await ctx.db.insert("issueComments", {
+        issueId: older,
+        githubCommentId: 50,
+        body: "dup",
+      });
+      await ctx.db.insert("issueComments", {
+        issueId: newer,
+        githubCommentId: 50,
+        body: "dup",
+      });
+      await ctx.db.insert("issueComments", {
+        issueId: older,
+        githubCommentId: 51,
+        body: "only old",
+      });
+      return { older, newer };
+    });
+  }
+
+  test("a dry run says what it would do and changes nothing", async () => {
+    const t = convexTest(schema, modules);
+    await withOldRows(t);
+    const before = await t.run((ctx) => ctx.db.query("issues").collect());
+
+    const report = await t.mutation(internal.github.canonicalizeIssueRepos, {});
+    expect(report).toMatchObject({
+      dryRun: true,
+      renamed: 1,
+      merged: 1,
+      removed: 1,
+    });
+
+    const after = await t.run((ctx) => ctx.db.query("issues").collect());
+    expect(after).toEqual(before);
+  });
+
+  test("renames the strays and merges the pairs", async () => {
+    const t = convexTest(schema, modules);
+    const { newer } = await withOldRows(t);
+
+    await t.mutation(internal.github.canonicalizeIssueRepos, { dryRun: false });
+
+    const issues = await t.run((ctx) => ctx.db.query("issues").collect());
+    expect(issues.map((i) => i.repo)).toEqual(issues.map(() => "team/robot"));
+    expect(issues.filter((i) => i.number === 2)).toHaveLength(1);
+
+    const seven = issues.filter((i) => i.number === 7);
+    expect(seven).toHaveLength(1);
+    expect(seven[0]._id).toBe(newer); // the freshest sync is kept…
+    expect(seven[0].title).toBe("Fresh");
+    expect(seven[0].claimedByUserId).toBe("dana"); // …with the team's claim
+
+    const comments = await t.run((ctx) =>
+      ctx.db
+        .query("issueComments")
+        .withIndex("by_issue", (q) => q.eq("issueId", newer))
+        .collect(),
+    );
+    expect(comments.map((c) => c.githubCommentId).sort()).toEqual([50, 51]);
+  });
+
+  test("running it twice changes nothing the second time", async () => {
+    const t = convexTest(schema, modules);
+    await withOldRows(t);
+    await t.mutation(internal.github.canonicalizeIssueRepos, { dryRun: false });
+    const again = await t.mutation(internal.github.canonicalizeIssueRepos, {
+      dryRun: false,
+    });
+    expect(again).toMatchObject({
+      renamed: 0,
+      merged: 0,
+      removed: 0,
+      changes: [],
+    });
+  });
+});
