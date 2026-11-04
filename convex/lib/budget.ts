@@ -83,3 +83,35 @@ export const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
 /** Onshape's "you have spent the year's allowance" status. */
 export const BUDGET_EXHAUSTED_STATUS = 402;
 export const RATE_LIMITED_STATUS = 429;
+
+/**
+ * When the current year's allowance began, or null to count every call ever
+ * made — which is what happens until someone says when it renews.
+ *
+ * The allowance renews on the same date every year, so `renewalDate` is read
+ * as that date and the period starts at its most recent anniversary that
+ * isn't in the future. That gives the right answer whether a mentor typed in
+ * the date it last renewed or the date it next will, and it rolls over on its
+ * own each year with nobody having to remember to change it.
+ *
+ * In UTC, the time zone Convex runs in. A 29 February renewal falls on
+ * 1 March in the years without one.
+ */
+export function allowancePeriodStart(
+  renewalDate: number | null,
+  now: number,
+): number | null {
+  if (renewalDate === null) return null;
+  const renews = new Date(renewalDate);
+  const at = (year: number) =>
+    Date.UTC(
+      year,
+      renews.getUTCMonth(),
+      renews.getUTCDate(),
+      renews.getUTCHours(),
+      renews.getUTCMinutes(),
+    );
+  const thisYear = new Date(now).getUTCFullYear();
+  const candidate = at(thisYear);
+  return candidate <= now ? candidate : at(thisYear - 1);
+}

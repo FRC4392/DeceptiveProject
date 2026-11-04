@@ -268,6 +268,24 @@ means the year's allowance is gone, so the app forces itself into Manual
 immediately and records why; that reason shows on New from Onshape rather than
 leaving a mentor to wonder who changed the mode.
 
+**The meter counts this year's calls, once it knows when the year starts.**
+Tell it the date the allowance renews — last year's or next year's, either
+works — and it counts only calls since the most recent anniversary, rolling
+over on its own each year. A Manual the app forced after a 402 lifts at
+renewal too; a mode a mentor chose stays until they change it. There's no
+screen for the budget settings yet, so set them from the command line. The
+date is a timestamp in milliseconds — this one is 1 August 2026:
+
+```bash
+npx convex run settings:configure '{"key": "renewalDate", "value": 1785542400000}'
+```
+
+It's `configure` rather than `set` because `npx convex run` calls a function
+as nobody, and `set` is the mentor-only one a screen would use. Add `--prod`
+to change production. Until a renewal date is set, every call ever made
+counts, which is how it always worked — so a team in its second year should
+set one.
+
 **The tracker works with no Onshape connection at all.** A lead can type part
 numbers in by hand or upload a BOM CSV, and the same matching logic runs
 against them.
