@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { NavLink } from "react-router-dom";
 import { Cross1Icon } from "@radix-ui/react-icons";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,25 @@ export function Sidebar({
   open: boolean;
   onClose: () => void;
 }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  // Open as a drawer: focus goes into it, and Escape shuts it. (On desktop
+  // it's never "open" — it's just there — so none of this runs.) Focus moves
+  // once, when it opens, and never again while it's open: tied to anything
+  // else, a re-render would pull focus off whatever link you'd reached.
+  useEffect(() => {
+    if (open) closeRef.current?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   return (
     <>
       <div
@@ -32,10 +52,16 @@ export function Sidebar({
         aria-hidden="true"
       />
       <aside
+        id="app-menu"
+        aria-label="Main menu"
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-60 shrink-0 flex-col border-r border-brand-navy bg-gradient-to-b from-brand-deep to-brand-navy text-white transition-transform duration-200 ease-in-out",
-          "lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:h-svh lg:translate-x-0 lg:transition-none",
-          open ? "translate-x-0" : "-translate-x-full",
+          "fixed inset-y-0 left-0 z-40 flex w-60 shrink-0 flex-col border-r border-brand-navy bg-gradient-to-b from-brand-deep to-brand-navy text-white transition-[transform,visibility] duration-200 ease-in-out",
+          "lg:visible lg:sticky lg:inset-auto lg:top-0 lg:z-auto lg:h-svh lg:translate-x-0 lg:transition-none",
+          // Shut on a phone, it's off-screen *and* out of the way: moved
+          // aside alone, its links stayed in the tab order, so the keyboard
+          // walked through a menu nobody could see. Visibility rides the
+          // same transition, so it still slides out before it goes.
+          open ? "visible translate-x-0" : "invisible -translate-x-full",
         )}
       >
         <div
@@ -52,6 +78,7 @@ export function Sidebar({
             />
           </NavLink>
           <Button
+            ref={closeRef}
             variant="ghost"
             size="icon"
             className="text-white/70 hover:bg-white/10 hover:text-white lg:hidden"

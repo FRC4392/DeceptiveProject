@@ -137,3 +137,23 @@ describe("the 'mine' filter on the to-do list", () => {
     expect(shown(["UNCLAIMED TODO", "DANAS TODO", "SAMS TODO"])).toEqual([]);
   });
 });
+
+describe("the board's filter chips", () => {
+  beforeEach(() => {
+    vi.mocked(useQuery).mockReset();
+  });
+
+  // Toggles, so a screen reader has to hear which way each is set.
+  it("say whether they're on", async () => {
+    world("dana");
+    render(
+      <MemoryRouter>
+        <PartsBoardPage />
+      </MemoryRouter>,
+    );
+    const mine = screen.getByRole("button", { name: "My parts" });
+    expect(mine).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(mine);
+    expect(mine).toHaveAttribute("aria-pressed", "true");
+  });
+});

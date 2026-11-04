@@ -128,6 +128,7 @@ export function PartsBoardPage() {
             <button
               key={stage}
               type="button"
+              aria-pressed={mobileStage === stage}
               onClick={() => setMobileStage(stage)}
               className={cn(
                 "flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm",
