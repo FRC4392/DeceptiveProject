@@ -12,7 +12,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { getActor, requireLead, requireUserId } from "./lib/auth";
+import { canRead, getActor, requireLead, requireUserId } from "./lib/auth";
 import { activeSeason, requireActiveSeason } from "./lib/season";
 import {
   assertNumberFree,
@@ -177,6 +177,7 @@ export const list = query({
     }),
   ),
   handler: async (ctx, { subsystemId }) => {
+    if (!(await canRead(ctx))) return [];
     const assemblies = await ctx.db
       .query("subAssemblies")
       .withIndex("by_subsystem", (q) => q.eq("subsystemId", subsystemId))
@@ -216,7 +217,8 @@ export const list = query({
 export const get = query({
   args: { id: v.id("subAssemblies") },
   returns: v.union(vSubAssembly, v.null()),
-  handler: (ctx, { id }) => ctx.db.get(id),
+  handler: async (ctx, { id }) =>
+    (await canRead(ctx)) ? ctx.db.get(id) : null,
 });
 
 export const notes = query({
@@ -231,6 +233,7 @@ export const notes = query({
     }),
   ),
   handler: async (ctx, { subAssemblyId }) => {
+    if (!(await canRead(ctx))) return [];
     const rows = await ctx.db
       .query("subAssemblyNotes")
       .withIndex("by_subAssembly", (q) => q.eq("subAssemblyId", subAssemblyId))
@@ -273,6 +276,7 @@ export const history = query({
     }),
   ),
   handler: async (ctx, { subAssemblyId }) => {
+    if (!(await canRead(ctx))) return [];
     const events = await ctx.db
       .query("assemblyEvents")
       .withIndex("by_subAssembly", (q) => q.eq("subAssemblyId", subAssemblyId))
@@ -652,6 +656,15 @@ export const demand = query({
     ),
   }),
   handler: async (ctx, { subsystemId, forAssemblyId }) => {
+    if (!(await canRead(ctx))) {
+      return {
+        units: [],
+        shortfalls: [],
+        underbuilt: [],
+        allowance: [],
+        loose: [],
+      };
+    }
     const placements = await subsystemPlacements(ctx, subsystemId);
     const rolled = rollUpDemand(placements);
 
@@ -1129,6 +1142,7 @@ export const search = query({
   args: { query: v.string(), limit: v.optional(v.number()) },
   returns: v.array(vSubAssembly),
   handler: async (ctx, { query: term, limit }) => {
+    if (!(await canRead(ctx))) return [];
     const trimmed = term.trim();
     if (trimmed.length === 0) return [];
     const season = await activeSeason(ctx);

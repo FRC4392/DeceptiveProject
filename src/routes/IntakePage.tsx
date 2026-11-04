@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { UnknownLine } from "@/components/tracker/UnknownLine";
 import { useProcessTypes, useSubsystems } from "@/lib/tracker";
+import { useCurrentUser, useIsLead } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 import { errorText } from "@/lib/errors";
 
@@ -25,13 +26,32 @@ type Line = Doc<"releaseIntakeLines">;
  * ways in that cost the team no API calls at all.
  */
 export function IntakePage() {
-  const intakes = useQuery(api.intake.list, {});
-  const budget = useQuery(api.settings.budget, {});
+  const me = useCurrentUser();
+  const isLead = useIsLead();
+  // The queue and the budget are a lead's to work, and the server answers a
+  // student with nothing — so ask only as a lead, and say why otherwise.
+  const intakes = useQuery(api.intake.list, isLead ? {} : "skip");
+  const budget = useQuery(api.settings.budget, isLead ? {} : "skip");
   const [tool, setTool] = useState<"none" | "manual" | "csv">("none");
 
   const queued = (intakes ?? []).filter(
     ({ intake }) => intake.status === "queued",
   ).length;
+
+  // Until we know who this is, a lead would be told "leads only" for a beat.
+  if (me === undefined) {
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  }
+  if (!isLead) {
+    return (
+      <div className="mx-auto max-w-xl py-12 text-center">
+        <h1 className="brand-title text-2xl">Leads only</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          New parts from Onshape are set up by a design lead or a mentor.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

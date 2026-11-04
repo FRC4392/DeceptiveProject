@@ -8,7 +8,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { requireMentor } from "./lib/auth";
+import { canRead, canReadAsMentor, requireMentor } from "./lib/auth";
 import { READY_STAGE } from "./lib/assembly";
 import { ensureDefaultSubAssembly } from "./subAssemblies";
 import { activeSeason, requireActiveSeason } from "./lib/season";
@@ -38,13 +38,14 @@ async function seasonSubsystems(
 export const list = query({
   args: {},
   returns: v.array(vSubsystem),
-  handler: (ctx) => seasonSubsystems(ctx),
+  handler: async (ctx) => ((await canRead(ctx)) ? seasonSubsystems(ctx) : []),
 });
 
 export const get = query({
   args: { id: v.id("subsystems") },
   returns: v.union(vSubsystem, v.null()),
-  handler: (ctx, { id }) => ctx.db.get(id),
+  handler: async (ctx, { id }) =>
+    (await canRead(ctx)) ? ctx.db.get(id) : null,
 });
 
 export const create = mutation({
@@ -174,6 +175,7 @@ export const progress = query({
   args: {},
   returns: v.array(vProgress),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) return [];
     const season = await activeSeason(ctx);
     if (!season) return [];
     const subs = await seasonSubsystems(ctx);
@@ -222,6 +224,7 @@ export const nextNumbers = query({
     v.object({ subsystemId: v.id("subsystems"), next: v.number() }),
   ),
   handler: async (ctx) => {
+    if (!(await canReadAsMentor(ctx))) return [];
     const season = await activeSeason(ctx);
     if (!season) return [];
     const subsystems = await ctx.db

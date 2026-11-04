@@ -318,6 +318,42 @@ describe("how numbers are shaped and where they start", () => {
     ).rejects.toThrow(/already issued/);
   });
 
+  // The padding test above reads the season before the update and never after,
+  // so it couldn't see this: once a row carries `numberPad`, the queries every
+  // screen subscribes to have to be able to return it.
+  test("a season with its padding set can still be read", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const season = (await mentor.query(api.seasons.active, {}))!;
+
+    await mentor.mutation(api.seasons.update, {
+      id: season._id,
+      numberPad: 4,
+    });
+
+    expect((await mentor.query(api.seasons.active, {}))?.numberPad).toBe(4);
+    expect((await mentor.query(api.seasons.list, {}))[0].numberPad).toBe(4);
+  });
+
+  // What Settings sent on every Save: the padding it was already at.
+  test("saving the padding it already has still leaves the season readable", async () => {
+    const t = convexTest(schema, modules);
+    const mentor = await setup(t);
+    const season = (await mentor.query(api.seasons.active, {}))!;
+
+    await mentor.mutation(api.seasons.update, {
+      id: season._id,
+      year: "27",
+      name: "2027 robot",
+      numberPad: 3,
+    });
+
+    expect((await mentor.query(api.seasons.active, {}))?.name).toBe(
+      "2027 robot",
+    );
+    expect(await mentor.query(api.seasons.list, {})).toHaveLength(1);
+  });
+
   test("a silly padding is refused", async () => {
     const t = convexTest(schema, modules);
     const mentor = await setup(t);

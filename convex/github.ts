@@ -11,12 +11,13 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import {
+  canRead,
+  canReadAsMentor,
   requireUserId,
   requireMentor,
-  getCurrentUser,
   getActor,
 } from "./lib/auth";
-import { isLeadOrAbove } from "./lib/stages";
+import { isLeadOrAbove, isMentorOrAbove } from "./lib/stages";
 import { activeSeason } from "./lib/season";
 import {
   derivePriority,
@@ -153,6 +154,7 @@ export const list = query({
   },
   returns: v.array(vIssue),
   handler: async (ctx, args) => {
+    if (!(await canRead(ctx))) return [];
     const issues = await scopedIssues(ctx, args);
     return issues.filter(
       (i) => args.state === undefined || i.state === args.state,
@@ -163,18 +165,21 @@ export const list = query({
 export const get = query({
   args: { id: v.id("issues") },
   returns: v.union(vIssue, v.null()),
-  handler: async (ctx, { id }) => ctx.db.get(id),
+  handler: async (ctx, { id }) =>
+    (await canRead(ctx)) ? ctx.db.get(id) : null,
 });
 
 export const listComments = query({
   args: { issueId: v.id("issues") },
   returns: v.array(vIssueComment),
   handler: async (ctx, { issueId }) =>
-    ctx.db
-      .query("issueComments")
-      .withIndex("by_issue", (q) => q.eq("issueId", issueId))
-      .order("asc")
-      .collect(),
+    !(await canRead(ctx))
+      ? []
+      : ctx.db
+          .query("issueComments")
+          .withIndex("by_issue", (q) => q.eq("issueId", issueId))
+          .order("asc")
+          .collect(),
 });
 
 // Counts for the dashboard widget. Scoped the same way the list is, because a
@@ -189,6 +194,7 @@ export const stats = query({
     total: v.number(),
   }),
   handler: async (ctx, args) => {
+    if (!(await canRead(ctx))) return { open: 0, closed: 0, prs: 0, total: 0 };
     const issues = await scopedIssues(ctx, { scope: args.scope });
     let open = 0;
     let closed = 0;
@@ -210,10 +216,13 @@ export const config = query({
     webhookConfigured: v.boolean(),
     tokenConfigured: v.boolean(),
   }),
-  handler: async () => ({
-    webhookConfigured: !!process.env.GITHUB_WEBHOOK_SECRET,
-    tokenConfigured: !!process.env.GITHUB_TOKEN,
-  }),
+  handler: async (ctx) =>
+    (await canReadAsMentor(ctx))
+      ? {
+          webhookConfigured: !!process.env.GITHUB_WEBHOOK_SECRET,
+          tokenConfigured: !!process.env.GITHUB_TOKEN,
+        }
+      : { webhookConfigured: false, tokenConfigured: false },
 });
 
 // ---- The repo registry ----
@@ -250,6 +259,9 @@ export const repos = query({
     unreviewed: v.number(),
   }),
   handler: async (ctx) => {
+    if (!(await canRead(ctx))) {
+      return { repos: [], local: { open: 0, total: 0 }, unreviewed: 0 };
+    }
     const rows = await ctx.db.query("githubRepos").collect();
     const season = await activeSeason(ctx);
     const out = [];
@@ -751,15 +763,6 @@ export const getForWriteback = internalQuery({
   },
 });
 
-export const callerRole = internalQuery({
-  args: {},
-  returns: v.union(v.literal("mentor"), v.literal("student"), v.null()),
-  handler: async (ctx) => {
-    const user = await getCurrentUser(ctx);
-    return user ? (user.role ?? "student") : null;
-  },
-});
-
 // ---- Actions (GitHub REST write-back — default runtime, plain fetch) ----
 
 const vWriteResult = v.object({ ok: v.boolean(), message: v.string() });
@@ -825,8 +828,11 @@ export const importIssues = action({
   args: { repo: v.string() },
   returns: v.object({ imported: v.number() }),
   handler: async (ctx, { repo }) => {
-    const role = await ctx.runQuery(internal.github.callerRole, {});
-    if (role !== "mentor") throw new Error("Mentors only.");
+    // The shared role lookup, not a local copy of it: the copy this replaced
+    // read Clerk's raw mentor flag, so someone promoted in Settings was turned
+    // away and someone demoted there kept the button.
+    const role = await ctx.runQuery(internal.auth.callerRole, {});
+    if (!role || !isMentorOrAbove(role)) throw new Error("Mentors only.");
     const token = process.env.GITHUB_TOKEN;
     if (!token) throw new Error("Set GITHUB_TOKEN first.");
     const cleanRepo = normalizeRepo(repo);

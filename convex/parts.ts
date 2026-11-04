@@ -15,6 +15,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { flagValidator } from "./schema";
 import {
+  canRead,
+  canReadAsLead,
   getActor,
   requireUserId,
   requireLead,
@@ -97,6 +99,7 @@ export const list = query({
   },
   returns: v.array(vPart),
   handler: async (ctx, { subsystemId, includeArchived }) => {
+    if (!(await canRead(ctx))) return [];
     const season = await activeSeason(ctx);
     if (!season) return [];
     const parts =
@@ -119,7 +122,8 @@ export const list = query({
 export const get = query({
   args: { id: v.id("parts") },
   returns: v.union(vPart, v.null()),
-  handler: (ctx, { id }) => ctx.db.get(id),
+  handler: async (ctx, { id }) =>
+    (await canRead(ctx)) ? ctx.db.get(id) : null,
 });
 
 /** Parts this person has claimed — the "My parts" screen and shop shortcuts. */
@@ -149,6 +153,7 @@ export const search = query({
   args: { query: v.string(), limit: v.optional(v.number()) },
   returns: v.array(vPart),
   handler: async (ctx, { query: term, limit }) => {
+    if (!(await canRead(ctx))) return [];
     const trimmed = term.trim();
     if (trimmed.length === 0) return [];
     const season = await activeSeason(ctx);
@@ -203,6 +208,7 @@ export const history = query({
     }),
   ),
   handler: async (ctx, { partId }) => {
+    if (!(await canRead(ctx))) return [];
     const events = await ctx.db
       .query("stageEvents")
       .withIndex("by_part", (q) => q.eq("partId", partId))
@@ -223,6 +229,7 @@ export const notes = query({
     }),
   ),
   handler: async (ctx, { partId }) => {
+    if (!(await canRead(ctx))) return [];
     const rows = await ctx.db
       .query("partNotes")
       .withIndex("by_part", (q) => q.eq("partId", partId))
@@ -255,6 +262,7 @@ export const problems = query({
   args: { partId: v.id("parts") },
   returns: v.array(vProblem),
   handler: async (ctx, { partId }) => {
+    if (!(await canRead(ctx))) return [];
     const rows = await ctx.db
       .query("problems")
       .withIndex("by_part", (q) => q.eq("partId", partId))
@@ -283,6 +291,9 @@ export const headsUp = query({
     }),
   ),
   handler: async (ctx, { waitingDays }) => {
+    // The board only asks for this as a lead; a student gets an empty list
+    // rather than an error, the same as the board would show them anyway.
+    if (!(await canReadAsLead(ctx))) return [];
     const season = await activeSeason(ctx);
     if (!season) return [];
     const days = waitingDays ?? 3;
@@ -857,8 +868,18 @@ export const setThumbnailInternal = internalMutation({
   },
 });
 
+/**
+ * A part's picture. Asked for by part rather than by storage id, so it can
+ * only ever hand out a URL for a file some part actually points at — taking a
+ * bare storage id, it would sign a URL for anything in storage.
+ */
 export const thumbnailUrl = query({
-  args: { storageId: v.id("_storage") },
+  args: { partId: v.id("parts") },
   returns: v.union(v.string(), v.null()),
-  handler: (ctx, { storageId }) => ctx.storage.getUrl(storageId),
+  handler: async (ctx, { partId }) => {
+    if (!(await canRead(ctx))) return null;
+    const part = await ctx.db.get(partId);
+    if (!part?.thumbnailStorageId) return null;
+    return ctx.storage.getUrl(part.thumbnailStorageId);
+  },
 });

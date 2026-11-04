@@ -19,7 +19,7 @@ import {
 } from "./lib/onshapeSync";
 import { esc, panelHtml } from "./lib/onshapePanelHtml";
 import { encryptToken, decryptToken } from "./lib/tokenCrypto";
-import { requireMentor } from "./lib/auth";
+import { canReadAsMentor, requireMentor } from "./lib/auth";
 
 const AUTHORIZE_URL = "https://oauth.onshape.com/oauth/authorize";
 const CALLBACK_PATH = "/onshape/oauth/callback";
@@ -226,6 +226,9 @@ export const connectionStatus = query({
       lastError: null,
       lastErrorAt: null,
     };
+    // Who connected it and Onshape's last error text are for the mentor
+    // fixing it, not for anyone who can reach the deployment.
+    if (!(await canReadAsMentor(ctx))) return none;
     const rows = await ctx.db.query("onshapeAuth").take(1);
     const a = rows[0];
     if (!a) return none;
