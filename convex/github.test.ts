@@ -701,3 +701,94 @@ describe("who may import issues", () => {
     ).rejects.toThrow(/Mentors only/);
   });
 });
+
+// GitHub doesn't care how a repo name is capitalised, so neither can we:
+// "team/robot" and "Team/Robot" are one repo, and an issue in it is one row.
+describe("repo names in any case", () => {
+  async function issuesIn(t: TestConvex<typeof schema>) {
+    return t.run((ctx) => ctx.db.query("issues").collect());
+  }
+
+  test("a delivery spelt differently updates the issue rather than copying it", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot", title: "First" }),
+    );
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "Team/Robot", title: "Renamed" }),
+    );
+
+    const issues = await issuesIn(t);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].title).toBe("Renamed");
+    // Stored the way the registry first met it.
+    expect(issues[0].repo).toBe("team/robot");
+  });
+
+  test("an issue stored under the old spelling is found and healed, not copied", async () => {
+    const t = convexTest(schema, modules);
+    // The registry knows it as "team/robot"…
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot", number: 1 }),
+    );
+    // …but a row written before names were canonical says "Team/Robot".
+    await t.run(async (ctx) => {
+      await ctx.db.insert("issues", {
+        source: "github",
+        repo: "Team/Robot",
+        number: 7,
+        title: "Old row",
+        state: "open",
+        labels: [],
+        assigneeLogins: [],
+        isPullRequest: false,
+        priority: "medium",
+      });
+    });
+
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "Team/Robot", number: 7, title: "Updated" }),
+    );
+
+    const seven = (await issuesIn(t)).filter((i) => i.number === 7);
+    expect(seven).toHaveLength(1);
+    expect(seven[0].title).toBe("Updated");
+    expect(seven[0].repo).toBe("team/robot");
+  });
+
+  test("a comment spelt differently lands on the issue", async () => {
+    const t = convexTest(schema, modules);
+    const reader = await asUser(t);
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot" }),
+    );
+    await t.mutation(internal.github.upsertCommentFromWebhook, {
+      repo: "TEAM/ROBOT",
+      number: 7,
+      githubCommentId: 1,
+      body: "On it.",
+    });
+    const comments = await reader.query(api.github.listComments, {
+      issueId: await firstIssueId(reader),
+    });
+    expect(comments).toHaveLength(1);
+  });
+
+  test("a delete spelt differently removes the issue", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(
+      internal.github.upsertIssueFromWebhook,
+      upsertArgs({ repo: "team/robot" }),
+    );
+    await t.mutation(internal.github.deleteIssueFromWebhook, {
+      repo: "Team/Robot",
+      number: 7,
+    });
+    expect(await issuesIn(t)).toHaveLength(0);
+  });
+});

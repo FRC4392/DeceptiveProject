@@ -601,6 +601,41 @@ const vUpsertArgs = {
 // Returns null for a repo the team has ignored: the delivery is accepted and
 // dropped, which is what "I don't want that repo in here" has to mean when one
 // organisation-level webhook feeds every repo the team owns.
+/**
+ * How the repo registry spells a repo, or the payload's own spelling when the
+ * registry hasn't met it yet. GitHub doesn't care about case and the team's
+ * registry doesn't either, so issues are stored under this one spelling —
+ * otherwise "team/robot" and "Team/Robot" are two copies of the same issue.
+ */
+async function canonicalRepo(ctx: QueryCtx, raw: string): Promise<string> {
+  return (await repoRow(ctx, raw))?.fullName ?? raw.trim();
+}
+
+/**
+ * The issue at (repo, number). Looks under the canonical spelling first, then
+ * under the one the payload used — rows written before names were made
+ * canonical carry whatever the payload said, and a delivery has to find them
+ * rather than starting a second copy. `github:canonicalizeIssueRepos` folds
+ * those old rows together; this is what keeps new ones from appearing.
+ */
+async function issueAt(
+  ctx: QueryCtx,
+  canonical: string,
+  raw: string,
+  number: number,
+) {
+  for (const repo of canonical === raw ? [canonical] : [canonical, raw]) {
+    const found = await ctx.db
+      .query("issues")
+      .withIndex("by_repo_and_number", (q) =>
+        q.eq("repo", repo).eq("number", number),
+      )
+      .unique();
+    if (found) return found;
+  }
+  return null;
+}
+
 export const upsertIssueFromWebhook = internalMutation({
   args: vUpsertArgs,
   returns: v.union(v.id("issues"), v.null()),
@@ -609,15 +644,12 @@ export const upsertIssueFromWebhook = internalMutation({
     if (repo.kind === "ignored") return null;
 
     const priority = derivePriority(args.labels);
-    const existing = await ctx.db
-      .query("issues")
-      .withIndex("by_repo_and_number", (q) =>
-        q.eq("repo", args.repo).eq("number", args.number),
-      )
-      .unique();
+    const existing = await issueAt(ctx, repo.fullName, args.repo, args.number);
 
     if (existing) {
       await ctx.db.patch(existing._id, {
+        // Heals a row stored under the payload's spelling, as it's touched.
+        repo: repo.fullName,
         source: "github",
         githubId: args.githubId,
         title: args.title,
@@ -638,7 +670,7 @@ export const upsertIssueFromWebhook = internalMutation({
 
     const id = await ctx.db.insert("issues", {
       source: "github",
-      repo: args.repo,
+      repo: repo.fullName,
       number: args.number,
       githubId: args.githubId,
       title: args.title,
@@ -660,12 +692,12 @@ export const deleteIssueFromWebhook = internalMutation({
   args: { repo: v.string(), number: v.number() },
   returns: v.null(),
   handler: async (ctx, { repo, number }) => {
-    const existing = await ctx.db
-      .query("issues")
-      .withIndex("by_repo_and_number", (q) =>
-        q.eq("repo", repo).eq("number", number),
-      )
-      .unique();
+    const existing = await issueAt(
+      ctx,
+      await canonicalRepo(ctx, repo),
+      repo,
+      number,
+    );
     if (!existing) return null;
     const comments = await ctx.db
       .query("issueComments")
@@ -687,12 +719,12 @@ export const upsertCommentFromWebhook = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const issue = await ctx.db
-      .query("issues")
-      .withIndex("by_repo_and_number", (q) =>
-        q.eq("repo", args.repo).eq("number", args.number),
-      )
-      .unique();
+    const issue = await issueAt(
+      ctx,
+      await canonicalRepo(ctx, args.repo),
+      args.repo,
+      args.number,
+    );
     if (!issue) return null; // comment on an issue we haven't synced — ignore
     const existing = await ctx.db
       .query("issueComments")
