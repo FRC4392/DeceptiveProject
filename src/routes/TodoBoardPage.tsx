@@ -9,6 +9,7 @@ import { TodoFormDialog } from "@/components/tracker/TodoFormDialog";
 import { FilterChip, FilterDivider } from "@/components/tracker/FilterChip";
 import { SetupPrompt } from "@/routes/PartsBoardPage";
 import { useRosterMap } from "@/lib/users";
+import { useCurrentUserId } from "@/lib/roles";
 
 type Filter = "all" | "grabs" | "mine";
 
@@ -18,7 +19,10 @@ export function TodoBoardPage() {
   const todos = useQuery(api.todos.list, {});
   const tags = useQuery(api.todos.listTags, {});
   const roster = useRosterMap();
-  const me = useQuery(api.auth.currentUser);
+  // `null` while loading, never `undefined`: an unclaimed item's claimant
+  // is `undefined`, and comparing the two would make every unclaimed item
+  // look like yours until the signed-in user arrived.
+  const myId = useCurrentUserId();
 
   const [tagId, setTagId] = useState<Id<"todoTags"> | "all">("all");
   const [filter, setFilter] = useState<Filter>("all");
@@ -30,10 +34,10 @@ export function TodoBoardPage() {
       if (!showDone && todo.doneAt !== undefined) return false;
       if (tagId !== "all" && !todo.tagIds.includes(tagId)) return false;
       if (filter === "grabs") return !todo.claimedByUserId && !todo.doneAt;
-      if (filter === "mine") return todo.claimedByUserId === me?.id;
+      if (filter === "mine") return todo.claimedByUserId === myId;
       return true;
     });
-  }, [todos, tagId, filter, showDone, me?.id]);
+  }, [todos, tagId, filter, showDone, myId]);
 
   const open = visible.filter((t) => t.doneAt === undefined);
   const done = visible.filter((t) => t.doneAt !== undefined);

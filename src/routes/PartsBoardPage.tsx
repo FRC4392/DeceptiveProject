@@ -15,7 +15,7 @@ import {
   type Stage,
 } from "@/lib/stages";
 import { useProcessMap, useSubsystems } from "@/lib/tracker";
-import { useIsLead } from "@/lib/roles";
+import { useCurrentUserId, useIsLead } from "@/lib/roles";
 import { useRosterMap } from "@/lib/users";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,10 @@ export function PartsBoardPage() {
   const roster = useRosterMap();
   const isLead = useIsLead();
   const headsUp = useQuery(api.parts.headsUp, isLead ? {} : "skip");
-  const me = useQuery(api.auth.currentUser);
+  // `null` while loading, never `undefined`: an unclaimed item's claimant
+  // is `undefined`, and comparing the two would make every unclaimed item
+  // look like yours until the signed-in user arrived.
+  const myId = useCurrentUserId();
 
   const [subsystemId, setSubsystemId] = useState<Id<"subsystems"> | "all">(
     "all",
@@ -45,11 +48,11 @@ export function PartsBoardPage() {
       if (filter === "grabs") {
         return !part.claimedByUserId && isClaimableStage(asStage(part.stage));
       }
-      if (filter === "mine") return part.claimedByUserId === me?.id;
+      if (filter === "mine") return part.claimedByUserId === myId;
       if (filter === "flagged") return part.flags.length > 0;
       return true;
     });
-  }, [parts, subsystemId, filter, me?.id]);
+  }, [parts, subsystemId, filter, myId]);
 
   const byStage = useMemo(() => {
     const map = new Map<Stage, typeof visible>();
