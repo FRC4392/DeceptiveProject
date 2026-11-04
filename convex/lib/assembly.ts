@@ -119,6 +119,110 @@ export function computeAssemblyStatuses(
   return assemblies.map((a) => resolve(a, new Set([a.id])));
 }
 
+// ---- Building the readiness input from what the database holds ----
+
+/** The member ids of one sub-assembly, however the caller came by them. */
+export type MemberRefs = {
+  partIds: string[];
+  cotsItemIds: string[];
+  childIds: string[];
+};
+
+/** A `subAssemblyMembers` row, narrowed. Exactly one of the three ids is set. */
+export type MemberRow = {
+  subAssemblyId: string;
+  partId?: string;
+  cotsItemId?: string;
+  childSubAssemblyId?: string;
+};
+
+/**
+ * Group member rows by the sub-assembly holding them, in one pass. Callers
+ * used to filter the whole table once per assembly, which reads every row
+ * once for every assembly in the season.
+ */
+export function groupMemberRefs(
+  rows: readonly MemberRow[],
+): Map<string, MemberRefs> {
+  const out = new Map<string, MemberRefs>();
+  for (const row of rows) {
+    let refs = out.get(row.subAssemblyId);
+    if (!refs) {
+      refs = { partIds: [], cotsItemIds: [], childIds: [] };
+      out.set(row.subAssemblyId, refs);
+    }
+    if (row.partId !== undefined) refs.partIds.push(row.partId);
+    else if (row.cotsItemId !== undefined)
+      refs.cotsItemIds.push(row.cotsItemId);
+    else if (row.childSubAssemblyId !== undefined) {
+      refs.childIds.push(row.childSubAssemblyId);
+    }
+  }
+  return out;
+}
+
+/** Just enough of a part to decide whether it's in the bin. */
+export type PartFacts = { partNumber: string; stage: number };
+/** Just enough of a bought item to decide whether it's here. */
+export type CotsFacts = { name: string; status: string };
+
+/** Just enough of a sub-assembly to label it and know if it's built. */
+export type AssemblyHeader = {
+  id: string;
+  number: string;
+  name: string;
+  order: number;
+  completed: boolean;
+};
+
+/**
+ * One sub-assembly as the readiness rules want it: its parts, its bought items
+ * and the sub-assemblies inside it.
+ *
+ * The one place that decides a bought item which hasn't arrived holds a build
+ * up. The dashboard used to build this itself and left bought items out
+ * altogether, so an assembly waiting on a motor counted as ready to build
+ * while the Done button, correctly, refused it.
+ *
+ * A member that isn't in the lookups — deleted, or from another season —
+ * blocks, rather than quietly counting as there.
+ */
+export function buildAssemblyInput(
+  header: AssemblyHeader,
+  refs: MemberRefs | undefined,
+  parts: ReadonlyMap<string, PartFacts>,
+  cots: ReadonlyMap<string, CotsFacts>,
+): AssemblyInput {
+  return {
+    id: header.id,
+    number: header.number,
+    name: header.name,
+    order: header.order,
+    completed: header.completed,
+    childIds: refs?.childIds ?? [],
+    members: [
+      ...(refs?.partIds ?? []).map((id) => {
+        const part = parts.get(id);
+        return {
+          kind: "part" as const,
+          label: part?.partNumber ?? "a part",
+          stageLabel: "not in the bin yet",
+          ready: (part?.stage ?? 0) >= READY_STAGE,
+        };
+      }),
+      ...(refs?.cotsItemIds ?? []).map((id) => {
+        const item = cots.get(id);
+        return {
+          kind: "cots" as const,
+          label: item?.name ?? "a bought item",
+          stageLabel: item?.status ?? "needed",
+          ready: item?.status === "arrived",
+        };
+      }),
+    ],
+  };
+}
+
 /** One line of why it can't go together yet. */
 export function blockingSummary(status: AssemblyStatus, limit = 3): string {
   if (status.done) return "Built and on the robot.";

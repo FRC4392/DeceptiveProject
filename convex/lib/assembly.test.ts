@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
   blockingSummary,
+  buildAssemblyInput,
   computeAssemblyStatuses,
+  groupMemberRefs,
   isSafeDrawingUrl,
   wouldCycle,
   type AssemblyInput,
@@ -441,5 +443,66 @@ describe("spotting a shortfall", () => {
       ]),
     );
     expect(short.map((s) => s.refId)).toEqual(["b", "a"]);
+  });
+});
+
+describe("building the readiness input", () => {
+  const header = {
+    id: "a1",
+    number: "27-INT-001",
+    name: "Roller",
+    order: 1,
+    completed: false,
+  };
+
+  test("groups member rows by the assembly holding them", () => {
+    const refs = groupMemberRefs([
+      { subAssemblyId: "a1", partId: "p1" },
+      { subAssemblyId: "a1", cotsItemId: "c1" },
+      { subAssemblyId: "a1", childSubAssemblyId: "a2" },
+      { subAssemblyId: "a2", partId: "p2" },
+    ]);
+    expect(refs.get("a1")).toEqual({
+      partIds: ["p1"],
+      cotsItemIds: ["c1"],
+      childIds: ["a2"],
+    });
+    expect(refs.get("a2")?.partIds).toEqual(["p2"]);
+  });
+
+  test("a bought item holds the build up until it arrives", () => {
+    const refs = { partIds: [], cotsItemIds: ["c1"], childIds: [] };
+    const waiting = buildAssemblyInput(
+      header,
+      refs,
+      new Map(),
+      new Map([["c1", { name: "Motor", status: "ordered" }]]),
+    );
+    expect(computeAssemblyStatuses([waiting])[0].ready).toBe(false);
+
+    const here = buildAssemblyInput(
+      header,
+      refs,
+      new Map(),
+      new Map([["c1", { name: "Motor", status: "arrived" }]]),
+    );
+    expect(computeAssemblyStatuses([here])[0].ready).toBe(true);
+  });
+
+  test("a member it can't find holds the build up rather than counting as there", () => {
+    const input = buildAssemblyInput(
+      header,
+      { partIds: ["gone"], cotsItemIds: ["gone too"], childIds: [] },
+      new Map(),
+      new Map(),
+    );
+    const [status] = computeAssemblyStatuses([input]);
+    expect(status.ready).toBe(false);
+    expect(status.blocking).toHaveLength(2);
+  });
+
+  test("an assembly with no members at all is ready", () => {
+    const input = buildAssemblyInput(header, undefined, new Map(), new Map());
+    expect(computeAssemblyStatuses([input])[0].ready).toBe(true);
   });
 });

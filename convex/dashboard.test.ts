@@ -124,6 +124,69 @@ describe("the dashboard summary", () => {
     expect(summary.subAssemblies.readyToBuild).toBe(4);
   });
 
+  // The test above only ever put parts in an assembly, so it couldn't see that
+  // the dashboard left bought items out of the count altogether.
+  test("an assembly waiting on something bought isn't ready to build", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const rows = await mentor.query(api.subAssemblies.list, {
+      subsystemId: intake._id,
+    });
+    const root = rows[0].assembly._id;
+    const motor = await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Kraken X60",
+      qtyNeeded: 1,
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: root,
+      partIds: [],
+      cotsItemIds: [motor],
+      childIds: [],
+    });
+
+    // The motor hasn't been bought: the four empty defaults are ready, this
+    // one isn't — and the Done button agrees.
+    let summary = await mentor.query(api.dashboard.summary, {});
+    expect(summary.subAssemblies.readyToBuild).toBe(4);
+    await expect(
+      mentor.mutation(api.subAssemblies.complete, { id: root }),
+    ).rejects.toThrow();
+
+    await mentor.mutation(api.cots.setStatus, { id: motor, status: "ordered" });
+    summary = await mentor.query(api.dashboard.summary, {});
+    expect(summary.subAssemblies.readyToBuild).toBe(4); // on its way isn't here
+
+    await mentor.mutation(api.cots.setStatus, { id: motor, status: "arrived" });
+    summary = await mentor.query(api.dashboard.summary, {});
+    expect(summary.subAssemblies.readyToBuild).toBe(5);
+  });
+
+  test("agrees with each person's own list about what's ready", async () => {
+    const t = convexTest(schema, modules);
+    const { mentor, intake } = await setup(t);
+    const rows = await mentor.query(api.subAssemblies.list, {
+      subsystemId: intake._id,
+    });
+    const root = rows[0].assembly._id;
+    const motor = await mentor.mutation(api.cots.create, {
+      subsystemId: intake._id,
+      name: "Kraken X60",
+      qtyNeeded: 1,
+    });
+    await mentor.mutation(api.subAssemblies.setMembers, {
+      id: root,
+      partIds: [],
+      cotsItemIds: [motor],
+      childIds: [],
+    });
+    await mentor.mutation(api.subAssemblies.claim, { id: root });
+
+    const [mine] = await mentor.query(api.subAssemblies.listMine, {});
+    expect(mine.ready).toBe(false);
+    expect(mine.summary).toContain("Kraken X60");
+  });
+
   test("an empty app reports zeroes rather than failing", async () => {
     const t = convexTest(schema, modules);
     const anyone = t.withIdentity(identity("student_1"));
