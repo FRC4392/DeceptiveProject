@@ -12,6 +12,9 @@ const vSeason = v.object({
   year: v.string(),
   name: v.string(),
   active: v.boolean(),
+  // Optional in the schema, so optional here: leave it out and the first
+  // season to have its padding set stops `list` and `active` returning at all.
+  numberPad: v.optional(v.number()),
 });
 
 /**

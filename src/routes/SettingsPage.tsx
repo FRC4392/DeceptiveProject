@@ -240,11 +240,16 @@ function ThisSeasonPanel({ season }: { season: Doc<"seasons"> }) {
           className="justify-self-start"
           onClick={() => {
             setError(null);
+            // Only send the padding when it actually moved. Saving a year or a
+            // name shouldn't also write a padding nobody touched.
+            const nextPad = Number(pad) || undefined;
+            const padChanged =
+              nextPad !== undefined && nextPad !== (season.numberPad ?? 3);
             update({
               id: season._id,
               year,
               name,
-              numberPad: Number(pad) || undefined,
+              ...(padChanged ? { numberPad: nextPad } : {}),
             }).catch((err: unknown) => setError(errorText(err, "No luck.")));
           }}
         >
