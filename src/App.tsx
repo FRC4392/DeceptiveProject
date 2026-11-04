@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import {
   Authenticated,
   AuthLoading,
@@ -29,6 +29,7 @@ import { IssuesPage } from "@/routes/IssuesPage";
 import { MyIssuesPage } from "@/routes/MyIssuesPage";
 import { IssueDetailPage } from "@/routes/IssueDetailPage";
 import { LoginPage } from "@/routes/LoginPage";
+import { loginPathFor } from "@/lib/redirect";
 
 /** How long to wait before each retry of writing the user row, in ms. */
 const STORE_USER_RETRY_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
@@ -70,6 +71,7 @@ export function StoreCurrentUser() {
 }
 
 function RequireAuth() {
+  const location = useLocation();
   return (
     <>
       <AuthLoading>
@@ -78,7 +80,12 @@ function RequireAuth() {
         </div>
       </AuthLoading>
       <Unauthenticated>
-        <Navigate to="/login" replace />
+        {/* Bring them back here afterwards. A shared link to a part used to
+            land everyone on the parts board once they'd signed in. */}
+        <Navigate
+          to={loginPathFor(location.pathname + location.search)}
+          replace
+        />
       </Unauthenticated>
       <Authenticated>
         <StoreCurrentUser />

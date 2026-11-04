@@ -1,7 +1,8 @@
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { SignIn, useUser } from "@clerk/react";
 import { useTheme } from "next-themes";
 import logo from "@/assets/logo.png";
+import { safeNext } from "@/lib/redirect";
 
 const clerkVariables = {
   light: {
@@ -32,7 +33,7 @@ const clerkVariables = {
   },
 } as const;
 
-function SignInCard() {
+function SignInCard({ next }: { next: string }) {
   const { resolvedTheme } = useTheme();
   const variables =
     resolvedTheme === "dark" ? clerkVariables.dark : clerkVariables.light;
@@ -49,7 +50,7 @@ function SignInCard() {
 
       <SignIn
         routing="hash"
-        forceRedirectUrl="/"
+        forceRedirectUrl={next}
         appearance={{
           variables,
           elements: {
@@ -71,6 +72,10 @@ function SignInCard() {
 
 export function LoginPage() {
   const { isLoaded, isSignedIn } = useUser();
+  // Where they were headed before being sent here — if it's somewhere in
+  // this app. See lib/redirect.ts for why that check matters.
+  const [params] = useSearchParams();
+  const next = safeNext(params.get("next"));
 
   if (!isLoaded) {
     return (
@@ -80,7 +85,7 @@ export function LoginPage() {
     );
   }
 
-  if (isSignedIn) return <Navigate to="/" replace />;
+  if (isSignedIn) return <Navigate to={next} replace />;
 
-  return <SignInCard />;
+  return <SignInCard next={next} />;
 }

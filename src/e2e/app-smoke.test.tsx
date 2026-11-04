@@ -323,6 +323,28 @@ describe("app smoke routes", () => {
     ).toBeInTheDocument();
   });
 
+  // A link to a part, opened while signed out, used to end on the parts board.
+  it("sends someone back to the page they were trying to reach", () => {
+    clerkMock.isSignedIn = false;
+    renderAt("/login?next=%2Fparts%2Fpt_1");
+    expect(clerkMock.signInProps[0]).toMatchObject({
+      forceRedirectUrl: "/parts/pt_1",
+    });
+  });
+
+  it("won't send anyone to another site after signing in", () => {
+    clerkMock.isSignedIn = false;
+    renderAt("/login?next=%2F%2Fevil.example");
+    expect(clerkMock.signInProps[0]).toMatchObject({ forceRedirectUrl: "/" });
+  });
+
+  it("takes someone already signed in straight to where they were going", () => {
+    renderAt("/login?next=%2Ftodos");
+    expect(
+      screen.getByRole("heading", { name: "To-do list" }),
+    ).toBeInTheDocument();
+  });
+
   it("opens the parts board with its six stage columns", () => {
     renderAt("/parts");
 
