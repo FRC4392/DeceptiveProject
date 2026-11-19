@@ -82,6 +82,32 @@ export default defineSchema({
     .index("by_season_and_date", ["seasonId", "date"])
     .index("by_date", ["date"]),
 
+  // ---- The schedule (the season's Gantt chart) ----
+
+  // A heading on the chart — Design, Build, Test — holding its tasks. Leads
+  // and mentors edit; everyone reads.
+  schedulePhases: defineTable({
+    seasonId: v.id("seasons"),
+    name: v.string(),
+    order: v.number(),
+  }).index("by_season", ["seasonId"]),
+
+  // One bar on the chart. `start` and `end` are days, stored as the local
+  // midnight the browser that set them saw; `end` is inclusive, so a one-day
+  // task has start === end. "Today" is the browser's business, never the
+  // server's, so nothing here depends on the deployment's timezone.
+  scheduleTasks: defineTable({
+    seasonId: v.id("seasons"),
+    phaseId: v.id("schedulePhases"),
+    name: v.string(),
+    start: v.number(),
+    end: v.number(),
+    order: v.number(),
+    doneAt: v.optional(v.number()),
+  })
+    .index("by_season", ["seasonId"])
+    .index("by_phase", ["phaseId"]),
+
   // ---- Part tracker ----
 
   // A season owns a set of subsystems, its parts and their numbering. `year` is

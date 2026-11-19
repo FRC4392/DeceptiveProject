@@ -10,6 +10,7 @@ import {
 import { api } from "../convex/_generated/api";
 import { AppShell } from "@/Layout";
 import { DashboardPage } from "@/routes/DashboardPage";
+import { SchedulePage } from "@/routes/SchedulePage";
 import { TodoBoardPage } from "@/routes/TodoBoardPage";
 import { TodoPage } from "@/routes/TodoPage";
 import { MyTodosPage } from "@/routes/MyTodosPage";
@@ -103,6 +104,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route path="/" element={<Navigate to="/parts" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/schedule" element={<SchedulePage />} />
           {/* The to-do list */}
           <Route path="/todos" element={<TodoBoardPage />} />
           <Route path="/todos/:todoId" element={<TodoPage />} />

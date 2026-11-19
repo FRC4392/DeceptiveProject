@@ -323,8 +323,8 @@ convex/
                      cotsItems, subAssemblies (+ members, notes, events),
                      release intakes and their lines, apiCalls,
                      appSettings, onshape*, todos/todoTags/todoNotes,
-                     competitions, issues/issueComments/githubRepos,
-                     inventoryItems
+                     competitions, schedulePhases/scheduleTasks,
+                     issues/issueComments/githubRepos, inventoryItems
   lib/stages.ts      the stage model: what comes next and who may move it.
                      Imported by the React screens too
   lib/auth.ts        who's asking: the role guards for writes, and the
@@ -357,6 +357,7 @@ convex/
   todos.ts           the season to-do list and its tags
   dashboard.ts       aggregate dashboard/countdown stats
   competitions.ts    competition dates, per season
+  schedule.ts        the season's Gantt chart: phases and dated tasks
   inventory.ts       stocked-inventory items
   github.ts          GitHub issue/PR queries, mutations, the repo registry
                      and the write-back actions
@@ -367,7 +368,7 @@ src/
   Layout.tsx         authenticated shell
   routes/            PartsBoardPage, PartPage, ShopPage, MyPartsPage,
                      OrderingPage, SubsystemsPage, AssemblyPage,
-                     IntakePage, DashboardPage,
+                     IntakePage, DashboardPage, SchedulePage,
                      TodoBoardPage/TodoPage/MyTodosPage, InventoryPage,
                      IssuesPage/IssueDetailPage/MyIssuesPage,
                      SettingsPage, GitHubAdminPage, OnshapeAdminPage,
@@ -375,6 +376,8 @@ src/
   lib/stages.ts      chip colours and labels on top of convex/lib/stages.ts
   lib/tracker.ts     the season / subsystem / process / actor lookups
   lib/redirect.ts    where to send someone back to after signing in
+  lib/schedule.ts    day arithmetic, task status and drag maths for the chart
+  components/schedule/ GanttChart, shared by the Schedule page and dashboard
   components/tracker/ PartCard, StageStrip, PartSearch, QtyCounter,
                      GetNumberDialog, ProblemDialog, PartChips, ClaimLine,
                      AssigneePicker, FilterChip, BoughtItem, UnknownLine,
@@ -689,6 +692,30 @@ sub-lists — built to read like the parts board:
 
 Only a lead or mentor can delete a to-do; anyone can add, edit, claim and
 finish one.
+
+## The schedule
+
+The season's plan as a Gantt chart, under **Schedule** in the sidebar.
+
+- **Phases hold tasks.** A phase is a heading (Design, Build, Test…); a task
+  is a name, a first day, a last day, and done or not done. There are no
+  dependencies between tasks.
+- **Everyone sees it; leads and mentors change it.** They edit in the list
+  under the chart: names, dates, done, which phase, the order. Or they move
+  the bars on the chart itself. Drag a bar to move it, or drag its ends to
+  change the start or the end. A finger scrolls the chart rather than
+  dragging, so on a phone the list is the way to edit. A focused bar takes
+  ←/→ to move a day, and Shift+←/→ to change the end.
+- **Events show as dashed lines**, taken from Settings → Events, and a red
+  line marks today. Bars are coloured by where the task stands: upcoming, in
+  progress, overdue (past its last day and not done) or done.
+- **The dashboard shows the weeks around today**: one week back and five
+  ahead. It lists what's in progress and how many tasks are overdue.
+
+Dates are days, not moments: each is stored as the local midnight of the
+browser that set it. Whether something is late is worked out in the browser,
+so the deployment's timezone never comes into it. The schedule belongs to its
+season, like everything else; switching year shows that year's.
 
 ## The issue tracker
 

@@ -22,6 +22,52 @@ const seasonMock = vi.hoisted(() => {
   return { active, list: [active] as (typeof active)[] };
 });
 
+const scheduleMock = vi.hoisted(() => {
+  const today = new Date();
+  const midnight = (offset: number) =>
+    new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() + offset,
+    ).getTime();
+  return {
+    data: {
+      phases: [
+        {
+          _id: "phase_1",
+          _creationTime: 0,
+          seasonId: "season_1",
+          name: "Build",
+          order: 0,
+        },
+      ],
+      tasks: [
+        {
+          _id: "task_1",
+          _creationTime: 0,
+          seasonId: "season_1",
+          phaseId: "phase_1",
+          name: "Frame welding",
+          start: midnight(-2),
+          end: midnight(4),
+          order: 0,
+        },
+        {
+          _id: "task_2",
+          _creationTime: 0,
+          seasonId: "season_1",
+          phaseId: "phase_1",
+          name: "Bumpers",
+          start: midnight(-9),
+          end: midnight(-3),
+          order: 1,
+        },
+      ],
+      milestones: [],
+    },
+  };
+});
+
 vi.mock("../../convex/_generated/api", () => ({
   api: {
     auth: {
@@ -41,6 +87,17 @@ vi.mock("../../convex/_generated/api", () => ({
       remove: "competitions.remove",
     },
     dashboard: { summary: "dashboard.summary" },
+    schedule: {
+      get: "schedule.get",
+      createPhase: "schedule.createPhase",
+      renamePhase: "schedule.renamePhase",
+      movePhase: "schedule.movePhase",
+      removePhase: "schedule.removePhase",
+      createTask: "schedule.createTask",
+      updateTask: "schedule.updateTask",
+      moveTask: "schedule.moveTask",
+      removeTask: "schedule.removeTask",
+    },
     github: {
       config: "github.config",
       importIssues: "github.importIssues",
@@ -157,6 +214,8 @@ vi.mock("convex/react", () => ({
         return null;
       case "intake.pendingCount":
         return 0;
+      case "schedule.get":
+        return scheduleMock.data;
       case "dashboard.summary":
         return {
           outstanding: {
@@ -261,6 +320,43 @@ describe("app smoke routes", () => {
     renderAt("/dashboard");
 
     expect(screen.getAllByText(/not the newest season/i)).toHaveLength(2);
+  });
+
+  it("shows where the schedule is on the dashboard", () => {
+    renderAt("/dashboard");
+
+    expect(
+      screen.getByRole("heading", { name: "Schedule" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/In progress:/).closest("p")).toHaveTextContent(
+      "In progress: Frame welding · 1 overdue",
+    );
+    expect(screen.getByText(/1 overdue/)).toBeInTheDocument();
+    expect(screen.getByText("Today")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open the schedule →" }),
+    ).toHaveAttribute("href", "/schedule");
+  });
+
+  it("opens the schedule from the sidebar, editable for a mentor", () => {
+    renderAt("/schedule");
+
+    expect(screen.getByRole("link", { name: "Schedule" })).toHaveAttribute(
+      "href",
+      "/schedule",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Schedule", level: 1 }),
+    ).toBeInTheDocument();
+    // Bars are buttons once they can be moved.
+    expect(
+      screen.getByRole("button", { name: /^Frame welding: .*in progress$/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Bumpers: .*overdue$/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Build")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add phase" })).toBeDisabled();
   });
 
   it("loads the authenticated dashboard shell", () => {
@@ -399,6 +495,7 @@ describe("app smoke routes", () => {
     );
     expect(links).toEqual([
       "Dashboard",
+      "Schedule",
       "Subsystems",
       "Parts Board",
       "My Parts",
