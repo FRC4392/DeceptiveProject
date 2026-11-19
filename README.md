@@ -323,8 +323,8 @@ convex/
                      cotsItems, subAssemblies (+ members, notes, events),
                      release intakes and their lines, apiCalls,
                      appSettings, onshape*, todos/todoTags/todoNotes,
-                     competitions, issues/issueComments/githubRepos,
-                     inventoryItems
+                     competitions, schedulePhases/scheduleTasks,
+                     issues/issueComments/githubRepos, inventoryItems
   lib/stages.ts      the stage model: what comes next and who may move it.
                      Imported by the React screens too
   lib/auth.ts        who's asking: the role guards for writes, and the
@@ -334,6 +334,8 @@ convex/
                      tree adds up to. Imported by the React screens too
   lib/budget.ts      what each Onshape mode allows, and when the year starts
   lib/counts.ts      counter presses as steps, so none are lost
+  lib/scheduleDeps.ts what moves when a scheduled task does. Imported by the
+                     React screens too
   lib/intake.ts      release matching (matched / changed / unknown / removed)
                      and BOM CSV parsing
   parts.ts           the tracker: numbers, stage moves, claiming, problems
@@ -357,6 +359,7 @@ convex/
   todos.ts           the season to-do list and its tags
   dashboard.ts       aggregate dashboard/countdown stats
   competitions.ts    competition dates, per season
+  schedule.ts        the season's Gantt chart: phases and dated tasks
   inventory.ts       stocked-inventory items
   github.ts          GitHub issue/PR queries, mutations, the repo registry
                      and the write-back actions
@@ -367,7 +370,7 @@ src/
   Layout.tsx         authenticated shell
   routes/            PartsBoardPage, PartPage, ShopPage, MyPartsPage,
                      OrderingPage, SubsystemsPage, AssemblyPage,
-                     IntakePage, DashboardPage,
+                     IntakePage, DashboardPage, SchedulePage,
                      TodoBoardPage/TodoPage/MyTodosPage, InventoryPage,
                      IssuesPage/IssueDetailPage/MyIssuesPage,
                      SettingsPage, GitHubAdminPage, OnshapeAdminPage,
@@ -375,6 +378,8 @@ src/
   lib/stages.ts      chip colours and labels on top of convex/lib/stages.ts
   lib/tracker.ts     the season / subsystem / process / actor lookups
   lib/redirect.ts    where to send someone back to after signing in
+  lib/schedule.ts    day arithmetic, task status and drag maths for the chart
+  components/schedule/ GanttChart, shared by the Schedule page and dashboard
   components/tracker/ PartCard, StageStrip, PartSearch, QtyCounter,
                      GetNumberDialog, ProblemDialog, PartChips, ClaimLine,
                      AssigneePicker, FilterChip, BoughtItem, UnknownLine,
@@ -689,6 +694,46 @@ sub-lists — built to read like the parts board:
 
 Only a lead or mentor can delete a to-do; anyone can add, edit, claim and
 finish one.
+
+## The schedule
+
+The season's plan as a Gantt chart, under **Schedule** in the sidebar.
+
+- **Phases hold tasks.** A phase is a heading (Design, Build, Test…); a task
+  is a name, a first day, a last day, and done or not done.
+- **A task can wait for others.** Pick them under "Waits for" on its row. It
+  then starts the day after the last of them finishes, keeping its length,
+  and follows them when they move: later when one slips, earlier when one
+  comes in early. So does everything waiting on it in turn. An arrow on the
+  chart runs from each task to what waits for it. A task marked done stays
+  where it is, and so does anything only it leads to. Loops are refused.
+- **A clash is allowed, and shown.** Move a waiting task so it starts before
+  what it waits for has finished and it's saved there. Its bar gets a red
+  outline and a warning, the arrow turns red, and its row offers "Line it up
+  after". The next time what it waits for moves, it lines up again anyway.
+- **Everyone sees it; leads and mentors change it.** They edit in the list
+  under the chart: names, dates, done, which phase, the order. Or they move
+  the bars on the chart itself. Drag a bar to move it, or drag its ends to
+  change the start or the end. A finger scrolls the chart rather than
+  dragging, so on a phone the list is the way to edit. A focused bar takes
+  ←/→ to move a day, and Shift+←/→ to change the end.
+- **Drag the chart to scroll it.** Grab it anywhere but a bar and drag:
+  sideways scrolls through the season, up and down scrolls the page. That
+  works on the dashboard's chart too, where the bars can't be moved. With a
+  finger the chart scrolls the way it always did.
+- **Events show as dashed lines**, taken from Settings → Events, and a red
+  line marks today. Bars are coloured by where the task stands: upcoming, in
+  progress, overdue (past its last day and not done) or done.
+- **The dashboard shows the weeks around today**: one week back and five
+  ahead. It lists what's in progress and how many tasks are overdue.
+
+Dates are calendar days, not moments: each is stored as `Date.UTC` of the
+date, so "the day after" is exactly one day on, on the server or in any
+browser, across clock changes. Whether something is late needs today, and
+that's the browser's own date. The push-back rules live in
+`convex/lib/scheduleDeps.ts`: the server applies them, and the chart uses
+them to show what follows a bar while it's being dragged. The schedule belongs to its
+season, like everything else; switching year shows that year's.
 
 ## The issue tracker
 

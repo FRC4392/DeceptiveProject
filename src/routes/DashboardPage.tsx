@@ -3,6 +3,9 @@ import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { daysUntil, formatDate } from "@/lib/dates";
 import { cn } from "@/lib/utils";
+import { GanttChart } from "@/components/schedule/GanttChart";
+import { overlaps, taskStatus, windowAround } from "@/lib/schedule";
+import { useToday } from "@/lib/useToday";
 
 function pct(done: number, total: number): number {
   return total === 0 ? 0 : Math.round((done / total) * 100);
@@ -100,6 +103,8 @@ export function DashboardPage() {
           }
         />
       </div>
+
+      <ScheduleCard />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
@@ -221,6 +226,77 @@ export function DashboardPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+/**
+ * Where the season's plan says we should be: the weeks around today on the
+ * schedule, with what's under way and what's slipped.
+ */
+function ScheduleCard() {
+  const data = useQuery(api.schedule.get, {});
+  const today = useToday();
+
+  const weeks = windowAround(today, 7, 35);
+  const tasks = data?.tasks ?? [];
+  const inView = tasks.filter((t) => overlaps(t, weeks));
+  // Only the phases with something in these weeks, so the card stays short.
+  const phases = (data?.phases ?? []).filter((p) =>
+    inView.some((t) => t.phaseId === p._id),
+  );
+  const active = tasks.filter((t) => taskStatus(t, today) === "active");
+  const overdue = tasks.filter((t) => taskStatus(t, today) === "overdue");
+
+  return (
+    <Card title="Schedule" to="/schedule" linkLabel="Open the schedule →">
+      {data === undefined ? (
+        <p className="mt-3 text-sm text-muted-foreground">Loading…</p>
+      ) : tasks.length === 0 ? (
+        <p className="mt-3 text-sm text-muted-foreground">
+          Nothing's been scheduled yet.
+        </p>
+      ) : (
+        <>
+          <p className="mt-1 text-sm">
+            {active.length > 0 ? (
+              <>
+                <span className="text-muted-foreground">In progress: </span>
+                <span className="font-medium">
+                  {active.map((t) => t.name).join(", ")}
+                </span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">
+                Nothing scheduled right now.
+              </span>
+            )}
+            {overdue.length > 0 && (
+              <span className="font-medium text-danger">
+                {" "}
+                · {overdue.length} overdue
+              </span>
+            )}
+          </p>
+          <div className="mt-3">
+            {inView.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Nothing on the schedule in the next five weeks.
+              </p>
+            ) : (
+              <GanttChart
+                phases={phases}
+                tasks={inView}
+                milestones={data.milestones}
+                range={weeks}
+                today={today}
+                dayWidth={22}
+                compact
+              />
+            )}
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 

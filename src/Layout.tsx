@@ -57,8 +57,14 @@ export function AppShell() {
   const notNewest = !!season && !!newest && newest._id !== season._id;
 
   const sections: NavSection[] = [
-    // Dashboard sits on its own above the first heading.
-    { items: [{ to: "/dashboard", label: "Dashboard" }] },
+    // Dashboard and the season's schedule sit on their own above the first
+    // heading: they're about the whole robot, not one side of the app.
+    {
+      items: [
+        { to: "/dashboard", label: "Dashboard" },
+        { to: "/schedule", label: "Schedule" },
+      ],
+    },
     {
       label: "Parts",
       items: [

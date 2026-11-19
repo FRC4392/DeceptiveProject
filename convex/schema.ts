@@ -82,6 +82,37 @@ export default defineSchema({
     .index("by_season_and_date", ["seasonId", "date"])
     .index("by_date", ["date"]),
 
+  // ---- The schedule (the season's Gantt chart) ----
+
+  // A heading on the chart — Design, Build, Test — holding its tasks. Leads
+  // and mentors edit; everyone reads.
+  schedulePhases: defineTable({
+    seasonId: v.id("seasons"),
+    name: v.string(),
+    order: v.number(),
+  }).index("by_season", ["seasonId"]),
+
+  // One bar on the chart. `start` and `end` are calendar days, stored as
+  // Date.UTC of the date — not a moment — so "the day after" is exactly one
+  // day on wherever the server or the viewer is. `end` is inclusive, so a
+  // one-day task has start === end.
+  //
+  // `dependsOn` is what the task waits for. It starts the day after the
+  // last of those finishes, and follows them when they move (see
+  // convex/lib/scheduleDeps.ts). Missing means it waits for nothing.
+  scheduleTasks: defineTable({
+    seasonId: v.id("seasons"),
+    phaseId: v.id("schedulePhases"),
+    name: v.string(),
+    start: v.number(),
+    end: v.number(),
+    order: v.number(),
+    doneAt: v.optional(v.number()),
+    dependsOn: v.optional(v.array(v.id("scheduleTasks"))),
+  })
+    .index("by_season", ["seasonId"])
+    .index("by_phase", ["phaseId"]),
+
   // ---- Part tracker ----
 
   // A season owns a set of subsystems, its parts and their numbering. `year` is
