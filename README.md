@@ -826,8 +826,18 @@ npm run test          # vitest run
 npm run test:e2e      # smoke tests for shell/navigation/setup states (mocked)
 npm run test:watch    # vitest watch mode
 npm run lint           # tsc + eslint
+npm run format:check   # prettier --check .
 npm run format         # prettier --write .
 ```
+
+CI (`.github/workflows/ci.yml`) runs `npm run lint`, `npm run format:check`
+and `npm test` on every pull request, and a PR can't merge into `main` until
+they pass. Run the same three before you push and CI will pass the first time.
+
+Dependabot (`.github/dependabot.yml`) opens dependency-update PRs: one grouped
+PR a week for npm minor and patch bumps, a separate PR for each major bump,
+and a monthly PR for GitHub Actions. They go through review and CI like any
+other PR, so check a major bump's changelog before approving it.
 
 `test:e2e` is a smoke test of the React shell with Convex and Clerk mocked
 out, not a browser test against a running deployment. It catches a route that

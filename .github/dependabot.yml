@@ -1,0 +1,25 @@
+# Dependabot version updates: opens PRs to keep dependencies current.
+# Security fixes are separate (Settings → Code security → Dependabot security
+# updates) and arrive whenever an alert needs one, regardless of this schedule.
+# Every Dependabot PR still needs a mentor's approval and a green CI check.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One PR a week for all the minor and patch bumps, instead of one each.
+      # Major versions still get their own PR, since they can break things.
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
