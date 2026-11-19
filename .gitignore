@@ -25,6 +25,15 @@ coverage
 !.env*.example
 *.local
 
+# Keys and credential files
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+*-credentials.json
+service-account*.json
+
 # Package manager output
 .npm
 .yarn/*
