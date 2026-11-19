@@ -342,6 +342,75 @@ export function GanttChart({
     );
   }
 
+  // ---- Panning: grab the chart anywhere but a bar and drag it ----
+
+  const pan = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    left: number;
+    top: number;
+    page: HTMLElement | null;
+    moved: boolean;
+  } | null>(null);
+  const [panning, setPanning] = useState(false);
+
+  /** The nearest box above the chart that scrolls up and down: the page. */
+  function pageScroller(el: HTMLElement): HTMLElement | null {
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const { overflowY } = getComputedStyle(p);
+      if (
+        (overflowY === "auto" || overflowY === "scroll") &&
+        p.scrollHeight > p.clientHeight
+      ) {
+        return p;
+      }
+    }
+    return (document.scrollingElement as HTMLElement | null) ?? null;
+  }
+
+  function onPanDown(e: React.PointerEvent<HTMLDivElement>) {
+    // A finger already scrolls the box natively; a bar has its own drag.
+    if (e.pointerType === "touch" || e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("[data-bar]")) return;
+    const box = e.currentTarget;
+    pan.current = {
+      pointerId: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      left: box.scrollLeft,
+      top: 0,
+      page: null,
+      moved: false,
+    };
+  }
+
+  function onPanMove(e: React.PointerEvent<HTMLDivElement>) {
+    const p = pan.current;
+    if (!p || p.pointerId !== e.pointerId) return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    if (!p.moved) {
+      // A few pixels of slack, so a plain click is still a click.
+      if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      p.moved = true;
+      p.page = pageScroller(e.currentTarget);
+      p.top = p.page?.scrollTop ?? 0;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setPanning(true);
+    }
+    e.preventDefault();
+    e.currentTarget.scrollLeft = p.left - dx;
+    if (p.page) p.page.scrollTop = p.top - dy;
+  }
+
+  function onPanEnd(e: React.PointerEvent<HTMLDivElement>) {
+    const p = pan.current;
+    if (!p || p.pointerId !== e.pointerId) return;
+    pan.current = null;
+    if (p.moved) setPanning(false);
+  }
+
   // ---- Moving bars ----
 
   function onPointerDown(e: React.PointerEvent, task: GanttTask) {
@@ -416,8 +485,8 @@ export function GanttChart({
       clippedEnd && "rounded-r-none",
       clashing.length > 0 && "ring-2 ring-inset ring-danger",
       editable &&
-        "cursor-grab focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-      dragging && "cursor-grabbing ring-2 ring-ring",
+        "cursor-move focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+      dragging && "ring-2 ring-ring",
       following && "opacity-80 ring-1 ring-ring",
     );
     const style = { left: left + 1, width: Math.max(right - left - 2, 6) };
@@ -444,6 +513,7 @@ export function GanttChart({
     return (
       <button
         type="button"
+        data-bar=""
         className={className}
         style={style}
         title={label}
@@ -488,9 +558,21 @@ export function GanttChart({
     <div className="min-w-0">
       <div
         ref={scrollRef}
-        className="relative overflow-x-auto rounded-lg border bg-card"
+        className={cn(
+          // No text selection at all: it would start on the first pixel of
+          // a drag, before the pan takes over.
+          "relative select-none overflow-x-auto rounded-lg border bg-card",
+          panning ? "cursor-grabbing" : "cursor-grab",
+        )}
         role="group"
         aria-label="Schedule chart"
+        onPointerDown={onPanDown}
+        onPointerMove={onPanMove}
+        onPointerUp={onPanEnd}
+        onPointerCancel={onPanEnd}
+        // Stops the browser starting a text selection or an image drag
+        // instead of the pan.
+        onDragStart={(e) => e.preventDefault()}
       >
         <div className="relative" style={{ width: "max-content" }}>
           {/* Header: months, then the date of each Monday. */}
@@ -660,7 +742,8 @@ export function GanttChart({
         {editable && (
           <span id="gantt-keys" className="basis-full sm:ml-auto sm:basis-auto">
             Drag a bar or its ends to change dates; what waits on it follows.
-            Focused bar: ←/→ moves a day, Shift+←/→ changes the end.
+            Drag anywhere else to scroll. Focused bar: ←/→ moves a day,
+            Shift+←/→ changes the end.
           </span>
         )}
       </div>

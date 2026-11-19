@@ -717,6 +717,10 @@ The season's plan as a Gantt chart, under **Schedule** in the sidebar.
   change the start or the end. A finger scrolls the chart rather than
   dragging, so on a phone the list is the way to edit. A focused bar takes
   ←/→ to move a day, and Shift+←/→ to change the end.
+- **Drag the chart to scroll it.** Grab it anywhere but a bar and drag:
+  sideways scrolls through the season, up and down scrolls the page. That
+  works on the dashboard's chart too, where the bars can't be moved. With a
+  finger the chart scrolls the way it always did.
 - **Events show as dashed lines**, taken from Settings → Events, and a red
   line marks today. Bars are coloured by where the task stands: upcoming, in
   progress, overdue (past its last day and not done) or done.
