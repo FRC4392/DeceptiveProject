@@ -1,11 +1,15 @@
 /**
  * Day arithmetic and layout for the schedule's Gantt chart.
  *
- * Every date here is a day: the timestamp of a local midnight. Days are
- * stepped with `new Date(y, m, d + n)` rather than by adding milliseconds, so
- * a clock change in spring or autumn can't knock a bar an hour into the
- * wrong day.
+ * Every date here is a day, stored as Date.UTC of the calendar date — a
+ * date, not a moment. That makes a day exactly DAY_MS long whatever the
+ * zone or the clocks are doing, so the server can push a task "to the day
+ * after" without knowing where anyone is. Read them back with the UTC
+ * getters, never the local ones.
  */
+import { DAY_MS } from "../../convex/lib/scheduleDeps";
+
+export { DAY_MS };
 
 export type ScheduleTaskLike = {
   start: number;
@@ -19,37 +23,50 @@ export type DayRange = { from: number; to: number };
 
 export type DragMode = "move" | "start" | "end";
 
-/** Local midnight of the day `ts` falls in. */
-export function startOfDay(ts: number): number {
+/** The calendar day a moment falls on, where this browser is. */
+export function dayOf(ts: number): number {
   const d = new Date(ts);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
 /** The day `n` days after `day` (or before, for negative `n`). */
 export function addDays(day: number, n: number): number {
-  const d = new Date(day);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime();
+  return day + n * DAY_MS;
 }
 
 /** Whole days from `a` to `b`; negative when `b` is earlier. */
 export function daysBetween(a: number, b: number): number {
-  // Rounding absorbs the hour a clock change adds or takes away.
-  return Math.round((startOfDay(b) - startOfDay(a)) / 86_400_000);
+  return Math.round((b - a) / DAY_MS);
 }
 
 /** A day as the value an `<input type="date">` wants. */
 export function toDateInputValue(day: number): string {
-  const d = new Date(day);
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${mm}-${dd}`;
+  return new Date(day).toISOString().slice(0, 10);
 }
 
+/** An `<input type="date">` value as a day, or undefined if it isn't one. */
+export function dayFromInputValue(value: string): number | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return undefined;
+  const day = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(day) ? undefined : day;
+}
+
+/** Day of the week, 0 for Sunday. */
+export function weekday(day: number): number {
+  return new Date(day).getUTCDay();
+}
+
+/** Day of the month, 1–31. */
+export function dateOfMonth(day: number): number {
+  return new Date(day).getUTCDate();
+}
+
+/** Where a task stands on `today` (a day, from `dayOf`). */
 export function taskStatus(task: ScheduleTaskLike, today: number): TaskStatus {
   if (task.doneAt !== undefined) return "done";
-  const day = startOfDay(today);
-  if (task.end < day) return "overdue";
-  if (task.start <= day) return "active";
+  if (task.end < today) return "overdue";
+  if (task.start <= today) return "active";
   return "upcoming";
 }
 
@@ -60,7 +77,8 @@ export function overlaps(task: ScheduleTaskLike, range: DayRange): boolean {
 
 /**
  * The whole season's span: every task and event, and today, with a few days
- * either side so nothing sits on the edge.
+ * either side so nothing sits on the edge. Events are moments (a local
+ * midnight from Settings), so they're turned into days here.
  */
 export function chartRange(
   tasks: ScheduleTaskLike[],
@@ -69,9 +87,9 @@ export function chartRange(
   pad = 3,
 ): DayRange {
   const days = [
-    startOfDay(today),
+    today,
     ...tasks.flatMap((t) => [t.start, t.end]),
-    ...milestones.map((m) => startOfDay(m.date)),
+    ...milestones.map((m) => dayOf(m.date)),
   ];
   const from = Math.min(...days);
   const to = Math.max(...days);
@@ -87,8 +105,7 @@ export function windowAround(
   before: number,
   after: number,
 ): DayRange {
-  const day = startOfDay(today);
-  return { from: addDays(day, -before), to: addDays(day, after) };
+  return { from: addDays(today, -before), to: addDays(today, after) };
 }
 
 /** Where a dragged or nudged bar ends up. The start never passes the end. */
@@ -123,6 +140,15 @@ export function formatDay(day: number): string {
   return new Date(day).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** "Mar", for the month a day is in. */
+export function formatMonth(day: number): string {
+  return new Date(day).toLocaleDateString(undefined, {
+    month: "short",
+    timeZone: "UTC",
   });
 }
 

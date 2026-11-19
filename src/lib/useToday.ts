@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
-import { addDays, startOfDay } from "@/lib/schedule";
+import { dayOf } from "@/lib/schedule";
 
-/** Today's local midnight, moved on when the date rolls over. */
+/** Today, as a schedule day (see `dayOf`), moved on when the date rolls over. */
 export function useToday(): number {
-  const [today, setToday] = useState(() => startOfDay(Date.now()));
+  const [today, setToday] = useState(() => dayOf(Date.now()));
   useEffect(() => {
-    const untilTomorrow = addDays(today, 1) - Date.now();
+    const now = new Date();
+    const midnight = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+    ).getTime();
     const timer = setTimeout(
-      () => setToday(startOfDay(Date.now())),
-      Math.max(untilTomorrow, 1000),
+      () => setToday(dayOf(Date.now())),
+      Math.max(midnight - now.getTime(), 1000),
     );
     return () => clearTimeout(timer);
   }, [today]);

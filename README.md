@@ -334,6 +334,8 @@ convex/
                      tree adds up to. Imported by the React screens too
   lib/budget.ts      what each Onshape mode allows, and when the year starts
   lib/counts.ts      counter presses as steps, so none are lost
+  lib/scheduleDeps.ts what moves when a scheduled task does. Imported by the
+                     React screens too
   lib/intake.ts      release matching (matched / changed / unknown / removed)
                      and BOM CSV parsing
   parts.ts           the tracker: numbers, stage moves, claiming, problems
@@ -698,8 +700,17 @@ finish one.
 The season's plan as a Gantt chart, under **Schedule** in the sidebar.
 
 - **Phases hold tasks.** A phase is a heading (Design, Build, Test…); a task
-  is a name, a first day, a last day, and done or not done. There are no
-  dependencies between tasks.
+  is a name, a first day, a last day, and done or not done.
+- **A task can wait for others.** Pick them under "Waits for" on its row. It
+  then starts the day after the last of them finishes, keeping its length,
+  and follows them when they move: later when one slips, earlier when one
+  comes in early. So does everything waiting on it in turn. An arrow on the
+  chart runs from each task to what waits for it. A task marked done stays
+  where it is, and so does anything only it leads to. Loops are refused.
+- **A clash is allowed, and shown.** Move a waiting task so it starts before
+  what it waits for has finished and it's saved there. Its bar gets a red
+  outline and a warning, the arrow turns red, and its row offers "Line it up
+  after". The next time what it waits for moves, it lines up again anyway.
 - **Everyone sees it; leads and mentors change it.** They edit in the list
   under the chart: names, dates, done, which phase, the order. Or they move
   the bars on the chart itself. Drag a bar to move it, or drag its ends to
@@ -712,9 +723,12 @@ The season's plan as a Gantt chart, under **Schedule** in the sidebar.
 - **The dashboard shows the weeks around today**: one week back and five
   ahead. It lists what's in progress and how many tasks are overdue.
 
-Dates are days, not moments: each is stored as the local midnight of the
-browser that set it. Whether something is late is worked out in the browser,
-so the deployment's timezone never comes into it. The schedule belongs to its
+Dates are calendar days, not moments: each is stored as `Date.UTC` of the
+date, so "the day after" is exactly one day on, on the server or in any
+browser, across clock changes. Whether something is late needs today, and
+that's the browser's own date. The push-back rules live in
+`convex/lib/scheduleDeps.ts`: the server applies them, and the chart uses
+them to show what follows a bar while it's being dragged. The schedule belongs to its
 season, like everything else; switching year shows that year's.
 
 ## The issue tracker

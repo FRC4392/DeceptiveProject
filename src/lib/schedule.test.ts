@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   addDays,
   chartRange,
+  dayFromInputValue,
+  dayOf,
   daysBetween,
   dragResult,
   overlaps,
@@ -10,25 +12,26 @@ import {
   windowAround,
 } from "./schedule";
 
-const day = (y: number, m: number, d: number) =>
-  new Date(y, m - 1, d).getTime();
+const day = (y: number, m: number, d: number) => Date.UTC(y, m - 1, d);
 
-describe("day arithmetic", () => {
-  it("steps whole days, landing on midnight across a clock change", () => {
-    // US clocks go forward on 14 March 2027 and back on 7 November; Europe's
-    // on 28 March and 31 October. Whichever zone this runs in, every step
-    // should land on a local midnight.
-    for (const start of [day(2027, 3, 10), day(2027, 10, 28)]) {
-      for (let n = 0; n < 14; n++) {
-        const d = new Date(addDays(start, n));
-        expect(d.getHours()).toBe(0);
-        expect(daysBetween(start, d.getTime())).toBe(n);
-      }
-    }
+describe("days", () => {
+  it("are calendar dates: exactly a day apart, whatever the clocks do", () => {
+    // 14 March 2027 is when US clocks go forward; it makes no difference.
+    expect(addDays(day(2027, 3, 13), 2)).toBe(day(2027, 3, 15));
+    expect(daysBetween(day(2027, 3, 1), day(2027, 4, 1))).toBe(31);
   });
 
-  it("formats a day for a date input", () => {
+  it("go to and from a date input", () => {
     expect(toDateInputValue(day(2027, 3, 5))).toBe("2027-03-05");
+    expect(dayFromInputValue("2027-03-05")).toBe(day(2027, 3, 5));
+    expect(dayFromInputValue("")).toBeUndefined();
+    expect(dayFromInputValue("2027-3-5")).toBeUndefined();
+  });
+
+  it("take today from this browser's own calendar", () => {
+    // Late evening locally is still that day, wherever UTC has got to.
+    const lateEvening = new Date(2027, 2, 5, 23, 30).getTime();
+    expect(dayOf(lateEvening)).toBe(day(2027, 3, 5));
   });
 });
 
@@ -38,8 +41,6 @@ describe("taskStatus", () => {
   it("is upcoming before the first day, active from it to the last, and overdue after", () => {
     expect(taskStatus(task, day(2027, 2, 28))).toBe("upcoming");
     expect(taskStatus(task, day(2027, 3, 1))).toBe("active");
-    // Any time on the last day still counts as that day.
-    expect(taskStatus(task, day(2027, 3, 7) + 23 * 3_600_000)).toBe("active");
     expect(taskStatus(task, day(2027, 3, 8))).toBe("overdue");
   });
 

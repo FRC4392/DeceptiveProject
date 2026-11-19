@@ -34,6 +34,7 @@ import type * as lib_onshapeLinks from "../lib/onshapeLinks.js";
 import type * as lib_onshapePanelHtml from "../lib/onshapePanelHtml.js";
 import type * as lib_onshapeRelease from "../lib/onshapeRelease.js";
 import type * as lib_onshapeSync from "../lib/onshapeSync.js";
+import type * as lib_scheduleDeps from "../lib/scheduleDeps.js";
 import type * as lib_season from "../lib/season.js";
 import type * as lib_stages from "../lib/stages.js";
 import type * as lib_tokenCrypto from "../lib/tokenCrypto.js";
@@ -85,6 +86,7 @@ declare const fullApi: ApiFromModules<{
   "lib/onshapePanelHtml": typeof lib_onshapePanelHtml;
   "lib/onshapeRelease": typeof lib_onshapeRelease;
   "lib/onshapeSync": typeof lib_onshapeSync;
+  "lib/scheduleDeps": typeof lib_scheduleDeps;
   "lib/season": typeof lib_season;
   "lib/stages": typeof lib_stages;
   "lib/tokenCrypto": typeof lib_tokenCrypto;

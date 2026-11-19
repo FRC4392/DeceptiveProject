@@ -24,12 +24,9 @@ const seasonMock = vi.hoisted(() => {
 
 const scheduleMock = vi.hoisted(() => {
   const today = new Date();
+  // Schedule days are calendar dates: Date.UTC of today's local date.
   const midnight = (offset: number) =>
-    new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate() + offset,
-    ).getTime();
+    Date.UTC(today.getFullYear(), today.getMonth(), today.getDate() + offset);
   return {
     data: {
       phases: [
@@ -51,6 +48,7 @@ const scheduleMock = vi.hoisted(() => {
           start: midnight(-2),
           end: midnight(4),
           order: 0,
+          dependsOn: ["task_2"],
         },
         {
           _id: "task_2",
@@ -356,6 +354,11 @@ describe("app smoke routes", () => {
       screen.getByRole("button", { name: /^Bumpers: .*overdue$/ }),
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("Build")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "What Frame welding waits for: Bumpers",
+      }),
+    ).toHaveTextContent("After Bumpers");
     expect(screen.getByRole("button", { name: "Add phase" })).toBeDisabled();
   });
 

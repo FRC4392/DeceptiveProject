@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowDownIcon, ArrowUpIcon, TrashIcon } from "@radix-ui/react-icons";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ExclamationTriangleIcon,
+  TrashIcon,
+} from "@radix-ui/react-icons";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
 import { GanttChart } from "@/components/schedule/GanttChart";
@@ -9,23 +14,31 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { fromDateInputValue } from "@/lib/dates";
 import { errorText } from "@/lib/errors";
 import { useIsLead } from "@/lib/roles";
 import {
   addDays,
   chartRange,
+  DAY_MS,
+  dayFromInputValue,
+  formatDay,
   formatSpan,
   STATUS_LABEL,
   taskStatus,
   toDateInputValue,
 } from "@/lib/schedule";
+import { wouldCycle, type DepTask } from "../../convex/lib/scheduleDeps";
 import { useToday } from "@/lib/useToday";
 import { cn } from "@/lib/utils";
 
@@ -93,6 +106,7 @@ export function SchedulePage() {
                 phase={phase}
                 phases={phases}
                 tasks={tasks.filter((t) => t.phaseId === phase._id)}
+                allTasks={tasks}
                 first={i === 0}
                 last={i === phases.length - 1}
                 today={today}
@@ -132,6 +146,7 @@ function PhaseEditor({
   phase,
   phases,
   tasks,
+  allTasks,
   first,
   last,
   today,
@@ -139,6 +154,7 @@ function PhaseEditor({
   phase: Phase;
   phases: Phase[];
   tasks: Task[];
+  allTasks: Task[];
   first: boolean;
   last: boolean;
   today: number;
@@ -206,6 +222,7 @@ function PhaseEditor({
             key={task._id}
             task={task}
             phases={phases}
+            allTasks={allTasks}
             first={i === 0}
             last={i === tasks.length - 1}
             run={run}
@@ -226,12 +243,14 @@ function PhaseEditor({
 function TaskRow({
   task,
   phases,
+  allTasks,
   first,
   last,
   run,
 }: {
   task: Task;
   phases: Phase[];
+  allTasks: Task[];
   first: boolean;
   last: boolean;
   run: (p: Promise<unknown>, onFail?: () => void) => void;
@@ -250,8 +269,8 @@ function TaskRow({
   }
 
   function saveDates() {
-    const s = fromDateInputValue(start);
-    const e = fromDateInputValue(end);
+    const s = dayFromInputValue(start);
+    const e = dayFromInputValue(end);
     const reset = () => {
       setStart(toDateInputValue(task.start));
       setEnd(toDateInputValue(task.end));
@@ -259,6 +278,24 @@ function TaskRow({
     if (s === undefined || e === undefined) return reset();
     if (s === task.start && e === task.end) return;
     run(updateTask({ id: task._id, start: s, end: e }), reset);
+  }
+
+  // What it waits for that hasn't finished by the time it starts.
+  const waitsFor = (task.dependsOn ?? [])
+    .map((id) => allTasks.find((t) => t._id === id))
+    .filter((t): t is Task => t !== undefined);
+  const clashing = done ? [] : waitsFor.filter((p) => p.end >= task.start);
+
+  /** Slide the task, keeping its length, to the day after what it waits for. */
+  function lineUp() {
+    const start = Math.max(...waitsFor.map((p) => p.end)) + DAY_MS;
+    run(
+      updateTask({
+        id: task._id,
+        start,
+        end: task.end + (start - task.start),
+      }),
+    );
   }
 
   return (
@@ -329,6 +366,12 @@ function TaskRow({
           </SelectContent>
         </Select>
       )}
+      <WaitsForPicker
+        task={task}
+        allTasks={allTasks}
+        phases={phases}
+        run={run}
+      />
       <div className="ml-auto flex items-center">
         <MoveButtons
           what={task.name}
@@ -349,7 +392,148 @@ function TaskRow({
           <span className="sr-only">Remove {task.name}</span>
         </Button>
       </div>
+      {clashing.length > 0 && (
+        <p className="flex basis-full flex-wrap items-center gap-x-2 gap-y-1 text-sm text-danger">
+          <ExclamationTriangleIcon aria-hidden="true" className="h-4 w-4" />
+          <span>
+            Starts before{" "}
+            {clashing
+              .map((p) => `${p.name} finishes (${formatDay(p.end)})`)
+              .join(", ")}
+            .
+          </span>
+          <Button variant="outline" size="sm" onClick={lineUp}>
+            Line it up after
+          </Button>
+        </p>
+      )}
     </div>
+  );
+}
+
+/**
+ * Choose what a task waits for. Ticking one lines the task up the day after
+ * it finishes; anything that already waits on this task is greyed out, since
+ * picking it would make the two wait for each other.
+ */
+function WaitsForPicker({
+  task,
+  allTasks,
+  phases,
+  run,
+}: {
+  task: Task;
+  allTasks: Task[];
+  phases: Phase[];
+  run: (p: Promise<unknown>, onFail?: () => void) => void;
+}) {
+  const updateTask = useMutation(api.schedule.updateTask);
+  const current = task.dependsOn ?? [];
+  const graph: DepTask[] = allTasks.map((t) => ({
+    id: t._id,
+    start: t.start,
+    end: t.end,
+    dependsOn: t.dependsOn ?? [],
+    done: t.doneAt !== undefined,
+  }));
+  const names = current
+    .map((id) => allTasks.find((t) => t._id === id)?.name)
+    .filter(Boolean);
+  const others = allTasks.filter((t) => t._id !== task._id);
+
+  function toggle(id: Id<"scheduleTasks">, on: boolean) {
+    const next = on ? [...current, id] : current.filter((d) => d !== id);
+    run(updateTask({ id: task._id, dependsOn: next }));
+  }
+
+  const summary =
+    names.length === 0
+      ? "Waits for nothing"
+      : names.length === 1
+        ? `After ${names[0]}`
+        : `After ${names[0]} +${names.length - 1}`;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="max-w-48"
+          aria-label={`What ${task.name} waits for: ${
+            names.length === 0 ? "nothing" : names.join(", ")
+          }`}
+        >
+          <span className="truncate">{summary}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-0">
+        <div className="border-b px-3 py-2">
+          <p className="text-sm font-medium">{task.name} waits for</p>
+          <p className="text-xs text-muted-foreground">
+            It starts the day after the last of these finishes, and moves when
+            they do.
+          </p>
+        </div>
+        {others.length === 0 ? (
+          <p className="px-3 py-3 text-sm text-muted-foreground">
+            Add another task first.
+          </p>
+        ) : (
+          <div className="max-h-72 overflow-y-auto py-1">
+            {phases.map((phase) => {
+              const list = others.filter((t) => t.phaseId === phase._id);
+              if (list.length === 0) return null;
+              return (
+                <div key={phase._id} className="py-1">
+                  <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {phase.name}
+                  </p>
+                  {list.map((other) => {
+                    const checked = current.includes(other._id);
+                    const loop =
+                      !checked && wouldCycle(graph, task._id, other._id);
+                    const id = `dep-${task._id}-${other._id}`;
+                    return (
+                      <div
+                        key={other._id}
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-1",
+                          loop && "opacity-50",
+                        )}
+                        title={
+                          loop
+                            ? `${other.name} already waits for ${task.name}`
+                            : undefined
+                        }
+                      >
+                        <Checkbox
+                          id={id}
+                          checked={checked}
+                          disabled={loop}
+                          onCheckedChange={(on) =>
+                            toggle(other._id, on === true)
+                          }
+                        />
+                        <Label
+                          htmlFor={id}
+                          className="flex min-w-0 grow justify-between gap-2 font-normal"
+                        >
+                          <span className="truncate">{other.name}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            ends {formatDay(other.end)}
+                          </span>
+                        </Label>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -404,8 +588,8 @@ function AddTaskForm({
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
-    const s = fromDateInputValue(start);
-    const en = fromDateInputValue(end);
+    const s = dayFromInputValue(start);
+    const en = dayFromInputValue(end);
     if (!name.trim()) return;
     if (s === undefined || en === undefined) {
       setError("Pick a start and an end date.");
@@ -550,6 +734,17 @@ function ReadOnlyList({
                         )}
                       >
                         {task.name}
+                        {(task.dependsOn ?? []).length > 0 && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            after{" "}
+                            {(task.dependsOn ?? [])
+                              .map(
+                                (id) => tasks.find((t) => t._id === id)?.name,
+                              )
+                              .filter(Boolean)
+                              .join(", ")}
+                          </span>
+                        )}
                       </span>
                       <span className="text-muted-foreground">
                         {formatSpan(task.start, task.end)} ·{" "}
